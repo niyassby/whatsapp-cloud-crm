@@ -40,6 +40,11 @@ enum MembershipStatus {
   disabled
 }
 
+enum AuthTokenType {
+  email_verification
+  password_reset
+}
+
 /// Resellers. Kept simple until Section 4. TODO(branding): reseller theming plugs in here later.
 model Partner {
   id        String        @id @default(uuid(7)) @db.Uuid
@@ -66,10 +71,12 @@ model Organization {
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
 
-  partner     Partner?     @relation(fields: [partnerId], references: [id], onDelete: SetNull)
-  memberships Membership[]
-  apiKeys     ApiKey[]
-  auditLogs   AuditLog[]
+  partner       Partner?       @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  memberships   Membership[]
+  apiKeys       ApiKey[]
+  auditLogs     AuditLog[]
+  invitations   Invitation[]
+  refreshTokens RefreshToken[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -78,19 +85,29 @@ model Organization {
 /// Global identity. A user can belong to many organizations through memberships.
 /// Email is stored lower-cased (enforced by a CHECK constraint).
 model User {
-  id              String     @id @default(uuid(7)) @db.Uuid
-  email           String     @unique
-  passwordHash    String     @map("password_hash")
-  name            String
-  status          UserStatus @default(active)
-  emailVerifiedAt DateTime?  @map("email_verified_at") @db.Timestamptz(3)
-  lastLoginAt     DateTime?  @map("last_login_at") @db.Timestamptz(3)
-  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                String     @id @default(uuid(7)) @db.Uuid
+  email             String     @unique
+  passwordHash      String     @map("password_hash")
+  name              String
+  status            UserStatus @default(active)
+  emailVerifiedAt   DateTime?  @map("email_verified_at") @db.Timestamptz(3)
+  lastLoginAt       DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  /// TOTP secret, AES-256-GCM envelope encrypted (SecretBox). Set at setup, active once enabled.
+  totpSecretEnc     String?    @map("totp_secret_enc")
+  totpEnabledAt     DateTime?  @map("totp_enabled_at") @db.Timestamptz(3)
+  /// Last accepted TOTP time step; codes at or before it are rejected (replay protection).
+  totpLastStep      Int?       @map("totp_last_step")
+  passwordChangedAt DateTime?  @map("password_changed_at") @db.Timestamptz(3)
+  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  memberships Membership[]
-  apiKeys     ApiKey[]
-  auditLogs   AuditLog[]
+  memberships         Membership[]
+  apiKeys             ApiKey[]
+  auditLogs           AuditLog[]
+  refreshTokens       RefreshToken[]
+  authTokens          AuthToken[]
+  invitationsSent     Invitation[]   @relation("InvitedBy")
+  invitationsAccepted Invitation[]   @relation("AcceptedBy")
 
   @@map("users")
 }
@@ -152,4 +169,68 @@ model AuditLog {
 
   @@index([orgId, createdAt(sort: Desc)])
   @@map("audit_logs")
+}
+
+/// Rotating refresh tokens. A login starts a family; each refresh replaces the token.
+/// Presenting a replaced/revoked token revokes the whole family (reuse detection).
+model RefreshToken {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  familyId      String    @map("family_id") @db.Uuid
+  /// HMAC-SHA256 of the token (pepper = JWT_REFRESH_SECRET). The raw token is never stored.
+  tokenHash     String    @unique @map("token_hash")
+  /// Organization selected in this session (null when the user has none).
+  orgId         String?   @map("org_id") @db.Uuid
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedReason String?   @map("revoked_reason")
+  replacedById  String?   @map("replaced_by_id") @db.Uuid
+  ip            String?
+  userAgent     String?   @map("user_agent")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: SetNull)
+
+  @@index([familyId])
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+/// Single-use emailed tokens (verification, password reset). Only the hash is stored.
+model AuthToken {
+  id        String        @id @default(uuid(7)) @db.Uuid
+  userId    String        @map("user_id") @db.Uuid
+  type      AuthTokenType
+  tokenHash String        @unique @map("token_hash")
+  expiresAt DateTime      @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime?     @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@map("auth_tokens")
+}
+
+model Invitation {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  orgId        String    @map("org_id") @db.Uuid
+  email        String
+  role         Role
+  tokenHash    String    @unique @map("token_hash")
+  invitedById  String?   @map("invited_by_id") @db.Uuid
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
+  acceptedAt   DateTime? @map("accepted_at") @db.Timestamptz(3)
+  acceptedById String?   @map("accepted_by_id") @db.Uuid
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  invitedBy    User?        @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+  acceptedBy   User?        @relation("AcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  @@index([orgId])
+  @@index([orgId, email])
+  @@map("invitations")
 }

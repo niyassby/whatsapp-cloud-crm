@@ -7,7 +7,7 @@ import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TEST_DATABASE_URL, TEST_DIRECT_URL } from './urls';
 
-const GLOBAL_RLS_TABLES = ['organizations', 'users', 'partners'];
+const GLOBAL_RLS_TABLES = ['organizations', 'users', 'partners', 'refresh_tokens', 'auth_tokens'];
 // Tables intentionally without RLS. Keep this list tiny and justified.
 const EXEMPT = new Set(['_prisma_migrations']);
 
@@ -36,7 +36,7 @@ describe('RLS coverage', () => {
       [GLOBAL_RLS_TABLES],
     );
     const tables = rows.filter((r) => !EXEMPT.has(r.table));
-    expect(tables.length).toBeGreaterThanOrEqual(6);
+    expect(tables.length).toBeGreaterThanOrEqual(9);
     const unprotected = tables.filter((r) => !r.rls || !r.forced).map((r) => r.table);
     expect(unprotected).toEqual([]);
   });

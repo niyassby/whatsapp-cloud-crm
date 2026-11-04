@@ -20,11 +20,20 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://wacrm_app:wacrm_app@localhost:5433/wacrm
       DIRECT_URL: postgresql://wacrm:wacrm@localhost:5433/wacrm
       TEST_DATABASE_URL: postgresql://wacrm_app:wacrm_app@localhost:5433/wacrm_test
       TEST_DIRECT_URL: postgresql://wacrm:wacrm@localhost:5433/wacrm_test
+      REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

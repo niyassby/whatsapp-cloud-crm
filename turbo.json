@@ -1,20 +1,24 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "tasks": {
+    "generate": {
+      "outputs": ["src/generated/**"],
+      "inputs": ["prisma/schema.prisma"]
+    },
     "build": {
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "src/generated/**"]
+      "dependsOn": ["^build", "generate"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "dev": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "generate"],
       "cache": false,
       "persistent": true
     },
     "typecheck": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build", "generate"]
     },
     "test": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "generate"],
       "cache": false
     },
     "test:e2e": {
@@ -28,6 +32,7 @@
     "DIRECT_URL",
     "TEST_DATABASE_URL",
     "TEST_DIRECT_URL",
-    "DATABASE_POOL_MAX"
+    "DATABASE_POOL_MAX",
+    "REDIS_URL"
   ]
 }

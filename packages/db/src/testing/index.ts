@@ -8,8 +8,8 @@ import { ensureAppRole } from './roles';
 
 export { ensureAppRole } from './roles';
 
-const DEFAULT_DIRECT = 'postgresql://wacrm:wacrm@localhost:5433/wacrm_test';
-const DEFAULT_APP = 'postgresql://wacrm_app:wacrm_app@localhost:5433/wacrm_test';
+const DEFAULT_DIRECT = 'postgresql://wacrm:wacrm@127.0.0.1:5433/wacrm_test';
+const DEFAULT_APP = 'postgresql://wacrm_app:wacrm_app@127.0.0.1:5433/wacrm_test';
 
 export interface TestDbUrls {
   /** Owner connection: migrations and fixtures only. */

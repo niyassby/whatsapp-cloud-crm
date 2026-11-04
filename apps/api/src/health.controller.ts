@@ -1,9 +1,9 @@
 import { Controller, Get } from '@nestjs/common';
 import { buildHealth, type HealthResponse } from '@wacrm/shared';
 import { PrismaService } from './db/prisma.service';
-import { SkipTenant } from './tenancy/skip-tenant.decorator';
+import { Public } from './auth/decorators';
 
-@SkipTenant()
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(private readonly prisma: PrismaService) {}

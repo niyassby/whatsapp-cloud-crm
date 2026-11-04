@@ -1,1 +1,2 @@
-pnpm exec lint-staged
+# Chunk file lists: Windows caps command lines at ~8k chars.
+pnpm exec lint-staged --max-arg-length 6000

@@ -1,15 +1,16 @@
 import { Global, Module } from '@nestjs/common';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { TenantContextInterceptor } from './tenant-context.interceptor';
-import { TenantGuard } from './tenant.guard';
 import { TenantPrismaService } from './tenant-prisma.service';
 
+/**
+ * Tenancy layer 1 lives in AccessGuard (auth module): it requires an org unless @SkipTenant.
+ * This module exposes the request context to services and the RLS-scoped DB access.
+ */
 @Global()
 @Module({
   providers: [
     TenantPrismaService,
-    // TODO(phase-1.3): the global AuthGuard must be registered before TenantGuard.
-    { provide: APP_GUARD, useClass: TenantGuard },
     { provide: APP_INTERCEPTOR, useClass: TenantContextInterceptor },
   ],
   exports: [TenantPrismaService],

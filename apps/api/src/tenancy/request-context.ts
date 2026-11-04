@@ -1,13 +1,17 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { Role } from '@wacrm/db';
+import type { Role } from '@wacrm/shared';
 
 /**
- * Identity of the caller for the current request. Set on `request.auth` by the auth guard
- * (Phase 1.3), then exposed to services through AsyncLocalStorage by TenantContextInterceptor.
+ * Identity of the caller for the current request. Set on `request.auth` by AccessGuard, then
+ * exposed to services through AsyncLocalStorage by TenantContextInterceptor.
  */
 export interface AuthContext {
   userId: string;
+  /** Session (refresh-token family) the access token belongs to. */
+  sessionId?: string;
+  /** Present only when the user is an active member of the selected org. */
   orgId?: string;
+  /** Role in `orgId`, loaded fresh from the membership row on every request. */
   role?: Role;
   partnerId?: string;
 }

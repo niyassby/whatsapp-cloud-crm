@@ -1,15 +1,20 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { Providers } from '@/components/providers';
+import { Toaster } from '@/components/ui/sonner';
 import './globals.css';
 
-export const metadata: Metadata = { title: 'WhatsApp CRM' };
+// TODO(branding): title/favicon per partner would plug in here.
+export const metadata: Metadata = {
+  title: { default: 'WhatsApp CRM', template: '%s · WhatsApp CRM' },
+};
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-neutral-50 text-neutral-900 antialiased">
+    <html lang="en" suppressHydrationWarning>
+      <body className="min-h-screen antialiased">
         <Providers>{children}</Providers>
+        <Toaster richColors position="top-right" />
       </body>
     </html>
   );

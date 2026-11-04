@@ -23,6 +23,10 @@ services:
     volumes:
       - s3data:/data
       - ./infra/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+  # Local mail catcher: SMTP on :1025, inbox UI on http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports: ['1025:1025', '8025:8025']
 volumes:
   pgdata:
   redisdata:
