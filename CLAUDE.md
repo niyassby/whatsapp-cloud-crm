@@ -18,7 +18,7 @@ Multi-tenant **WhatsApp Cloud API CRM SaaS** (similar to Wati / Gallabox). Busin
 | Worker        | BullMQ workers, separate entry point in `apps/worker`                                                    |
 | Database      | PostgreSQL (self-hosted) via Prisma. Plain Postgres only, no Supabase-specific APIs                      |
 | Cache/Queue   | Redis + BullMQ                                                                                           |
-| Storage       | S3-compatible (R2 / S3, MinIO locally)                                                                   |
+| Storage       | S3-compatible (R2 / S3, SeaweedFS locally)                                                               |
 | Auth          | Own email+password (argon2id), JWT access + rotating refresh tokens, optional TOTP 2FA                   |
 | WhatsApp      | `wapi-cloud` npm SDK, wrapped by `packages/whatsapp`                                                     |
 | Observability | pino logs, Sentry, Bull Board (admin only)                                                               |
@@ -45,7 +45,7 @@ Package manager: pnpm 9 (`packageManager` pinned in root package.json). Packages
 
 ```
 pnpm install
-pnpm docker:up          # local Postgres (pgvector/pg16), Redis 7, MinIO (console :9001)
+pnpm docker:up          # local Postgres 16 + pgvector (:5432), Redis 7 (:6379), SeaweedFS S3 (:9000)
 pnpm docker:down
 pnpm dev                # web :3000, api :4000, worker health :4001 (builds packages first)
 pnpm lint               # eslint flat config at root, --max-warnings 0
@@ -61,8 +61,6 @@ pnpm --filter @wacrm/api dev   # run a single app
 ```
 
 Health checks: `GET :4000/health` (api), `GET :4001/health` (worker), `GET :3000/health` (web).
-
-```
 
 ## Environment
 
@@ -146,13 +144,11 @@ Add one line per decision: date, decision, reason.
 - 2026-11-04: Env validation via `parseEnv(schema)` in `packages/shared` (Zod 4); each app owns its `src/env.ts` schema and adds vars as phases need them. `.env.example` at root lists everything.
 - 2026-11-04: Single root ESLint flat config (typescript-eslint + prettier). Rule `no-restricted-imports` blocks `wapi-cloud` outside `packages/whatsapp`.
 - 2026-11-04: Worker exposes a tiny HTTP `/health` on `WORKER_HEALTH_PORT`; BullMQ processors arrive in Phase 1.5.
+- 2026-11-04: Local S3 is SeaweedFS (`chrislusf/seaweedfs:4.50`) instead of MinIO. Reason: MinIO no longer publishes free images (Docker Hub pull denied, quay.io 401). App code only uses the S3 API, so prod R2/S3 is unaffected. Dev creds live in `infra/seaweedfs/s3.json`; endpoint `http://localhost:9000`.
 
 ## Known gaps / TODO
 
-- Docker is not installed on the dev machine yet; `docker-compose.yml` is unverified locally (needed from Phase 1.2).
 - CI workflow exists but has not run yet (no GitHub remote configured).
-
 - Verify current Meta pricing, messaging limits and partner requirements before finalizing billing logic.
-- Confirm pgvector is available on the chosen Postgres host before Phase 3.7.
+- Confirm pgvector is available on the chosen production Postgres host before Phase 3.7 (local image has pgvector 0.8.7).
 - Start Meta Business Verification and App Review early (needed for Embedded Signup at scale).
-```
