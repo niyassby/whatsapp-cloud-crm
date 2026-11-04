@@ -18,9 +18,12 @@
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "db:migrate": "pnpm --filter @wacrm/db run migrate",
+    "db:migrate:deploy": "pnpm --filter @wacrm/db run migrate:deploy",
+    "db:roles": "pnpm --filter @wacrm/db run roles",
     "db:seed": "pnpm --filter @wacrm/db run seed",
     "db:studio": "pnpm --filter @wacrm/db run studio",
-    "prepare": "husky"
+    "prepare": "husky",
+    "db:setup": "pnpm db:migrate:deploy && pnpm db:roles && pnpm db:seed"
   },
   "lint-staged": {
     "*.{ts,tsx,js,mjs,cjs}": [

@@ -45,28 +45,46 @@ Package manager: pnpm 9 (`packageManager` pinned in root package.json). Packages
 
 ```
 pnpm install
-pnpm docker:up          # local Postgres 16 + pgvector (:5432), Redis 7 (:6379), SeaweedFS S3 (:9000)
+pnpm docker:up          # local Postgres 16 + pgvector (host :5433), Redis 7 (:6379), SeaweedFS S3 (:9000)
 pnpm docker:down
+cp .env.example .env    # first time only
+pnpm db:setup           # first time: migrate:deploy + roles + seed
 pnpm dev                # web :3000, api :4000, worker health :4001 (builds packages first)
 pnpm lint               # eslint flat config at root, --max-warnings 0
 pnpm format             # prettier write;  pnpm format:check in CI
 pnpm typecheck
-pnpm test               # vitest per package (unit + integration)
+pnpm test               # vitest per package; db + api suites need Postgres up (they create *_test DBs)
 pnpm test:e2e           # Playwright (added later)
 pnpm build
-pnpm db:migrate         # prisma migrate (uses DIRECT_URL) -- Phase 1.2
-pnpm db:seed            # Phase 1.2
-pnpm db:studio          # Phase 1.2
+pnpm db:migrate         # prisma migrate dev (DIRECT_URL); creates + applies migrations
+pnpm db:migrate:deploy  # apply pending migrations only (CI / prod)
+pnpm db:roles           # dev/CI: create the DATABASE_URL login role as a member of app_user
+pnpm db:seed            # demo org "demo" with owner + agent (credentials in packages/db/prisma/seed.ts)
+pnpm db:studio
+pnpm --filter @wacrm/db run migrate:create -- --name <name>   # empty migration to hand-edit (RLS!)
 pnpm --filter @wacrm/api dev   # run a single app
 ```
 
-Health checks: `GET :4000/health` (api), `GET :4001/health` (worker), `GET :3000/health` (web).
+Health checks: `GET :4000/health` (api liveness), `GET :4000/health/ready` (api + DB), `GET :4001/health` (worker), `GET :3000/health` (web).
+
+## Database and tenancy (Phase 1.2)
+
+- Roles: migrations/seed/studio use the owner (`DIRECT_URL`). Runtime uses a separate login role in `DATABASE_URL` that is a member of the NOLOGIN group `app_user` (no superuser, no BYPASSRLS, owns nothing). Never run the app as the owner. On Neon/RDS create it by hand: `CREATE ROLE wacrm_app LOGIN PASSWORD '...' NOSUPERUSER NOBYPASSRLS IN ROLE app_user;`
+- Context: `withTenant(client, { orgId, userId }, fn)` / `withDbContext` in `@wacrm/db` open a transaction and `set_config('app.org_id' | 'app.user_id' | 'app.partner_id', v, true)` (= SET LOCAL). Unset context sees nothing (fail closed). Ids are validated as UUIDs.
+- Nest: `request.auth` (set by the auth guard) -> `TenantContextInterceptor` puts it in AsyncLocalStorage -> `TenantPrismaService.run(tx => ...)` (needs org) / `runAsUser(...)` (org switcher). Global `TenantGuard` requires an org unless `@SkipTenant()`.
+- Policies (`packages/db/prisma/migrations/*_rls`): tenant tables match `org_id = app_current_org_id()`; `memberships` also visible by `user_id`; `organizations` visible if current org or the user is an active member; `users` visible as self or member of current org; `partners` read-only; `audit_logs` append-only (SELECT/INSERT grants only).
+- New tenant table checklist: `org_id uuid not null`, migration with `ENABLE` + `FORCE ROW LEVEL SECURITY` + policies. `rls-coverage.test.ts` fails the build if any table with `org_id` lacks RLS.
+- Inserting a row Prisma reads back (`create`) also needs the SELECT policy to pass: e.g. create users with `app.user_id` set to the new id (generate UUIDs app-side).
+- Lookups before any context exists (login by email, API key by prefix, webhook phone -> org) must go through reviewed `SECURITY DEFINER` SQL functions, added in the phase that needs them. Never connect as the owner to dodge RLS.
+- Tests: `packages/db/test/isolation.test.ts` (cross-tenant suite, must always pass) and `apps/api/test/tenancy.test.ts` (both layers over HTTP). Shared helpers: `@wacrm/db/testing` (`prepareTestDatabase`, `testDbUrls`), test-only.
 
 ## Environment
 
 Validate with Zod at startup. Never commit real secrets. Keep `.env.example` current.
 
-- `DATABASE_URL` pooled connection (runtime), `DIRECT_URL` direct connection (migrations)
+- `DATABASE_URL` pooled connection (runtime, non-owner app role), `DIRECT_URL` direct owner connection (migrations, seed)
+- `TEST_DATABASE_URL`, `TEST_DIRECT_URL` (optional) base URLs for integration tests; each suite swaps in its own `*_test` database name
+- `DATABASE_POOL_MAX` (api, default 10)
 - `REDIS_URL`
 - `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`
 - `ENCRYPTION_KEY` (AES-256-GCM key for tokens and credentials; rotation procedure documented)
@@ -126,7 +144,7 @@ The package is young and single-maintainer. Treat it as replaceable.
 
 Mark as phases complete.
 
-- [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy, 1.3 auth, 1.4 gateway/onboarding/webhooks, 1.5 pipeline/inbox)
+- [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth, 1.4 gateway/onboarding/webhooks, 1.5 pipeline/inbox)
 - [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 to 2.6)
 - [ ] Section 3: Automation, integrations, AI (3.1 to 3.7)
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
@@ -145,6 +163,16 @@ Add one line per decision: date, decision, reason.
 - 2026-11-04: Single root ESLint flat config (typescript-eslint + prettier). Rule `no-restricted-imports` blocks `wapi-cloud` outside `packages/whatsapp`.
 - 2026-11-04: Worker exposes a tiny HTTP `/health` on `WORKER_HEALTH_PORT`; BullMQ processors arrive in Phase 1.5.
 - 2026-11-04: Local S3 is SeaweedFS (`chrislusf/seaweedfs:4.50`) instead of MinIO. Reason: MinIO no longer publishes free images (Docker Hub pull denied, quay.io 401). App code only uses the S3 API, so prod R2/S3 is unaffected. Dev creds live in `infra/seaweedfs/s3.json`; endpoint `http://localhost:9000`.
+- 2026-11-04: Prisma pinned to 7.10.1 (npm `latest` tag currently points at an 8.0 RC). Prisma 7 layout: `prisma-client` generator (CJS) into `packages/db/src/generated` (gitignored, built by `prisma generate`), `@prisma/adapter-pg` driver adapter, CLI URL in `prisma.config.ts`.
+- 2026-11-04: Docker Postgres is published on host port 5433, because a native Windows Postgres already owns 5432 on the dev machine.
+- 2026-11-04: Tenancy = two roles (owner for migrations, `app_user` member for runtime) + FORCE RLS + `set_config(..., true)` per transaction. Context ids are UUIDs (uuid v7 defaults in Prisma). Reason: RLS only works if the runtime role is neither owner nor BYPASSRLS.
+- 2026-11-04: `TenantPrismaService.run()` opens one short transaction per unit of work, not one per whole request. Reason: avoids holding pooled connections across external calls (Meta API, S3). Every call still runs under SET LOCAL.
+- 2026-11-04: Request context via a global interceptor + AsyncLocalStorage (no nestjs-cls). The auth guard (1.3) sets `request.auth`; guards run before interceptors.
+- 2026-11-04: `users` is global (one identity, many orgs via memberships). Emails are stored lower-cased (CHECK constraint). Insert is open (signup/invites); read is self or same-org; update is self only.
+- 2026-11-04: Password hashing: `@node-rs/argon2` (argon2id, prebuilt binaries, no node-gyp on Windows). Used by the seed now, by auth in 1.3.
+- 2026-11-04: `fastify` in apps/api is pinned to the exact version `@nestjs/platform-fastify` uses, so the `request.auth` type augmentation applies. Bump both together.
+- 2026-11-04: ESLint parses apps/api with `emitDecoratorMetadata` so `consistent-type-imports` never turns injected classes into `import type` (that would break Nest DI at runtime).
+- 2026-11-04: Turbo `test` is uncached (integration tests depend on live DB state); DB env vars are in `globalPassThroughEnv`.
 
 ## Known gaps / TODO
 

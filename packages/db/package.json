@@ -2,19 +2,57 @@
   "name": "@wacrm/db",
   "version": "0.0.0",
   "private": true,
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "prisma",
+    "prisma.config.ts"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "generate": "prisma generate",
+    "build": "prisma generate && tsc -p tsconfig.build.json",
     "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
-    "clean": "rimraf dist .turbo"
+    "typecheck": "prisma generate && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "migrate": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "migrate:create": "prisma migrate dev --create-only",
+    "roles": "tsx scripts/ensure-app-role.ts",
+    "seed": "prisma db seed",
+    "studio": "prisma studio",
+    "clean": "rimraf dist .turbo src/generated"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "@wacrm/shared": "workspace:^",
+    "pg": "^8.23.1",
+    "zod": "^4.6.7",
+    "prisma": "7.10.1",
+    "dotenv": "^18.0.9"
   },
   "devDependencies": {
-    "@wacrm/shared": "workspace:^"
+    "@node-rs/argon2": "^2.2.2",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "vitest": "^5.1.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "testing": [
+        "dist/testing/index.d.ts"
+      ]
+    }
   }
 }

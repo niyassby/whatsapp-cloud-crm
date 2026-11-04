@@ -11,6 +11,7 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/coverage/**',
       '**/next-env.d.ts',
+      '**/src/generated/**',
     ],
   },
   js.configs.recommended,
@@ -21,6 +22,14 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/consistent-type-imports': 'error',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    },
+  },
+  {
+    // NestJS DI reads constructor param types at runtime (emitDecoratorMetadata). Telling the
+    // parser keeps consistent-type-imports from turning injected classes into `import type`.
+    files: ['apps/api/**/*.ts'],
+    languageOptions: {
+      parserOptions: { emitDecoratorMetadata: true, experimentalDecorators: true },
     },
   },
   {

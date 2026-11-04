@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: wacrm
       POSTGRES_PASSWORD: wacrm
       POSTGRES_DB: wacrm
-    ports: ['5432:5432']
+    ports: ['5433:5432'] # 5433 on the host: avoids clashing with a native Postgres on 5432
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U wacrm']

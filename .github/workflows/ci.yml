@@ -7,6 +7,24 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: wacrm
+          POSTGRES_PASSWORD: wacrm
+          POSTGRES_DB: wacrm
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U wacrm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://wacrm_app:wacrm_app@localhost:5433/wacrm
+      DIRECT_URL: postgresql://wacrm:wacrm@localhost:5433/wacrm
+      TEST_DATABASE_URL: postgresql://wacrm_app:wacrm_app@localhost:5433/wacrm_test
+      TEST_DIRECT_URL: postgresql://wacrm:wacrm@localhost:5433/wacrm_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -18,5 +36,10 @@ jobs:
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm typecheck
+      # Migrations must apply cleanly to a fresh database, then the seed must run.
+      - run: pnpm --filter @wacrm/db run migrate:deploy
+      - run: pnpm db:roles
+      - run: pnpm db:seed
+      # Unit + integration tests (each suite recreates its own *_test database).
       - run: pnpm test
       - run: pnpm build

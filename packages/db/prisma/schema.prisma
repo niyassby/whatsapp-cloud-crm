@@ -1,0 +1,155 @@
+// Prisma schema. Tenancy rules (see CLAUDE.md):
+// - Every tenant table has org_id and is covered by Row Level Security
+//   (policies live in hand-written SQL migrations, e.g. 0002_rls).
+// - App code connects as a non-owner role (member of app_user) so RLS always applies.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PartnerStatus {
+  active
+  suspended
+}
+
+enum OrgStatus {
+  active
+  suspended
+}
+
+enum UserStatus {
+  active
+  disabled
+}
+
+enum Role {
+  owner
+  admin
+  agent
+}
+
+enum MembershipStatus {
+  active
+  invited
+  disabled
+}
+
+/// Resellers. Kept simple until Section 4. TODO(branding): reseller theming plugs in here later.
+model Partner {
+  id        String        @id @default(uuid(7)) @db.Uuid
+  name      String
+  slug      String        @unique
+  status    PartnerStatus @default(active)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organizations Organization[]
+
+  @@map("partners")
+}
+
+/// Tenant root. organizations.id is the value of app.org_id.
+model Organization {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  name      String
+  slug      String    @unique
+  partnerId String?   @map("partner_id") @db.Uuid
+  status    OrgStatus @default(active)
+  timezone  String    @default("UTC")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  partner     Partner?     @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  memberships Membership[]
+  apiKeys     ApiKey[]
+  auditLogs   AuditLog[]
+
+  @@index([partnerId])
+  @@map("organizations")
+}
+
+/// Global identity. A user can belong to many organizations through memberships.
+/// Email is stored lower-cased (enforced by a CHECK constraint).
+model User {
+  id              String     @id @default(uuid(7)) @db.Uuid
+  email           String     @unique
+  passwordHash    String     @map("password_hash")
+  name            String
+  status          UserStatus @default(active)
+  emailVerifiedAt DateTime?  @map("email_verified_at") @db.Timestamptz(3)
+  lastLoginAt     DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  memberships Membership[]
+  apiKeys     ApiKey[]
+  auditLogs   AuditLog[]
+
+  @@map("users")
+}
+
+model Membership {
+  id        String           @id @default(uuid(7)) @db.Uuid
+  orgId     String           @map("org_id") @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  role      Role
+  status    MembershipStatus @default(active)
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+/// Public API keys. Only a SHA-256 hash of the secret is stored; prefix identifies the key.
+model ApiKey {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  orgId       String    @map("org_id") @db.Uuid
+  name        String
+  prefix      String    @unique
+  keyHash     String    @unique @map("key_hash")
+  scopes      String[]  @default([])
+  createdById String?   @map("created_by_id") @db.Uuid
+  lastUsedAt  DateTime? @map("last_used_at") @db.Timestamptz(3)
+  expiresAt   DateTime? @map("expires_at") @db.Timestamptz(3)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([orgId])
+  @@map("api_keys")
+}
+
+/// Append-only. The app role has SELECT + INSERT only (no UPDATE / DELETE).
+model AuditLog {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  orgId         String   @map("org_id") @db.Uuid
+  actorUserId   String?  @map("actor_user_id") @db.Uuid
+  actorApiKeyId String?  @map("actor_api_key_id") @db.Uuid
+  action        String
+  targetType    String?  @map("target_type")
+  targetId      String?  @map("target_id")
+  metadata      Json?
+  ip            String?
+  userAgent     String?  @map("user_agent")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  actorUser    User?        @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([orgId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
