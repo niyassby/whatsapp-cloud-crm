@@ -54,20 +54,31 @@ Meta gives every app a free test number.
 ## 5. Check the acceptance criteria
 
 1. Send a WhatsApp message from your phone to the test number.
-2. **Settings > WhatsApp > Recent webhook events** shows a `messages` event as `routed`.
-3. The row is also in the `webhook_events` table.
-
-Message handling and the inbox arrive in Phase 1.5; until then events stop at `routed`.
+2. **Settings > WhatsApp > Recent webhook events** shows a `messages` event as `processed`.
+3. The message appears in the inbox, and a reply shows its ticks there.
 
 ## 6. Embedded Signup (how customers connect)
 
-Needs App Review and Business Verification for real customers, but works for app admins before that.
+The app uses the v4 flow. Meta's docs say you must be a Tech Provider or Solution Partner. Before
+App Review, permissions only show in the flow for people with an admin, developer or tester role on
+the app. Real customers need Business Verification and Advanced Access to
+`whatsapp_business_management` and `whatsapp_business_messaging`.
 
-1. Add the **Facebook Login for Business** product and create a configuration from the
-   **WhatsApp Embedded Signup** template. Set `META_EMBEDDED_SIGNUP_CONFIG_ID` to its ID.
-2. Under its settings, add your web origin to **Allowed domains** and enable
-   **Login with the JavaScript SDK**. Production needs HTTPS.
-3. **Settings > WhatsApp** now shows **Connect with Facebook**.
+1. Add the **Facebook Login for Business** product.
+2. Under **Configurations**, create a new configuration with the **WhatsApp Embedded Signup** login
+   variation and select the Cloud API product. Selecting products is what puts it on v4, so an older
+   configuration has to be replaced. Set `META_EMBEDDED_SIGNUP_CONFIG_ID` to its ID and restart.
+3. Under **Settings > Client OAuth settings**, set to Yes: Client OAuth login, Web OAuth login,
+   Enforce HTTPS, Embedded Browser OAuth Login, Strict Mode for redirect URIs and Login with the
+   JavaScript SDK.
+4. Add the page's domain to both **Allowed domains** and **Valid OAuth redirect URIs**. If either is
+   missing, the popup cannot send the account ids back. Meta only documents HTTPS domains and says
+   nothing about `localhost`.
+5. **Settings > WhatsApp** now shows **Connect with Facebook**. Click **Finish** on the last screen:
+   closing it with X returns no code. Use a number that is not live on another account here, and not
+   one that stays on the WhatsApp Business app (not supported yet).
+6. Outside a Solution Partner credit line, the customer must add a payment method to their WhatsApp
+   account before they can send.
 
 ## 7. Deletion and deauthorization callbacks
 

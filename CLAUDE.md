@@ -254,6 +254,7 @@ Add one line per decision: date, decision, reason.
 - 2026-11-05: Playwright e2e runs a production web build with its own DB, ports and queue prefix; on this drive `next dev` route compilation is too slow to wait on. Fake Meta in `e2e/support/fake-graph.mjs` sends signed status webhooks back.
 - 2026-11-05: BullMQ email queue deferred from 1.5: bodies hold one-time links, so it needs encrypted job data. Background sends remain.
 - 2026-11-05: Code lives in the private repo `niyassby/whatsapp-cloud-crm`; CI runs on pushes to `main`.
+- 2026-11-05: Embedded Signup targets v4 (`extras: { setup: {} }`, the version Meta serves by default). v5 exists, but its page was not reviewed. WhatsApp Business app numbers are refused until connecting can skip registration.
 
 ## Known gaps / TODO
 

@@ -44,6 +44,22 @@ describe('parseSignupMessage', () => {
     );
   });
 
+  it('refuses WhatsApp Business app numbers, because connecting always registers', () => {
+    const msg = message('FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING', {
+      waba_id: '1',
+      phone_number_id: '2',
+    });
+    expect(parseSignupMessage(FB, msg)).toEqual({
+      kind: 'error',
+      message: 'Numbers that stay on the WhatsApp Business app are not supported yet',
+    });
+  });
+
+  it('refuses grant-only access, which is not a number to connect', () => {
+    const msg = message('FINISH_GRANT_ONLY_API_ACCESS', { waba_id: '1', phone_number_id: '2' });
+    expect(parseSignupMessage(FB, msg)?.kind).toBe('error');
+  });
+
   it('ignores unrelated traffic', () => {
     expect(parseSignupMessage(FB, 'not json')).toBeNull();
     expect(parseSignupMessage(FB, { type: 'WA_EMBEDDED_SIGNUP' })).toBeNull();
