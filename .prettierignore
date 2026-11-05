@@ -5,3 +5,5 @@ dist
 coverage
 pnpm-lock.yaml
 packages/db/src/generated
+test-results
+playwright-report

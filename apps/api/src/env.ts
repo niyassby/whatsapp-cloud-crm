@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { logLevelSchema, nodeEnvSchema, parseEnv } from '@wacrm/shared';
+import { s3EnvShape } from '@wacrm/shared/server';
 
 const booleanString = z
   .enum(['true', 'false', '1', '0'])
@@ -61,6 +62,7 @@ export const apiEnvSchema = z.object({
   /** System-user-token connect form. Defaults to on outside production, off in production. */
   ALLOW_MANUAL_CONNECT: booleanString.optional(),
   QUEUE_PREFIX: z.string().min(1).default('wacrm'),
+  ...s3EnvShape,
 
   SMTP_URL: z.url({ protocol: /^smtps?$/ }).default('smtp://127.0.0.1:1025'),
   MAIL_FROM: z.string().default('WhatsApp CRM <no-reply@localhost>'),

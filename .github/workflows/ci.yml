@@ -28,6 +28,9 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      mailpit:
+        image: axllent/mailpit:v1.27
+        ports: ['1025:1025', '8025:8025']
     env:
       DATABASE_URL: postgresql://wacrm_app:wacrm_app@localhost:5433/wacrm
       DIRECT_URL: postgresql://wacrm:wacrm@localhost:5433/wacrm
@@ -52,3 +55,7 @@ jobs:
       # Unit + integration tests (each suite recreates its own *_test database).
       - run: pnpm test
       - run: pnpm build
+      # Two separate browser sessions against the real stack, with a fake Meta. Media tests skip
+      # themselves here, since CI has no S3 service.
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e

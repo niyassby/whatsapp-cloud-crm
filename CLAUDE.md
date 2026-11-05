@@ -54,7 +54,7 @@ pnpm lint               # eslint flat config at root, --max-warnings 0
 pnpm format             # prettier write;  pnpm format:check in CI
 pnpm typecheck
 pnpm test               # vitest per package; db + api suites need Postgres + Redis up (they create *_test DBs)
-pnpm test:e2e           # Playwright (added later)
+pnpm test:e2e           # Playwright: real stack + fake Meta, own DB and ports. Needs docker:up and a build
 pnpm build
 pnpm db:migrate         # prisma migrate dev (DIRECT_URL); creates + applies migrations
 pnpm db:migrate:deploy  # apply pending migrations only (CI / prod)
@@ -83,10 +83,10 @@ Health checks: `GET :4000/health` (api liveness), `GET :4000/health/ready` (api 
 - One global guard, `AccessGuard` (apps/api/src/auth): bearer JWT -> live-session check (refresh family not revoked) -> user active -> role loaded FRESH from `memberships` each request -> org required unless `@SkipTenant()` -> `@RequirePermission(...)`. `@Public()` skips auth; `@Public({ optionalAuth: true })` parses a token if present.
 - Roles/permissions: `packages/shared/src/permissions.ts` is the single map (`rolePermissions`, `hasPermission`, `canManageRole`). Never check role names in feature code. Owners manage everyone; admins manage admins + agents, never owners; nobody changes their own role or removes themselves; `LAST_OWNER` guards the last owner. Membership changes take a per-org `pg_advisory_xact_lock`.
 - Tokens: access JWT HS256, 15 min, claims `sub`, `org`, `sid` (= refresh family id), `jti`; kept in memory on the web (Zustand), never localStorage. Refresh token: opaque 256-bit, stored as HMAC-SHA256 (pepper `JWT_REFRESH_SECRET`), httpOnly cookie `wacrm_rt` (Path=/auth, SameSite=Lax, Secure in prod), rotated on every refresh. Presenting a _rotated_ token again revokes the whole family (`REFRESH_REUSE_DETECTED`, audited). Logout and password reset revoke immediately (the guard checks the session on every request). `/auth/refresh` and `/auth/logout` also reject foreign `Origin` headers.
-- Web refresh is single-flight (`refreshSession()` in `apps/web/src/lib/api.ts`) because rotating the same token twice looks like theft.
+- Web refresh is single-flight within a tab and queued across tabs with a Web Lock (`refreshSession()` in `apps/web/src/lib/api.ts`), because rotating the same token twice looks like theft.
 - Rate limits (Redis fixed window, `RateLimiter`): login 30/15 min per IP and 5 failures/15 min per email; 2FA 5 failures per user; signup 10/h per IP; forgot-password 10/h per IP and 3/h per email; invites 50/h per org.
 - 2FA: own RFC 6238 TOTP (`@wacrm/shared/server`, verified against RFC vectors), secret envelope-encrypted with AAD `users:<id>:totp`, replay-protected via `users.totp_last_step`. Login with 2FA returns `{ mfaRequired, mfaToken }` (5 min JWT, separate audience), then `/auth/2fa/verify`.
-- Emails (verify 24 h, reset 1 h, invite 7 d): single-use hashed tokens, links `${WEB_URL}/<page>?token=`. Sent inline via `Mailer` (SMTP, Mailpit locally); failures are logged, not thrown. TODO(phase-1.5): move to a BullMQ queue.
+- Emails (verify 24 h, reset 1 h, invite 7 d): single-use hashed tokens, links `${WEB_URL}/<page>?token=`. Sent in the background via `Mailer` (SMTP, Mailpit locally); failures are logged, not thrown. TODO: BullMQ queue (job data must not hold one-time links in plain text).
 - Audit: `AuditService.record(tx, orgId, ...)` inside the same transaction as the change; user-level security events go to every org the user belongs to. Actions are the `AuditAction` constants. Settings > Audit log reads them with cursor pagination.
 - Encryption: `SecretBox` (`@wacrm/shared/server`): per-value data key, KEK from `ENCRYPTION_KEY`, format `v1.<kid>...`. Rotation: put the new key in `ENCRYPTION_KEY`, the old one in `ENCRYPTION_KEY_PREVIOUS`, restart, run `pnpm secrets:reencrypt` (it reports rows it could not rewrite), then drop the old key.
 - Web routes: `(auth)` login/signup/forgot-password/reset-password/verify-email/invite; `(app)` protected by `AuthGuard` (silent refresh, else `/login?next=`), shell with org switcher, user menu, verify-email banner, no-org state; settings: general, team, security (2FA), audit. UI gating uses `useCan(permission)`; the API is the authority.
@@ -110,6 +110,19 @@ Setup steps for a real number: `infra/whatsapp-setup.md`.
 - Local checks without Meta: `META_GRAPH_BASE_URL` points Graph calls at a fake (refused in production).
 - Tests: `packages/whatsapp/test`, `apps/api/test/whatsapp.test.ts` (fake Graph, real DB and Redis), `apps/worker/test/processors.test.ts`, `packages/db/test/whatsapp-tables.test.ts`.
 
+## Pipeline and inbox (Phase 1.5)
+
+- Inbound: webhook -> `routeWebhookEvent` -> `processMessagesChange` (`apps/worker/src/processors/inbound.ts`): claims the wamid in `message_refs`, upserts contact and conversation, saves the message, sets `window_expires_at` (never backwards), reopens closed threads, publishes, queues media. Replays and redeliveries change nothing twice.
+- Statuses: found through `biz_opaque_callback_data` (`<messageId>|<createdAt>`), so they work even before the send call returns; fall back to the wamid ref. Ticks only move forward; failed applies unless already read. Unknown wamids (other tools on the number) are ignored.
+- Outbound: API checks window and number, saves `queued` with a client idempotency key, enqueues (job id = message id); if the queue is down the message is marked failed. Worker (`outbound.ts`) claims `sending` before calling Meta. A job that finds `sending` already set means a crash mid-send: it is failed with a clear message, never resent blind. Retryable errors go back to `queued` and throw so BullMQ retries; on the last attempt they become visible failures. Per-number limit: Redis 1-second counter, `OUTBOUND_MPS_PER_NUMBER`; over the limit parks the job without using an attempt.
+- Window: `WINDOW_CLOSED` (409) from the API for text and media when `window_expires_at` is missing or past. Templates and internal notes are exempt. The UI locks too, including when the window lapses while open.
+- `messages` is range-partitioned on `created_at`. PK is `(id, created_at)`, so reaching a row needs both: pass them around, or go through `message_refs`. **Partitions live in schema `message_partitions` with no grants to `app_user`**, because a partition queried directly skips the parent's RLS. A default partition catches rows if the job stops; `ensure_message_partitions` runs at worker start and daily, creating this month plus 3.
+- Media: inbound bytes are copied to S3 by a `media-download` job; outbound uploads go through the API (allowlist and per-type size limits in `packages/shared/src/inbox.ts`), stored, then uploaded to Meta once by the worker. Keys: `orgs/<org>/messages/<id>`. Browsers get 5-minute signed links; non-media types download rather than render.
+- Realtime: `RealtimeGateway` (Socket.IO + Redis adapter). Auth in middleware using the same `AuthenticatorService` as HTTP; a socket joins one org room from its verified token. The worker publishes with `@socket.io/redis-emitter`. Sockets close at token expiry and the client reconnects with a fresh token. Removal, logout and password reset disconnect immediately. Presence comes from the adapter's `fetchSockets`, so it needs no separate state. Clients refetch on every reconnect, since events are not replayed.
+- Web: `RealtimeProvider` keeps the socket and cache in sync; `upsertMessage` is keyed by id because the HTTP response and socket event arrive in either order. Conversation list is virtualized; the chat pages older messages with a button.
+- Permissions: agents can reply, add notes, self-assign unassigned conversations and release their own. `INBOX_ASSIGN` covers assigning others and managing labels and canned replies (Settings > Inbox).
+- Tests: `apps/worker/test/pipeline.test.ts`, `apps/api/test/inbox.test.ts` (real sockets), `packages/db/test/inbox-tables.test.ts` (partition RLS bypass), `e2e/inbox.spec.ts` (two separate logged-in browsers).
+
 ## Environment
 
 Validate with Zod at startup. Never commit real secrets. Keep `.env.example` current.
@@ -124,7 +137,8 @@ Validate with Zod at startup. Never commit real secrets. Keep `.env.example` cur
 - `SMTP_URL` (default `smtp://localhost:1025` = Mailpit), `MAIL_FROM`, `APP_NAME` (TOTP issuer, email copy)
 - `META_APP_ID`, `META_APP_SECRET`, `META_WEBHOOK_VERIFY_TOKEN` (required in production), `META_EMBEDDED_SIGNUP_CONFIG_ID`, `META_GRAPH_API_VERSION` (pinned, v25.0), `ALLOW_MANUAL_CONNECT` (default on outside production), `META_GRAPH_BASE_URL` (local fakes only)
 - `QUEUE_PREFIX`, `WORKER_CONCURRENCY` (10), `WEBHOOK_RETENTION_DAYS` (30). An empty `KEY=` counts as unset
-- `S3_*` storage settings
+- `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT` (address browsers use for signed links), `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
+- `OUTBOUND_MPS_PER_NUMBER` (80). The worker also needs `ENCRYPTION_KEY` and `META_GRAPH_API_VERSION`
 - `RAZORPAY_*`, `STRIPE_*` for platform billing
 - `SENTRY_DSN`
 
@@ -179,7 +193,7 @@ The package is young and single-maintainer. Treat it as replaceable.
 
 Mark as phases complete.
 
-- [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, real number NOT yet verified, 1.5 pipeline/inbox)
+- [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. Gate NOT passed: real number and CI not verified)
 - [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 to 2.6)
 - [ ] Section 3: Automation, integrations, AI (3.1 to 3.7)
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
@@ -231,8 +245,21 @@ Add one line per decision: date, decision, reason.
 - 2026-11-05: Fixed the 1.3 auth migration for non-superuser owners (function ownership needs CREATE on the schema). Verified by deploying all migrations and the seed as a non-superuser on a clean container. Migrations had never been run on a real host, so editing it in place was safe.
 - 2026-11-05: BullMQ job schedulers for repeatable work (`upsertJobScheduler`), so restarts and multiple workers keep one schedule.
 
+- 2026-11-05: Partitions in a separate schema with no app-role grants: direct partition queries skip the parent's RLS, and Prisma only inspects `public`, so monthly partitions are not drift.
+- 2026-11-05: `message_refs` table for wamid and client-key uniqueness, since unique indexes on a partitioned table must include the partition key.
+- 2026-11-05: At-most-once for interrupted sends: a crash mid-call marks the message failed rather than risk a duplicate to the customer. BullMQ retries still apply to errors Meta reports as retryable, per the SDK rules; a timeout after Meta accepted can therefore still duplicate, because Graph has no idempotency key.
+- 2026-11-05: One conversation per (number, contact), reopened by new messages; unread count is shared by the team, not per agent.
+- 2026-11-05: Own per-number rate limit (Redis counter + `moveToDelayed`): BullMQ's per-group limits are Pro-only.
+- 2026-11-05: Uploads are buffered in the API and capped at 25 MB (Meta allows 100 MB for documents). Revisit with direct-to-S3 presigned uploads.
+- 2026-11-05: Playwright e2e runs a production web build with its own DB, ports and queue prefix; on this drive `next dev` route compilation is too slow to wait on. Fake Meta in `e2e/support/fake-graph.mjs` sends signed status webhooks back.
+- 2026-11-05: BullMQ email queue deferred from 1.5: bodies hold one-time links, so it needs encrypted job data. Background sends remain.
+
 ## Known gaps / TODO
 
+- Section 1 gate still open: connect a real number (`infra/whatsapp-setup.md`), and push to GitHub so CI runs.
+- Template picker only sends body variables; templates with media headers, header variables or button variables are hidden until Section 2.
+- Sends on one conversation can reorder under concurrency or retries. No manual retry button on failed messages yet.
+- Inbound `system` and `request_welcome` messages are skipped. Opt-out keywords arrive in Section 2.
 - Real Meta connection not verified: needs credentials and a public HTTPS URL (`infra/whatsapp-setup.md`). The FB JS SDK popup has never run against Meta; only its message parsing is tested. Fixtures are from Meta's docs, not captured traffic.
 - Data deletion only matches connections with a stored `meta_user_id`; manual connects have none, and FB.login may not report one with `response_type: code`. Check on the first real signup.
 - No mobile navigation: the main sidebar is hidden below `md` with no replacement.

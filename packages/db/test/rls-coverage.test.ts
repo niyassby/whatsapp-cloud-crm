@@ -43,7 +43,7 @@ describe('RLS coverage', () => {
       [GLOBAL_RLS_TABLES],
     );
     const tables = rows.filter((r) => !EXEMPT.has(r.table));
-    expect(tables.length).toBeGreaterThanOrEqual(13);
+    expect(tables.length).toBeGreaterThanOrEqual(20);
     const unprotected = tables.filter((r) => !r.rls || !r.forced).map((r) => r.table);
     expect(unprotected).toEqual([]);
   });

@@ -21,6 +21,7 @@ import type { RequestMeta } from '../common/request-meta';
 import { PrismaService } from '../db/prisma.service';
 import { API_ENV, type ApiEnv } from '../env';
 import { RateLimiter } from '../infra/rate-limiter.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import type { AuthContext } from '../tenancy/request-context';
 import { TenantPrismaService } from '../tenancy/tenant-prisma.service';
 
@@ -58,6 +59,7 @@ export class TeamService {
     private readonly passwords: PasswordService,
     private readonly auth: AuthService,
     private readonly rateLimiter: RateLimiter,
+    private readonly realtime: RealtimeGateway,
   ) {}
 
   // ------------------------------------------------------------------ members
@@ -119,7 +121,7 @@ export class TeamService {
   }
 
   async removeMember(actor: Actor, membershipId: string, meta: RequestMeta): Promise<void> {
-    await this.db.run(async (tx) => {
+    const removedUserId = await this.db.run(async (tx) => {
       const target = await this.lockMember(tx, membershipId);
       if (target.user_id === actor.userId) {
         throw new AppError(ErrorCode.ROLE_NOT_ALLOWED, 'You cannot remove yourself');
@@ -137,7 +139,9 @@ export class TeamService {
         metadata: { userId: target.user_id, role: target.role },
         meta,
       });
+      return target.user_id;
     });
+    this.realtime.disconnectMember(actor.orgId, removedUserId);
   }
 
   /**

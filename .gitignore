@@ -10,3 +10,5 @@ coverage
 next-env.d.ts
 packages/db/src/generated
 *.tsbuildinfo
+test-results
+playwright-report

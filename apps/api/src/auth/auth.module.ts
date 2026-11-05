@@ -4,6 +4,7 @@ import { AuditService } from '../audit/audit.service';
 import { AccessGuard } from './access.guard';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { AuthenticatorService } from './authenticator.service';
 import { MfaService } from './mfa.service';
 import { PasswordService } from './password.service';
 import { SessionCookies } from './session-cookies';
@@ -14,6 +15,7 @@ import { TokenService } from './token.service';
   controllers: [AuthController],
   providers: [
     TokenService,
+    AuthenticatorService,
     PasswordService,
     AuthService,
     MfaService,
@@ -22,6 +24,13 @@ import { TokenService } from './token.service';
     // The only global guard: authentication -> tenant -> permissions.
     { provide: APP_GUARD, useClass: AccessGuard },
   ],
-  exports: [TokenService, PasswordService, AuthService, SessionCookies, AuditService],
+  exports: [
+    TokenService,
+    AuthenticatorService,
+    PasswordService,
+    AuthService,
+    SessionCookies,
+    AuditService,
+  ],
 })
 export class AuthModule {}

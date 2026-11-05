@@ -4,12 +4,31 @@ export const QueueName = {
   WEBHOOK_EVENTS: 'webhook-events',
   /** Meta deauthorization and data deletion callbacks. */
   META_ACCOUNT: 'meta-account',
-  /** Repeatable housekeeping (webhook_events retention). */
+  /** Every outbound WhatsApp message. */
+  OUTBOUND: 'outbound-messages',
+  /** Copy inbound media from Meta to object storage before Meta's URL expires. */
+  MEDIA_DOWNLOAD: 'media-download',
+  /** Repeatable housekeeping (retention, message partitions). */
   MAINTENANCE: 'maintenance',
 } as const;
 
 export interface WebhookEventJob {
   eventId: string;
+}
+
+/** createdAt locates the partition; ISO string. */
+export interface OutboundJob {
+  orgId: string;
+  messageId: string;
+  createdAt: string;
+}
+
+export interface MediaDownloadJob {
+  orgId: string;
+  messageId: string;
+  createdAt: string;
+  metaMediaId: string;
+  phoneNumberId: string;
 }
 
 export type MetaAccountJob =

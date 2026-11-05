@@ -23,7 +23,7 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   body?: unknown;
   /** Send the access token and retry once after a silent refresh on 401. Default true. */
   auth?: boolean;
@@ -32,11 +32,12 @@ interface RequestOptions {
 let refreshing: Promise<boolean> | null = null;
 
 /**
- * Exchange the refresh cookie for a new access token. Single-flight: concurrent callers share
- * one request, because rotating the same refresh token twice would trigger reuse detection.
+ * Exchange the refresh cookie for a new access token. Rotating the same refresh token twice
+ * looks like theft and ends the session, so this is single-flight within a tab, and a Web Lock
+ * queues other tabs. Each tab then rotates in turn, with the cookie the previous one received.
  */
 export function refreshSession(): Promise<boolean> {
-  refreshing ??= (async () => {
+  const run = async () => {
     try {
       const res = await fetch(`${env.NEXT_PUBLIC_API_URL}/auth/refresh`, {
         method: 'POST',
@@ -51,11 +52,49 @@ export function refreshSession(): Promise<boolean> {
       return true;
     } catch {
       return false;
-    } finally {
-      refreshing = null;
     }
-  })();
-  return refreshing;
+  };
+  if (refreshing) return refreshing;
+  const pending = (
+    navigator.locks
+      ? (navigator.locks.request('wacrm-refresh', run) as unknown as Promise<boolean>)
+      : run()
+  ).finally(() => {
+    refreshing = null;
+  });
+  refreshing = pending;
+  return pending;
+}
+
+/** POST multipart form data, with the same token handling and errors as `api`. */
+export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
+  const send = () => {
+    const token = useAuthStore.getState().accessToken;
+    return fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+  };
+  let res = await send();
+  if (res.status === 401 && (await refreshSession())) res = await send();
+  return parse<T>(res);
+}
+
+async function parse<T>(res: Response): Promise<T> {
+  if (res.status === 204) return undefined as T;
+  const data: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = (data ?? {}) as Partial<ErrorResponse>;
+    throw new ApiError(
+      res.status,
+      err.code ?? ('INTERNAL' as ErrorCode),
+      err.message ?? 'Something went wrong',
+      err.details,
+    );
+  }
+  return data as T;
 }
 
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -76,19 +115,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
 
   let res = await send();
   if (res.status === 401 && auth && (await refreshSession())) res = await send();
-
-  if (res.status === 204) return undefined as T;
-  const data: unknown = await res.json().catch(() => null);
-  if (!res.ok) {
-    const err = (data ?? {}) as Partial<ErrorResponse>;
-    throw new ApiError(
-      res.status,
-      err.code ?? ('INTERNAL' as ErrorCode),
-      err.message ?? 'Something went wrong',
-      err.details,
-    );
-  }
-  return data as T;
+  return parse<T>(res);
 }
 
 /** Store tokens returned by login/signup/switch-org/accept-invite. */

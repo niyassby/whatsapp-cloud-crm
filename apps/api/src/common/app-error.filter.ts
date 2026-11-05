@@ -15,6 +15,10 @@ export class AppErrorFilter implements ExceptionFilter {
   private readonly logger = new Logger(AppErrorFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost): void {
+    if (host.getType() !== 'http') {
+      this.logger.warn(`websocket handler error: ${String(exception)}`);
+      return;
+    }
     const reply = host.switchToHttp().getResponse<FastifyReply>();
     const { status, body } = this.toResponse(exception);
     if (status >= 500) this.logger.error(exception);

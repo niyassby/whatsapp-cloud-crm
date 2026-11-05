@@ -5,7 +5,6 @@ import { phoneTokenAad, SecretBox } from '@wacrm/shared/server';
 import { type GraphConfig, WhatsAppClientFactory } from '@wacrm/whatsapp';
 import { PrismaService } from '../db/prisma.service';
 import { API_ENV, type ApiEnv } from '../env';
-import { QueuesService } from '../infra/queues.service';
 import { MetaCallbacksController, WebhooksController } from './webhooks.controller';
 import { WebhookIngestService } from './webhook-ingest.service';
 import { WhatsAppController } from './whatsapp.controller';
@@ -17,7 +16,6 @@ import { GRAPH_CONFIG } from './whatsapp.tokens';
   providers: [
     WhatsAppService,
     WebhookIngestService,
-    QueuesService,
     {
       provide: GRAPH_CONFIG,
       inject: [API_ENV],
@@ -57,5 +55,6 @@ import { GRAPH_CONFIG } from './whatsapp.tokens';
         }),
     },
   ],
+  exports: [WhatsAppClientFactory],
 })
 export class WhatsAppModule {}

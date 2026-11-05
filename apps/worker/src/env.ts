@@ -1,4 +1,5 @@
 import { logLevelSchema, nodeEnvSchema, parseEnv } from '@wacrm/shared';
+import { s3EnvShape } from '@wacrm/shared/server';
 import { z } from 'zod';
 
 export const workerEnvSchema = z.object({
@@ -11,6 +12,27 @@ export const workerEnvSchema = z.object({
   REDIS_URL: z.url({ protocol: /^rediss?$/ }).default('redis://127.0.0.1:6379'),
   QUEUE_PREFIX: z.string().min(1).default('wacrm'),
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(10),
+  /** Decrypts WhatsApp tokens. Same keys as the API. */
+  ENCRYPTION_KEY: z.string().min(1),
+  ENCRYPTION_KEY_PREVIOUS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      v
+        ? v
+            .split(',')
+            .map((k) => k.trim())
+            .filter(Boolean)
+        : [],
+    ),
+  META_GRAPH_API_VERSION: z
+    .string()
+    .regex(/^v\d+\.\d+$/)
+    .default('v25.0'),
+  META_GRAPH_BASE_URL: z.url().optional(),
+  /** Cloud API default throughput per number. Config, since Meta raises it for some numbers. */
+  OUTBOUND_MPS_PER_NUMBER: z.coerce.number().int().positive().default(80),
+  ...s3EnvShape,
   /** Raw webhook payloads are kept this long for replay. */
   WEBHOOK_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
 });

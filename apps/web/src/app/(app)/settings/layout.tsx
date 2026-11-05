@@ -11,6 +11,7 @@ const ITEMS: { href: string; label: string; permission?: Permission }[] = [
   { href: '/settings/general', label: 'General', permission: Permission.ORG_READ },
   { href: '/settings/team', label: 'Team', permission: Permission.TEAM_READ },
   { href: '/settings/whatsapp', label: 'WhatsApp', permission: Permission.WHATSAPP_MANAGE },
+  { href: '/settings/inbox', label: 'Inbox', permission: Permission.INBOX_ASSIGN },
   { href: '/settings/security', label: 'Security' },
   { href: '/settings/audit', label: 'Audit log', permission: Permission.AUDIT_READ },
   // Later phases: API keys, billing, integrations.

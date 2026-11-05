@@ -3,3 +3,4 @@ export * from './crypto';
 export * from './totp';
 export * from './tokens';
 export * from './redis';
+export * from './storage';

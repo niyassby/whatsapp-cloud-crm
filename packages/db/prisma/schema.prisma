@@ -70,6 +70,33 @@ enum DataDeletionStatus {
   completed
 }
 
+enum ConversationStatus {
+  open
+  closed
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+  internal
+}
+
+enum MessageStatus {
+  received
+  queued
+  sending
+  sent
+  delivered
+  read
+  failed
+}
+
+enum MediaStatus {
+  pending
+  stored
+  failed
+}
+
 enum AuthTokenType {
   email_verification
   password_reset
@@ -110,6 +137,11 @@ model Organization {
   wabaAccounts  WabaAccount[]
   phoneNumbers  PhoneNumber[]
   webhookEvents WebhookEvent[]
+  contacts      Contact[]
+  conversations Conversation[]
+  messages      Message[]
+  labels        Label[]
+  cannedReplies CannedReply[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -142,6 +174,9 @@ model User {
   invitationsSent       Invitation[]   @relation("InvitedBy")
   invitationsAccepted   Invitation[]   @relation("AcceptedBy")
   wabaAccountsConnected WabaAccount[]
+  conversationsAssigned Conversation[]
+  messagesSent          Message[]
+  cannedRepliesCreated  CannedReply[]
 
   @@map("users")
 }
@@ -323,8 +358,9 @@ model PhoneNumber {
   createdAt              DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  wabaAccount  WabaAccount  @relation(fields: [wabaAccountId], references: [id], onDelete: Cascade)
+  organization  Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  wabaAccount   WabaAccount    @relation(fields: [wabaAccountId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
 
   @@unique([orgId, phoneNumberId])
   @@index([wabaAccountId])
@@ -366,4 +402,144 @@ model DataDeletionRequest {
   completedAt      DateTime?          @map("completed_at") @db.Timestamptz(3)
 
   @@map("data_deletion_requests")
+}
+
+/// A customer on WhatsApp. wa_id is the phone number, or a business-scoped id for username users.
+model Contact {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  waId      String   @map("wa_id")
+  name      String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization  Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@unique([orgId, waId])
+  @@map("contacts")
+}
+
+/// One thread per (business number, contact). A new inbound message reopens a closed one.
+model Conversation {
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  orgId              String             @map("org_id") @db.Uuid
+  phoneId            String             @map("phone_id") @db.Uuid
+  contactId          String             @map("contact_id") @db.Uuid
+  status             ConversationStatus @default(open)
+  assigneeId         String?            @map("assignee_id") @db.Uuid
+  /// Free-form replies are allowed until this time: last inbound message + 24 hours.
+  windowExpiresAt    DateTime?          @map("window_expires_at") @db.Timestamptz(3)
+  lastMessageAt      DateTime?          @map("last_message_at") @db.Timestamptz(3)
+  lastMessagePreview String?            @map("last_message_preview")
+  unreadCount        Int                @default(0) @map("unread_count")
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  phone        PhoneNumber         @relation(fields: [phoneId], references: [id], onDelete: Cascade)
+  contact      Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignee     User?               @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  messages     Message[]
+  labels       ConversationLabel[]
+
+  @@unique([orgId, phoneId, contactId])
+  @@index([orgId, lastMessageAt(sort: Desc), id(sort: Desc)])
+  @@index([orgId, assigneeId])
+  @@map("conversations")
+}
+
+/// PARTITIONED BY MONTH on created_at (see the *_inbox migration). Partitions live in the
+/// message_partitions schema, which the app role cannot reach. Always page by cursor.
+model Message {
+  id             String           @default(uuid(7)) @db.Uuid
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  orgId          String           @map("org_id") @db.Uuid
+  conversationId String           @map("conversation_id") @db.Uuid
+  direction      MessageDirection
+  /// text, image, template, note, ... A string: Meta adds message types over time.
+  type           String
+  status         MessageStatus
+  body           String?
+  /// Template name and parameters, or the raw content of types with no dedicated columns.
+  content        Json?
+  senderUserId   String?          @map("sender_user_id") @db.Uuid
+  waMessageId    String?          @map("wa_message_id")
+  errorCode      String?          @map("error_code")
+  errorMessage   String?          @map("error_message")
+  mediaMetaId    String?          @map("media_meta_id")
+  mediaKey       String?          @map("media_key")
+  mediaMime      String?          @map("media_mime")
+  mediaSize      Int?             @map("media_size")
+  mediaFilename  String?          @map("media_filename")
+  mediaStatus    MediaStatus?     @map("media_status")
+  sentAt         DateTime?        @map("sent_at") @db.Timestamptz(3)
+  deliveredAt    DateTime?        @map("delivered_at") @db.Timestamptz(3)
+  readAt         DateTime?        @map("read_at") @db.Timestamptz(3)
+  failedAt       DateTime?        @map("failed_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User?        @relation(fields: [senderUserId], references: [id], onDelete: SetNull)
+
+  @@id([id, createdAt])
+  @@index([conversationId, createdAt(sort: Desc), id(sort: Desc)])
+  @@map("messages")
+}
+
+/// Unique lookups a partitioned table cannot enforce: wamid (inbound dedupe, status updates) and
+/// the client's idempotency key. Points at the message, including its partition key.
+model MessageRef {
+  orgId            String   @map("org_id") @db.Uuid
+  /// 'wamid' or 'client'.
+  kind             String
+  ref              String
+  messageId        String   @map("message_id") @db.Uuid
+  messageCreatedAt DateTime @map("message_created_at") @db.Timestamptz(3)
+
+  @@id([orgId, kind, ref])
+  @@map("message_refs")
+}
+
+model Label {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  name      String
+  color     String   @default("#64748b")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization  Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversations ConversationLabel[]
+
+  @@unique([orgId, name])
+  @@map("labels")
+}
+
+model ConversationLabel {
+  orgId          String @map("org_id") @db.Uuid
+  conversationId String @map("conversation_id") @db.Uuid
+  labelId        String @map("label_id") @db.Uuid
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  label        Label        @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, labelId])
+  @@index([orgId])
+  @@map("conversation_labels")
+}
+
+model CannedReply {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  orgId       String   @map("org_id") @db.Uuid
+  shortcut    String
+  body        String
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([orgId, shortcut])
+  @@map("canned_replies")
 }

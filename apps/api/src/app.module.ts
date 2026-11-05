@@ -5,8 +5,10 @@ import { AppErrorFilter } from './common/app-error.filter';
 import { DbModule } from './db/db.module';
 import { API_ENV, type ApiEnv, loadApiEnv } from './env';
 import { HealthController } from './health.controller';
+import { InboxModule } from './inbox/inbox.module';
 import { InfraModule } from './infra/infra.module';
 import { OrgsModule } from './orgs/orgs.module';
+import { RealtimeModule } from './realtime/realtime.module';
 import { TeamModule } from './team/team.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
@@ -26,6 +28,8 @@ export class AppModule {
         TeamModule,
         OrgsModule,
         WhatsAppModule,
+        RealtimeModule,
+        InboxModule,
       ],
       controllers: [HealthController],
       providers: [

@@ -6,6 +6,8 @@ import { testDbUrls } from '@wacrm/db/testing';
 import { AppModule } from '../src/app.module';
 import { configureApp, createAdapter, NEST_OPTIONS } from '../src/bootstrap';
 import { loadApiEnv } from '../src/env';
+import { OBJECT_STORAGE } from '../src/infra/infra.tokens';
+import { MemoryStorage } from '@wacrm/shared/server';
 import { MAILER, MemoryMailer } from '../src/infra/mailer';
 import { GRAPH_CONFIG } from '../src/whatsapp/whatsapp.tokens';
 import type { GraphConfig } from '@wacrm/whatsapp';
@@ -21,6 +23,7 @@ export interface BuildOptions {
 export interface TestApp {
   app: NestFastifyApplication;
   mailer: MemoryMailer;
+  storage: MemoryStorage;
   close: () => Promise<void>;
 }
 
@@ -40,6 +43,7 @@ export async function buildApp(extra: BuildOptions = {}): Promise<TestApp> {
     WEB_URL: 'http://localhost:3000',
   });
   const mailer = new MemoryMailer();
+  const storage = new MemoryStorage();
   const mod = await Test.createTestingModule({
     imports: [AppModule.forRoot(env)],
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Nest controller classes
@@ -47,6 +51,8 @@ export async function buildApp(extra: BuildOptions = {}): Promise<TestApp> {
   })
     .overrideProvider(MAILER)
     .useValue(mailer)
+    .overrideProvider(OBJECT_STORAGE)
+    .useValue(storage)
     .overrideProvider(GRAPH_CONFIG)
     .useValue(extra.graph ?? { apiVersion: env.META_GRAPH_API_VERSION })
     .compile();
@@ -54,7 +60,7 @@ export async function buildApp(extra: BuildOptions = {}): Promise<TestApp> {
   await configureApp(app, env);
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
-  return { app, mailer, close: () => app.close() };
+  return { app, mailer, storage, close: () => app.close() };
 }
 
 /** Unique per call so Redis rate-limit buckets never collide between tests. */
@@ -71,7 +77,7 @@ export class Client {
   constructor(private readonly app: NestFastifyApplication) {}
 
   async req(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     url: string,
     body?: unknown,
     headers: Record<string, string> = {},

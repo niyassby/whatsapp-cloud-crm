@@ -12,6 +12,13 @@ export async function purgeWebhookEvents(
   return row?.n ?? 0;
 }
 
+/** Create this month's and upcoming message partitions. Returns how many were new. */
+export async function ensureMessagePartitions(db: DbClient, now = new Date()): Promise<number> {
+  const [row] = await db.$queryRaw<{ n: number }[]>`
+    SELECT ensure_message_partitions(${now.toISOString().slice(0, 10)}::date, 4) AS n`;
+  return row?.n ?? 0;
+}
+
 /**
  * Key rotation: rewrite every secret still under an old key. Ciphertext is bound to its row, so
  * each value is decrypted and encrypted with the same AAD. Runs under RLS and is safe to re-run.

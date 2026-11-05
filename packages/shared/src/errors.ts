@@ -39,6 +39,13 @@ export const ErrorCode = {
   WHATSAPP_PHONE_NOT_IN_WABA: 'WHATSAPP_PHONE_NOT_IN_WABA',
   WHATSAPP_META_ERROR: 'WHATSAPP_META_ERROR',
   WEBHOOK_SIGNATURE_INVALID: 'WEBHOOK_SIGNATURE_INVALID',
+
+  // inbox
+  /** Outside the 24-hour window: only approved templates can be sent. */
+  WINDOW_CLOSED: 'WINDOW_CLOSED',
+  NUMBER_NOT_CONNECTED: 'NUMBER_NOT_CONNECTED',
+  TEMPLATE_NOT_SENDABLE: 'TEMPLATE_NOT_SENDABLE',
+  MEDIA_NOT_ALLOWED: 'MEDIA_NOT_ALLOWED',
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -71,6 +78,10 @@ export const errorHttpStatus: Record<ErrorCode, number> = {
   WHATSAPP_PHONE_NOT_IN_WABA: 400,
   WHATSAPP_META_ERROR: 502,
   WEBHOOK_SIGNATURE_INVALID: 401,
+  WINDOW_CLOSED: 409,
+  NUMBER_NOT_CONNECTED: 409,
+  TEMPLATE_NOT_SENDABLE: 400,
+  MEDIA_NOT_ALLOWED: 400,
 };
 
 /** Typed application error carrying a stable code. */

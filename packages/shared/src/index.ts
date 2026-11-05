@@ -5,3 +5,5 @@ export * from './permissions';
 export * from './auth';
 export * from './whatsapp';
 export * from './queues';
+export * from './inbox';
+export * from './realtime';

@@ -2,6 +2,7 @@ import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@ne
 import {
   DEFAULT_JOB_OPTIONS,
   type MetaAccountJob,
+  type OutboundJob,
   QueueName,
   type WebhookEventJob,
 } from '@wacrm/shared';
@@ -17,6 +18,7 @@ import { API_ENV, type ApiEnv } from '../env';
 export class QueuesService implements OnModuleInit, OnModuleDestroy {
   readonly webhookEvents: Queue<WebhookEventJob>;
   readonly metaAccount: Queue<MetaAccountJob>;
+  readonly outbound: Queue<OutboundJob>;
 
   constructor(@Inject(API_ENV) env: ApiEnv) {
     const opts = {
@@ -30,10 +32,15 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
     };
     this.webhookEvents = new Queue(QueueName.WEBHOOK_EVENTS, opts);
     this.metaAccount = new Queue(QueueName.META_ACCOUNT, opts);
+    this.outbound = new Queue(QueueName.OUTBOUND, opts);
   }
 
   async onModuleInit(): Promise<void> {
-    await Promise.all([this.webhookEvents.waitUntilReady(), this.metaAccount.waitUntilReady()]);
+    await Promise.all([
+      this.webhookEvents.waitUntilReady(),
+      this.metaAccount.waitUntilReady(),
+      this.outbound.waitUntilReady(),
+    ]);
   }
 
   /** Job id = event id: a redelivery or retry cannot queue the same event twice. */
@@ -46,11 +53,20 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
     await this.webhookEvents.add('route', { eventId }, { jobId: `${eventId}-r${Date.now()}` });
   }
 
+  /** Job id = message id: a retried request cannot queue the same message twice. */
+  async enqueueOutbound(job: OutboundJob): Promise<void> {
+    await this.outbound.add('send', job, { jobId: job.messageId });
+  }
+
   async enqueueMetaAccount(job: MetaAccountJob): Promise<void> {
     await this.metaAccount.add(job.kind, job);
   }
 
   async onModuleDestroy(): Promise<void> {
-    await Promise.all([this.webhookEvents.close(), this.metaAccount.close()]);
+    await Promise.all([
+      this.webhookEvents.close(),
+      this.metaAccount.close(),
+      this.outbound.close(),
+    ]);
   }
 }

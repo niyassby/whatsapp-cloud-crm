@@ -20,9 +20,6 @@
     "test": {
       "dependsOn": ["^build", "generate"],
       "cache": false
-    },
-    "test:e2e": {
-      "cache": false
     }
   },
   "globalPassThroughEnv": [
@@ -36,6 +33,7 @@
     "REDIS_URL",
     "QUEUE_PREFIX",
     "WEBHOOK_RETENTION_DAYS",
-    "WORKER_CONCURRENCY"
+    "WORKER_CONCURRENCY",
+    "OUTBOUND_MPS_PER_NUMBER"
   ]
 }

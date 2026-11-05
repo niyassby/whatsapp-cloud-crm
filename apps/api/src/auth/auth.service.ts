@@ -20,6 +20,7 @@ import { PrismaService } from '../db/prisma.service';
 import { API_ENV, type ApiEnv } from '../env';
 import { MAILER, type Mailer, type MailMessage } from '../infra/mailer';
 import { RateLimiter } from '../infra/rate-limiter.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { resetPasswordMail, verifyEmailMail } from './mail-templates';
 import { PasswordService } from './password.service';
 import { TokenService } from './token.service';
@@ -65,6 +66,7 @@ export class AuthService {
     private readonly rateLimiter: RateLimiter,
     private readonly audit: AuditService,
     private readonly secrets: SecretBox,
+    private readonly realtime: RealtimeGateway,
   ) {}
 
   // ------------------------------------------------------------------ signup
@@ -247,6 +249,7 @@ export class AuthService {
     await withDbContext(this.prisma.client, { userId: found.user_id }, (tx) =>
       this.tokens.revokeFamilyTx(tx, found.family_id, 'logout'),
     );
+    this.realtime.disconnectSession(found.family_id);
   }
 
   async switchOrg(userId: string, sessionId: string, orgId: string): Promise<AuthTokensResponse> {
@@ -384,6 +387,7 @@ export class AuthService {
       });
       await this.tokens.revokeAllForUserTx(tx, userId, 'password_reset');
     });
+    this.realtime.disconnectUser(token.userId);
     await this.audit.recordForUser(token.userId, await this.activeOrgIds(token.userId), {
       action: AuditAction.PASSWORD_RESET,
       meta,
@@ -455,7 +459,8 @@ export class AuthService {
   /**
    * Send in the background: the HTTP response never waits on SMTP, and failures are always
    * logged (never thrown into the request).
-   * TODO(phase-1.5): move to a BullMQ "email" queue with retries.
+   * TODO: move to a BullMQ queue with retries. These bodies hold one-time links, so job data
+   * must be encrypted or hold only a reference, not sit in Redis in plain text.
    */
   sendMail(message: MailMessage): void {
     this.mailer.send(message).catch((err: unknown) => {

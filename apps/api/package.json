@@ -12,10 +12,14 @@
   },
   "dependencies": {
     "@fastify/cookie": "11.1.5",
+    "@fastify/multipart": "^10.1.7",
     "@nestjs/common": "^12.3.2",
     "@nestjs/core": "^12.3.2",
     "@nestjs/platform-fastify": "^12.3.2",
+    "@nestjs/platform-socket.io": "12.3.2",
+    "@nestjs/websockets": "12.3.2",
     "@node-rs/argon2": "^2.2.2",
+    "@socket.io/redis-adapter": "^8.3.0",
     "@wacrm/db": "workspace:^",
     "@wacrm/shared": "workspace:^",
     "@wacrm/whatsapp": "workspace:^",
@@ -26,6 +30,7 @@
     "nodemailer": "^10.3.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
+    "socket.io": "^4.8.4",
     "zod": "^4.6.7"
   },
   "devDependencies": {
@@ -34,6 +39,7 @@
     "@swc/core": "^1.16.21",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/nodemailer": "^8.0.2",
+    "socket.io-client": "^4.8.4",
     "unplugin-swc": "^2.0.0"
   }
 }

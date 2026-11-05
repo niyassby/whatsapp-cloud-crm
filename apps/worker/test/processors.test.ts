@@ -9,6 +9,8 @@ import {
   totpAad,
 } from '@wacrm/shared/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { WorkerDeps } from '../src/deps';
+import { buildDeps } from './support';
 import { purgeWebhookEvents, reencryptSecrets } from '../src/processors/maintenance';
 import { processMetaAccountJob } from '../src/processors/meta-account';
 import { markEventFailed, routeWebhookEvent } from '../src/processors/webhook-events';
@@ -18,10 +20,12 @@ const metaId = () => String(Math.floor(Math.random() * 1e15) + 1e15);
 const key = () => randomBytes(32).toString('base64');
 
 let db: DbClient;
+let deps: WorkerDeps;
 let owner: DbClient;
 
 beforeAll(() => {
   db = createPrismaClient({ connectionString: urls.appUrl });
+  deps = buildDeps(db).deps;
   owner = createPrismaClient({ connectionString: urls.directUrl });
 });
 afterAll(async () => {
@@ -91,8 +95,8 @@ describe('routeWebhookEvent', () => {
     const conn = await connect(orgId);
     const id = await ingest(conn.wabaId, conn.phoneNumberId, 'messages', { messages: [] });
 
-    expect(await routeWebhookEvent(db, id)).toBe('routed');
-    expect(await eventRow(id)).toMatchObject({ orgId, status: 'routed', attempts: 1 });
+    expect(await routeWebhookEvent(deps, id)).toBe('processed');
+    expect(await eventRow(id)).toMatchObject({ orgId, status: 'processed', attempts: 1 });
     expect((await eventRow(id)).processedAt).not.toBeNull();
     const seen = await withTenant(db, { orgId }, (tx) =>
       tx.webhookEvent.findUnique({ where: { id } }),
@@ -105,7 +109,7 @@ describe('routeWebhookEvent', () => {
     const other = await createOrg();
     const conn = await connect(orgId);
     const id = await ingest(conn.wabaId, conn.phoneNumberId, 'messages', {});
-    await routeWebhookEvent(db, id);
+    await routeWebhookEvent(deps, id);
     const seen = await withTenant(db, { orgId: other }, (tx) =>
       tx.webhookEvent.findUnique({ where: { id } }),
     );
@@ -114,7 +118,7 @@ describe('routeWebhookEvent', () => {
 
   it('ignores events for unknown numbers, keeping them unassigned', async () => {
     const id = await ingest(metaId(), metaId(), 'messages', {});
-    expect(await routeWebhookEvent(db, id)).toBe('ignored');
+    expect(await routeWebhookEvent(deps, id)).toBe('ignored');
     expect(await eventRow(id)).toMatchObject({ status: 'ignored', orgId: null });
   });
 
@@ -122,28 +126,28 @@ describe('routeWebhookEvent', () => {
     const orgId = await createOrg();
     const conn = await connect(orgId);
     const id = await ingest(conn.wabaId, conn.phoneNumberId, 'messages', {});
-    await routeWebhookEvent(db, id);
-    expect(await routeWebhookEvent(db, id)).toBe('skipped');
+    await routeWebhookEvent(deps, id);
+    expect(await routeWebhookEvent(deps, id)).toBe('skipped');
     expect((await eventRow(id)).attempts).toBe(1);
   });
 
   it('handles a job whose event was already purged', async () => {
-    expect(await routeWebhookEvent(db, randomUUID())).toBe('missing');
+    expect(await routeWebhookEvent(deps, randomUUID())).toBe('missing');
   });
 
   it('replay re-runs, and stays with the original org after the number moves', async () => {
     const orgA = await createOrg();
     const conn = await connect(orgA);
     const id = await ingest(conn.wabaId, conn.phoneNumberId, 'messages', {});
-    await routeWebhookEvent(db, id);
+    await routeWebhookEvent(deps, id);
 
     // The number leaves org A, then the event is replayed from org A.
     await withTenant(db, { orgId: orgA }, async (tx) => {
       await tx.phoneNumber.update({ where: { id: conn.id }, data: { status: 'disconnected' } });
       await tx.webhookEvent.update({ where: { id }, data: { status: 'received' } });
     });
-    expect(await routeWebhookEvent(db, id)).toBe('routed');
-    expect(await eventRow(id)).toMatchObject({ orgId: orgA, status: 'routed', attempts: 2 });
+    expect(await routeWebhookEvent(deps, id)).toBe('processed');
+    expect(await eventRow(id)).toMatchObject({ orgId: orgA, status: 'processed', attempts: 2 });
   });
 
   it('records a final failure on the row', async () => {
@@ -160,7 +164,7 @@ describe('routeWebhookEvent', () => {
       event: 'UPGRADE',
       current_limit: 'TIER_10K',
     });
-    expect(await routeWebhookEvent(db, id)).toBe('routed');
+    expect(await routeWebhookEvent(deps, id)).toBe('processed');
     expect((await phoneRow(conn.id)).messagingTier).toBe('TIER_10K');
   });
 
@@ -171,7 +175,7 @@ describe('routeWebhookEvent', () => {
       display_phone_number: '15559999999',
       current_limit: 'TIER_10K',
     });
-    await routeWebhookEvent(db, id);
+    await routeWebhookEvent(deps, id);
     expect((await phoneRow(conn.id)).messagingTier).toBe('TIER_250');
   });
 
@@ -181,7 +185,7 @@ describe('routeWebhookEvent', () => {
       const orgId = await createOrg();
       const conn = await connect(orgId);
       const id = await ingest(conn.wabaId, null, 'account_update', { event });
-      await routeWebhookEvent(db, id);
+      await routeWebhookEvent(deps, id);
       expect(await phoneRow(conn.id)).toMatchObject({
         status: 'disconnected',
         accessTokenEnc: null,
@@ -196,7 +200,7 @@ describe('routeWebhookEvent', () => {
     const orgId = await createOrg();
     const conn = await connect(orgId);
     const id = await ingest(conn.wabaId, null, 'account_update', { event: 'VERIFIED_ACCOUNT' });
-    await routeWebhookEvent(db, id);
+    await routeWebhookEvent(deps, id);
     expect((await phoneRow(conn.id)).status).toBe('connected');
   });
 });

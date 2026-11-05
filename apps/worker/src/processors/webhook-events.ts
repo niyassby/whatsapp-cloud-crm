@@ -1,4 +1,6 @@
 import { type DbClient, disconnectWabaTx, type TenantTx, withTenant } from '@wacrm/db';
+import type { WorkerDeps } from '../deps';
+import { processMessagesChange } from './inbound';
 
 interface EventRow {
   id: string;
@@ -10,7 +12,7 @@ interface EventRow {
   status: string;
 }
 
-export type RouteOutcome = 'missing' | 'skipped' | 'ignored' | 'routed';
+export type RouteOutcome = 'missing' | 'skipped' | 'ignored' | 'processed';
 
 /** Events that mean the customer took our app off their WABA. */
 const REMOVAL_EVENTS = new Set(['PARTNER_APP_UNINSTALLED', 'PARTNER_REMOVED']);
@@ -38,7 +40,7 @@ async function markEvent(
 export const markEventFailed = (db: DbClient, id: string, err: string) =>
   markEvent(db, id, 'failed', null, err.slice(0, 1000));
 
-/** Account-level events update the connection itself; message handling arrives in Phase 1.5. */
+/** Account-level events update the connection itself. */
 async function applyAccountEvent(tx: TenantTx, orgId: string, event: EventRow): Promise<void> {
   const value = changeValue(event.payload);
 
@@ -77,10 +79,11 @@ async function applyAccountEvent(tx: TenantTx, orgId: string, event: EventRow): 
 }
 
 /**
- * Resolve an event to its org. Idempotent: only 'received' events do work, so a retry or a
- * duplicate job after success is a no-op. Replay resets the status to 'received'.
+ * Route an event to its org and apply it. Idempotent: only 'received' events do work, and message
+ * handling dedupes by wamid, so a retry, a duplicate job or a replay changes nothing twice.
  */
-export async function routeWebhookEvent(db: DbClient, eventId: string): Promise<RouteOutcome> {
+export async function routeWebhookEvent(deps: WorkerDeps, eventId: string): Promise<RouteOutcome> {
+  const { db } = deps;
   const [event] = await db.$queryRaw<
     EventRow[]
   >`SELECT * FROM webhook_event_load(${eventId}::uuid)`;
@@ -98,6 +101,7 @@ export async function routeWebhookEvent(db: DbClient, eventId: string): Promise<
   }
 
   await withTenant(db, { orgId: route.org_id }, (tx) => applyAccountEvent(tx, route.org_id, event));
-  await markEvent(db, eventId, 'routed', route.org_id, null);
-  return 'routed';
+  if (event.field === 'messages') await processMessagesChange(deps, route.org_id, event.payload);
+  await markEvent(db, eventId, 'processed', route.org_id, null);
+  return 'processed';
 }

@@ -11,9 +11,12 @@
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {
+    "@socket.io/redis-emitter": "^5.1.0",
     "@wacrm/db": "workspace:^",
     "@wacrm/shared": "workspace:^",
+    "@wacrm/whatsapp": "workspace:^",
     "bullmq": "^6.7.0",
+    "ioredis": "^6.0.0",
     "pino": "^10.4.0",
     "zod": "^4.6.7"
   },

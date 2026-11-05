@@ -23,7 +23,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const me = useMe();
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex h-screen">
       <aside className="hidden w-60 shrink-0 flex-col border-r bg-sidebar md:flex">
         {/* TODO(branding): partner logo/name plugs in here. */}
         <div className="flex h-14 items-center gap-2 border-b px-4 font-semibold">
@@ -61,13 +61,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center justify-between gap-4 border-b px-4">
           {me.data ? <OrgSwitcher me={me.data} /> : <Skeleton className="h-8 w-40" />}
           {me.data ? <UserMenu me={me.data} /> : <Skeleton className="size-8 rounded-full" />}
         </header>
         {me.data && !me.data.user.emailVerified && <VerifyEmailBanner email={me.data.user.email} />}
-        <main className="flex-1 p-6">
+        <main className="min-h-0 flex-1 overflow-auto p-6">
           {me.isPending ? (
             <Skeleton className="h-40 w-full" />
           ) : me.data && !me.data.currentOrg ? (

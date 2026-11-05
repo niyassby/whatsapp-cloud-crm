@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { loadWorkerEnv } from './env';
 
-const base = { DATABASE_URL: 'postgresql://u:p@127.0.0.1:5433/db' };
+const base = {
+  DATABASE_URL: 'postgresql://u:p@127.0.0.1:5433/db',
+  ENCRYPTION_KEY: 'x',
+};
 
 describe('worker env', () => {
   it('applies defaults', () => {

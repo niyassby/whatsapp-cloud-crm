@@ -20,6 +20,8 @@ export interface AccessClaims {
   org?: string;
   /** session (refresh-token family) id */
   sid: string;
+  /** expiry, seconds since the epoch (set on verified tokens) */
+  exp?: number;
 }
 
 export interface RefreshLookupRow {
@@ -71,7 +73,12 @@ export class TokenService {
     if (typeof payload.sub !== 'string' || typeof sid !== 'string') {
       throw new AppError(ErrorCode.UNAUTHENTICATED, 'Invalid access token');
     }
-    return { sub: payload.sub, sid, org: typeof org === 'string' ? org : undefined };
+    return {
+      sub: payload.sub,
+      sid,
+      org: typeof org === 'string' ? org : undefined,
+      exp: payload.exp,
+    };
   }
 
   /** Short-lived proof that the password step passed; exchanged with a TOTP code. */
