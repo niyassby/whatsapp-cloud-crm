@@ -33,7 +33,8 @@ export class RealtimeIoAdapter extends IoAdapter {
 
   override async dispose(): Promise<void> {
     await super.dispose();
-    this.pub.disconnect();
-    this.sub.disconnect();
+    // quit(), not disconnect(): the adapter may still have a subscribe or unsubscribe in flight,
+    // and dropping the connection under it rejects that command with nothing to catch it.
+    await Promise.allSettled([this.pub.quit(), this.sub.quit()]);
   }
 }
