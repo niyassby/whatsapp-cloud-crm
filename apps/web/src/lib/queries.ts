@@ -8,6 +8,9 @@ import type {
   MeResponse,
   MemberDto,
   Permission,
+  PhoneNumberDto,
+  WebhookEventDto,
+  WhatsAppConfigDto,
 } from '@wacrm/shared';
 import { api } from './api';
 
@@ -25,6 +28,9 @@ export const queryKeys = {
   members: ['team', 'members'] as const,
   invitations: ['team', 'invitations'] as const,
   audit: ['audit'] as const,
+  whatsappConfig: ['whatsapp', 'config'] as const,
+  phoneNumbers: ['whatsapp', 'phone-numbers'] as const,
+  webhookEvents: ['whatsapp', 'webhook-events'] as const,
 };
 
 export function useMe() {
@@ -67,6 +73,33 @@ export function useAuditLogs() {
     queryFn: ({ pageParam }) =>
       api<CursorPage<AuditLogDto>>(
         `/orgs/current/audit-logs?limit=25${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`,
+      ),
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+  });
+}
+
+export function useWhatsAppConfig(enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.whatsappConfig,
+    queryFn: () => api<WhatsAppConfigDto>('/whatsapp/config'),
+    enabled,
+  });
+}
+
+export function usePhoneNumbers() {
+  return useQuery({
+    queryKey: queryKeys.phoneNumbers,
+    queryFn: () => api<PhoneNumberDto[]>('/whatsapp/phone-numbers'),
+  });
+}
+
+export function useWebhookEvents() {
+  return useInfiniteQuery({
+    queryKey: queryKeys.webhookEvents,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      api<CursorPage<WebhookEventDto>>(
+        `/whatsapp/webhook-events?limit=20${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`,
       ),
     getNextPageParam: (last) => last.nextCursor ?? undefined,
   });

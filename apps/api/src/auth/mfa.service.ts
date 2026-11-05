@@ -1,13 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { withDbContext } from '@wacrm/db';
 import { AppError, ErrorCode, type TotpSetupResponse } from '@wacrm/shared';
-import { generateTotpSecret, SecretBox, totpUri, verifyTotp } from '@wacrm/shared/server';
+import { generateTotpSecret, SecretBox, totpAad, totpUri, verifyTotp } from '@wacrm/shared/server';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import type { RequestMeta } from '../common/request-meta';
 import { PrismaService } from '../db/prisma.service';
 import { API_ENV, type ApiEnv } from '../env';
 import { RateLimiter } from '../infra/rate-limiter.service';
-import { AuthService, totpAad } from './auth.service';
+import { AuthService } from './auth.service';
 import { PasswordService } from './password.service';
 
 /** Optional TOTP 2FA. The secret is stored envelope-encrypted, bound to the user row. */

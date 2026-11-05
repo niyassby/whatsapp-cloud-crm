@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { loadApiEnv } from './env';
 
 describe('api env', () => {
+  const meta = { META_APP_ID: '1', META_APP_SECRET: 's', META_WEBHOOK_VERIFY_TOKEN: 'v' };
   const base = {
     DATABASE_URL: 'postgresql://u:p@localhost:5433/db',
     JWT_ACCESS_SECRET: 'a'.repeat(32),
@@ -37,12 +38,26 @@ describe('api env', () => {
   it('refuses dev-only secrets in production', () => {
     const dev = {
       ...base,
+      ...meta,
       NODE_ENV: 'production',
       JWT_ACCESS_SECRET: 'dev-only-access-secret-0123456789abcdef0123456789',
       ENCRYPTION_KEY: 'ZGV2LW9ubHktZW5jcnlwdGlvbi1rZXktMzJieXRlcyE=',
     };
     expect(() => loadApiEnv(dev)).toThrow(/dev-only values: JWT_ACCESS_SECRET, ENCRYPTION_KEY/);
-    expect(loadApiEnv({ ...base, NODE_ENV: 'production' }).NODE_ENV).toBe('production');
+    expect(loadApiEnv({ ...base, ...meta, NODE_ENV: 'production' }).NODE_ENV).toBe('production');
+  });
+
+  it('requires the Meta settings in production', () => {
+    expect(() => loadApiEnv({ ...base, NODE_ENV: 'production' })).toThrow(/META_APP_SECRET/);
+    expect(loadApiEnv(base).META_GRAPH_API_VERSION).toBe('v25.0');
+    expect(() =>
+      loadApiEnv({
+        ...base,
+        ...meta,
+        NODE_ENV: 'production',
+        META_GRAPH_BASE_URL: 'http://127.0.0.1:4999',
+      }),
+    ).toThrow(/META_GRAPH_BASE_URL/);
   });
 
   it('parses previous encryption keys for rotation', () => {

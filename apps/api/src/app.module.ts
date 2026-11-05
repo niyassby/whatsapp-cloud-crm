@@ -9,6 +9,7 @@ import { InfraModule } from './infra/infra.module';
 import { OrgsModule } from './orgs/orgs.module';
 import { TeamModule } from './team/team.module';
 import { TenancyModule } from './tenancy/tenancy.module';
+import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
 @Module({})
 export class AppModule {
@@ -17,7 +18,15 @@ export class AppModule {
     return {
       module: AppModule,
       global: true,
-      imports: [DbModule, InfraModule, TenancyModule, AuthModule, TeamModule, OrgsModule],
+      imports: [
+        DbModule,
+        InfraModule,
+        TenancyModule,
+        AuthModule,
+        TeamModule,
+        OrgsModule,
+        WhatsAppModule,
+      ],
       controllers: [HealthController],
       providers: [
         { provide: API_ENV, useValue: env },

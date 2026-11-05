@@ -18,6 +18,8 @@
     "@node-rs/argon2": "^2.2.2",
     "@wacrm/db": "workspace:^",
     "@wacrm/shared": "workspace:^",
+    "@wacrm/whatsapp": "workspace:^",
+    "bullmq": "^6.7.0",
     "fastify": "^5.12.7",
     "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",

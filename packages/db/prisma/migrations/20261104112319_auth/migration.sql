@@ -144,6 +144,8 @@ $$;
 -- The migrating role must be able to hand function ownership to app_definer.
 GRANT app_definer TO CURRENT_USER;
 GRANT USAGE ON SCHEMA public TO app_definer;
+-- Taking ownership of a function needs CREATE on its schema (superusers skip this check).
+GRANT CREATE ON SCHEMA public TO app_definer;
 GRANT SELECT ON "users", "organizations", "refresh_tokens", "auth_tokens", "invitations" TO app_definer;
 GRANT EXECUTE ON FUNCTION app_current_org_id(), app_current_user_id(), app_current_partner_id() TO app_definer;
 
@@ -199,3 +201,5 @@ REVOKE ALL ON FUNCTION auth_lookup_user_by_email(text), auth_lookup_refresh_toke
   auth_lookup_auth_token(text, "AuthTokenType"), auth_lookup_invitation(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION auth_lookup_user_by_email(text), auth_lookup_refresh_token(text),
   auth_lookup_auth_token(text, "AuthTokenType"), auth_lookup_invitation(text) TO app_user;
+
+REVOKE CREATE ON SCHEMA public FROM app_definer;

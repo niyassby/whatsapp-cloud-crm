@@ -14,6 +14,10 @@ import {
 import { useAuditLogs } from '@/lib/queries';
 
 const LABELS: Record<string, string> = {
+  'whatsapp.connected': 'Connected a WhatsApp number',
+  'whatsapp.disconnected': 'Disconnected a WhatsApp number',
+  'whatsapp.registered': 'Registered a WhatsApp number',
+  'whatsapp.webhook_replayed': 'Replayed a webhook event',
   'auth.signup': 'Created the workspace',
   'auth.login': 'Logged in',
   'auth.login_mfa': 'Logged in with 2FA',

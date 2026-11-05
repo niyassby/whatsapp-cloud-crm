@@ -1,14 +1,22 @@
 import 'reflect-metadata';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { testDbUrls } from '@wacrm/db/testing';
 import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/bootstrap';
+import { configureApp, createAdapter, NEST_OPTIONS } from '../src/bootstrap';
 import { loadApiEnv } from '../src/env';
 import { MAILER, MemoryMailer } from '../src/infra/mailer';
+import { GRAPH_CONFIG } from '../src/whatsapp/whatsapp.tokens';
+import type { GraphConfig } from '@wacrm/whatsapp';
 
 export const urls = testDbUrls('wacrm_api_test');
+
+export interface BuildOptions {
+  controllers?: unknown[];
+  env?: Record<string, string>;
+  graph?: GraphConfig;
+}
 
 export interface TestApp {
   app: NestFastifyApplication;
@@ -17,7 +25,7 @@ export interface TestApp {
 }
 
 /** The real app (guards, RLS, Redis rate limits) with an in-memory mailer. */
-export async function buildApp(extra: { controllers?: unknown[] } = {}): Promise<TestApp> {
+export async function buildApp(extra: BuildOptions = {}): Promise<TestApp> {
   const env = loadApiEnv({
     NODE_ENV: 'test',
     LOG_LEVEL: 'silent',
@@ -26,6 +34,9 @@ export async function buildApp(extra: { controllers?: unknown[] } = {}): Promise
     JWT_ACCESS_SECRET: randomBytes(32).toString('hex'),
     JWT_REFRESH_SECRET: randomBytes(32).toString('hex'),
     ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+    // Each suite gets its own queues, so assertions never see another run's jobs.
+    QUEUE_PREFIX: `test-${randomUUID()}`,
+    ...extra.env,
     WEB_URL: 'http://localhost:3000',
   });
   const mailer = new MemoryMailer();
@@ -36,8 +47,10 @@ export async function buildApp(extra: { controllers?: unknown[] } = {}): Promise
   })
     .overrideProvider(MAILER)
     .useValue(mailer)
+    .overrideProvider(GRAPH_CONFIG)
+    .useValue(extra.graph ?? { apiVersion: env.META_GRAPH_API_VERSION })
     .compile();
-  const app = mod.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+  const app = mod.createNestApplication<NestFastifyApplication>(createAdapter(env), NEST_OPTIONS);
   await configureApp(app, env);
   await app.init();
   await app.getHttpAdapter().getInstance().ready();

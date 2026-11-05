@@ -14,7 +14,11 @@
     "test": "vitest run --passWithNoTests",
     "clean": "rimraf dist .turbo"
   },
+  "dependencies": {
+    "@wacrm/shared": "workspace:^",
+    "wapi-cloud": "1.1.0"
+  },
   "devDependencies": {
-    "@wacrm/shared": "workspace:^"
+    "vitest": "^5.1.0"
   }
 }

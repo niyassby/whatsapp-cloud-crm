@@ -63,6 +63,7 @@ pnpm db:seed            # demo org "demo" with owner + agent (credentials in pac
 pnpm db:studio
 pnpm --filter @wacrm/db run migrate:create -- --name <name>   # empty migration to hand-edit (RLS!)
 pnpm --filter @wacrm/api dev   # run a single app
+pnpm secrets:reencrypt  # key rotation: rewrite secrets still under an old ENCRYPTION_KEY
 ```
 
 Health checks: `GET :4000/health` (api liveness), `GET :4000/health/ready` (api + DB), `GET :4001/health` (worker), `GET :3000/health` (web).
@@ -87,10 +88,27 @@ Health checks: `GET :4000/health` (api liveness), `GET :4000/health/ready` (api 
 - 2FA: own RFC 6238 TOTP (`@wacrm/shared/server`, verified against RFC vectors), secret envelope-encrypted with AAD `users:<id>:totp`, replay-protected via `users.totp_last_step`. Login with 2FA returns `{ mfaRequired, mfaToken }` (5 min JWT, separate audience), then `/auth/2fa/verify`.
 - Emails (verify 24 h, reset 1 h, invite 7 d): single-use hashed tokens, links `${WEB_URL}/<page>?token=`. Sent inline via `Mailer` (SMTP, Mailpit locally); failures are logged, not thrown. TODO(phase-1.5): move to a BullMQ queue.
 - Audit: `AuditService.record(tx, orgId, ...)` inside the same transaction as the change; user-level security events go to every org the user belongs to. Actions are the `AuditAction` constants. Settings > Audit log reads them with cursor pagination.
-- Encryption: `SecretBox` (`@wacrm/shared/server`): per-value data key, KEK from `ENCRYPTION_KEY`, format `v1.<kid>...`. Rotation: put the new key in `ENCRYPTION_KEY`, the old one in `ENCRYPTION_KEY_PREVIOUS`, re-encrypt rows where `needsReencrypt()` is true (job to be added with the first encrypted credentials in 1.4), then drop the old key.
+- Encryption: `SecretBox` (`@wacrm/shared/server`): per-value data key, KEK from `ENCRYPTION_KEY`, format `v1.<kid>...`. Rotation: put the new key in `ENCRYPTION_KEY`, the old one in `ENCRYPTION_KEY_PREVIOUS`, restart, run `pnpm secrets:reencrypt` (it reports rows it could not rewrite), then drop the old key.
 - Web routes: `(auth)` login/signup/forgot-password/reset-password/verify-email/invite; `(app)` protected by `AuthGuard` (silent refresh, else `/login?next=`), shell with org switcher, user menu, verify-email banner, no-org state; settings: general, team, security (2FA), audit. UI gating uses `useCan(permission)`; the API is the authority.
 - Tests: `apps/api/test/auth.test.ts` (flows), `team.test.ts` (role guards, invitations, owner safeguards, instant revocation, cross-tenant), `tenancy.test.ts`; `packages/db/test/auth-tables.test.ts` (auth table RLS + definer functions). Test helpers in `apps/api/test/helpers.ts` (`buildApp`, `Client` with cookie jar, `tokenFromMail`).
 - Tests: `packages/db/test/isolation.test.ts` (cross-tenant suite, must always pass) and `apps/api/test/tenancy.test.ts` (both layers over HTTP). Shared helpers: `@wacrm/db/testing` (`prepareTestDatabase`, `testDbUrls`), test-only.
+
+## WhatsApp (Phase 1.4)
+
+Setup steps for a real number: `infra/whatsapp-setup.md`.
+
+- `packages/whatsapp`: `WhatsAppGateway` (per-number client, returns `{ data, error }` with internal `WhatsAppErrorCode`s), `WapiCloudGateway` (SDK, `maxRetries: 0` because BullMQ owns retries), `GraphClient` (code exchange, WABA subscribe, phone and WABA details), `WhatsAppClientFactory` (LRU + 15 min TTL by `phone_number_id`; a cache hit must also match the org, otherwise it goes through the RLS-checked loader), webhook helpers. `test/contract.test.ts` pins requests, results and parsed event shapes. Fixtures in `test/fixtures.ts` follow Meta's docs; replace them with captured payloads once a real number is connected.
+- Webhook flow: `POST /webhooks/meta` verifies the signature on the raw bytes -> `webhook_event_ingest` stores one row per change (a delivery can span WABAs, so a row belongs to one tenant; its payload is itself a valid webhook body) -> job id = event id -> 200. Any failure answers 5xx so Meta redelivers; redelivery dedupes on the payload hash and re-enqueues only events still `received`.
+- Event statuses: `received` -> `routed` (org assigned by the worker) / `ignored` (no live number) / `failed` (out of attempts). Phase 1.5 adds message handling and `processed`. Replay: `POST /whatsapp/webhook-events/:id/replay` resets to `received` and queues a new job; a routed event keeps its original org. Retention: daily job, `WEBHOOK_RETENTION_DAYS` (30).
+- Worker also applies account events: `phone_number_quality_update` -> tier; `account_update` with `PARTNER_APP_UNINSTALLED` / `PARTNER_REMOVED` -> disconnect.
+- Connect order: read WABA numbers with the token (proves access; a client cannot claim another customer's WABA) -> details -> subscribe -> register -> persist. All Meta calls are outside transactions. Nothing is stored unless subscribe succeeds. A failed registration keeps the connection as `registration_failed`, with a retry that accepts the existing 2-step PIN.
+- Secrets: `phone_numbers.access_token_enc` and `registration_pin_enc` are `SecretBox` ciphertext with row-bound AAD (`phoneTokenAad`, `phonePinAad`). The token is per WABA, so reconnecting updates sibling numbers. DTOs are whitelist-mapped so they can never leak.
+- Uniqueness: a WABA or number is live in at most one org (partial unique indexes, `WHATSAPP_ALREADY_CONNECTED`). Disconnect is soft: wipes credentials, keeps history; a disconnected number can reconnect anywhere.
+- Pre-tenant functions (same pattern as auth, but some write): `webhook_event_ingest`, `webhook_event_load`, `webhook_route_lookup`, `webhook_event_mark`, `webhook_events_purge` (never touches events under a day old), `meta_connections_by_user`, `data_deletion_create` / `_status` / `_complete`, `secrets_list_phone_numbers`, `secrets_list_totp_users`. None returns a credential (tested). Migrations must `GRANT CREATE ON SCHEMA public TO app_definer` before taking function ownership and revoke it after.
+- Meta callbacks: `POST /meta/deauthorize`, `POST /meta/data-deletion` (verified `signed_request`, form encoded), public status at `GET /meta/data-deletion/:code` and web `/data-deletion?code=`. Matched on `waba_accounts.meta_user_id`, which is only set when the JS SDK reports a user id.
+- Queues: names and payloads in `packages/shared/src/queues.ts`; `QUEUE_PREFIX` (`wacrm`). Producers have the offline queue off, so a Redis outage fails fast.
+- Local checks without Meta: `META_GRAPH_BASE_URL` points Graph calls at a fake (refused in production).
+- Tests: `packages/whatsapp/test`, `apps/api/test/whatsapp.test.ts` (fake Graph, real DB and Redis), `apps/worker/test/processors.test.ts`, `packages/db/test/whatsapp-tables.test.ts`.
 
 ## Environment
 
@@ -104,7 +122,8 @@ Validate with Zod at startup. Never commit real secrets. Keep `.env.example` cur
 - `ENCRYPTION_KEY` (base64 32-byte AES-256-GCM KEK), `ENCRYPTION_KEY_PREVIOUS` (comma-separated, rotation; see Auth section)
 - `.env.example` ships DEV-ONLY secrets; the API refuses to start with `NODE_ENV=production` while any of them are still in use
 - `SMTP_URL` (default `smtp://localhost:1025` = Mailpit), `MAIL_FROM`, `APP_NAME` (TOTP issuer, email copy)
-- `META_APP_ID`, `META_APP_SECRET`, `META_WEBHOOK_VERIFY_TOKEN`, `META_GRAPH_API_VERSION` (pinned)
+- `META_APP_ID`, `META_APP_SECRET`, `META_WEBHOOK_VERIFY_TOKEN` (required in production), `META_EMBEDDED_SIGNUP_CONFIG_ID`, `META_GRAPH_API_VERSION` (pinned, v25.0), `ALLOW_MANUAL_CONNECT` (default on outside production), `META_GRAPH_BASE_URL` (local fakes only)
+- `QUEUE_PREFIX`, `WORKER_CONCURRENCY` (10), `WEBHOOK_RETENTION_DAYS` (30). An empty `KEY=` counts as unset
 - `S3_*` storage settings
 - `RAZORPAY_*`, `STRIPE_*` for platform billing
 - `SENTRY_DSN`
@@ -160,7 +179,7 @@ The package is young and single-maintainer. Treat it as replaceable.
 
 Mark as phases complete.
 
-- [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks, 1.5 pipeline/inbox)
+- [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, real number NOT yet verified, 1.5 pipeline/inbox)
 - [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 to 2.6)
 - [ ] Section 3: Automation, integrations, AI (3.1 to 3.7)
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
@@ -204,7 +223,20 @@ Add one line per decision: date, decision, reason.
 - 2026-11-04: `prisma generate` is its own Turbo task (`generate`) that build/typecheck/dev/test depend on, so it runs once; parallel generates race on Windows.
 - 2026-11-04: shadcn/ui components live in `apps/web/src/components/ui` (CLI-managed). The CLI wrote `import { cn } from "cn"` and added an unrelated npm package `cn`; imports were pointed at `@/lib/utils` and the package removed. Check this after every `shadcn add`.
 
+- 2026-11-05: wapi-cloud pinned to exactly 1.1.0. It now also ships Embedded Signup, WABA subscribe, Calling and Groups, unlike the SDK rules above; 1.4 still follows those rules (code exchange and subscribe go directly to Graph). Whether to switch later is an open call for the project owner.
+- 2026-11-05: One `webhook_events` row per change, not per delivery. Reason: one delivery can span several WABAs, and a row must belong to one tenant.
+- 2026-11-05: Workers and webhooks use the same app role; pre-tenant steps go through narrow SECURITY DEFINER functions rather than the owner connection or BYPASSRLS.
+- 2026-11-05: `messaging_tier` and `quality_rating` are plain strings: Meta changes these values, and limits belong in config. `messaging_limit_tier` is requested with a fallback, since Meta is migrating it.
+- 2026-11-05: A data deletion request wipes Meta credentials and the Facebook user id, and disconnects; conversation data stays with the workspace as data controller. Worth a legal check before launch.
+- 2026-11-05: Fixed the 1.3 auth migration for non-superuser owners (function ownership needs CREATE on the schema). Verified by deploying all migrations and the seed as a non-superuser on a clean container. Migrations had never been run on a real host, so editing it in place was safe.
+- 2026-11-05: BullMQ job schedulers for repeatable work (`upsertJobScheduler`), so restarts and multiple workers keep one schedule.
+
 ## Known gaps / TODO
+
+- Real Meta connection not verified: needs credentials and a public HTTPS URL (`infra/whatsapp-setup.md`). The FB JS SDK popup has never run against Meta; only its message parsing is tested. Fixtures are from Meta's docs, not captured traffic.
+- Data deletion only matches connections with a stored `meta_user_id`; manual connects have none, and FB.login may not report one with `response_type: code`. Check on the first real signup.
+- No mobile navigation: the main sidebar is hidden below `md` with no replacement.
+- Settings > WhatsApp shows the raw event type; friendlier labels can wait for the inbox.
 
 - CI workflow exists but has not run yet (no GitHub remote configured).
 - Verify current Meta pricing, messaging limits and partner requirements before finalizing billing logic.

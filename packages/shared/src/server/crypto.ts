@@ -19,6 +19,11 @@ const ALG = 'aes-256-gcm';
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 
+/** AAD for each stored secret: binds the ciphertext to its row so it cannot be copied. */
+export const totpAad = (userId: string) => `users:${userId}:totp`;
+export const phoneTokenAad = (id: string) => `phone_numbers:${id}:token`;
+export const phonePinAad = (id: string) => `phone_numbers:${id}:pin`;
+
 export class DecryptionError extends Error {
   readonly code = 'DECRYPTION_FAILED';
   constructor(message = 'Unable to decrypt value') {

@@ -40,6 +40,36 @@ enum MembershipStatus {
   disabled
 }
 
+enum WabaStatus {
+  active
+  disconnected
+}
+
+enum PhoneNumberStatus {
+  pending
+  connected
+  registration_failed
+  disconnected
+}
+
+enum CredentialSource {
+  embedded_signup
+  manual
+}
+
+enum WebhookEventStatus {
+  received
+  routed
+  processed
+  ignored
+  failed
+}
+
+enum DataDeletionStatus {
+  received
+  completed
+}
+
 enum AuthTokenType {
   email_verification
   password_reset
@@ -77,6 +107,9 @@ model Organization {
   auditLogs     AuditLog[]
   invitations   Invitation[]
   refreshTokens RefreshToken[]
+  wabaAccounts  WabaAccount[]
+  phoneNumbers  PhoneNumber[]
+  webhookEvents WebhookEvent[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -101,13 +134,14 @@ model User {
   createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  memberships         Membership[]
-  apiKeys             ApiKey[]
-  auditLogs           AuditLog[]
-  refreshTokens       RefreshToken[]
-  authTokens          AuthToken[]
-  invitationsSent     Invitation[]   @relation("InvitedBy")
-  invitationsAccepted Invitation[]   @relation("AcceptedBy")
+  memberships           Membership[]
+  apiKeys               ApiKey[]
+  auditLogs             AuditLog[]
+  refreshTokens         RefreshToken[]
+  authTokens            AuthToken[]
+  invitationsSent       Invitation[]   @relation("InvitedBy")
+  invitationsAccepted   Invitation[]   @relation("AcceptedBy")
+  wabaAccountsConnected WabaAccount[]
 
   @@map("users")
 }
@@ -233,4 +267,103 @@ model Invitation {
   @@index([orgId])
   @@index([orgId, email])
   @@map("invitations")
+}
+
+/// A WhatsApp Business Account connected to an org. A WABA is active in at most one org
+/// (partial unique index in the migration); a disconnected row may be reconnected elsewhere.
+model WabaAccount {
+  id                  String     @id @default(uuid(7)) @db.Uuid
+  orgId               String     @map("org_id") @db.Uuid
+  wabaId              String     @map("waba_id")
+  name                String?
+  currency            String?
+  timezoneId          String?    @map("timezone_id")
+  templateNamespace   String?    @map("template_namespace")
+  status              WabaStatus @default(active)
+  /// App-scoped Facebook user who connected it. Matched against deletion and deauth callbacks.
+  metaUserId          String?    @map("meta_user_id")
+  connectedById       String?    @map("connected_by_id") @db.Uuid
+  webhookSubscribedAt DateTime?  @map("webhook_subscribed_at") @db.Timestamptz(3)
+  disconnectedAt      DateTime?  @map("disconnected_at") @db.Timestamptz(3)
+  createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  connectedBy  User?         @relation(fields: [connectedById], references: [id], onDelete: SetNull)
+  phoneNumbers PhoneNumber[]
+
+  @@unique([orgId, wabaId])
+  @@index([metaUserId])
+  @@map("waba_accounts")
+}
+
+/// A business phone number. access_token_enc and registration_pin_enc are SecretBox ciphertext
+/// bound to this row by AAD, and must never leave the API.
+model PhoneNumber {
+  id                     String            @id @default(uuid(7)) @db.Uuid
+  orgId                  String            @map("org_id") @db.Uuid
+  wabaAccountId          String            @map("waba_account_id") @db.Uuid
+  phoneNumberId          String            @map("phone_number_id")
+  displayPhoneNumber     String?           @map("display_phone_number")
+  verifiedName           String?           @map("verified_name")
+  qualityRating          String?           @map("quality_rating")
+  /// e.g. TIER_250. A string on purpose: Meta changes tiers, limits live in config.
+  messagingTier          String?           @map("messaging_tier")
+  codeVerificationStatus String?           @map("code_verification_status")
+  nameStatus             String?           @map("name_status")
+  platformType           String?           @map("platform_type")
+  status                 PhoneNumberStatus @default(pending)
+  statusReason           String?           @map("status_reason")
+  credentialSource       CredentialSource  @map("credential_source")
+  accessTokenEnc         String?           @map("access_token_enc")
+  registrationPinEnc     String?           @map("registration_pin_enc")
+  registeredAt           DateTime?         @map("registered_at") @db.Timestamptz(3)
+  lastSyncedAt           DateTime?         @map("last_synced_at") @db.Timestamptz(3)
+  disconnectedAt         DateTime?         @map("disconnected_at") @db.Timestamptz(3)
+  createdAt              DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  wabaAccount  WabaAccount  @relation(fields: [wabaAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, phoneNumberId])
+  @@index([wabaAccountId])
+  @@map("phone_numbers")
+}
+
+/// Raw inbound webhook changes, kept for replay. org_id is null until a worker routes the event.
+/// Inserted and routed only through SECURITY DEFINER functions.
+model WebhookEvent {
+  id            String             @id @default(uuid(7)) @db.Uuid
+  orgId         String?            @map("org_id") @db.Uuid
+  provider      String             @default("meta")
+  /// sha256 of the payload: Meta redeliveries collapse onto one row.
+  dedupeKey     String             @unique @map("dedupe_key")
+  wabaId        String?            @map("waba_id")
+  phoneNumberId String?            @map("phone_number_id")
+  field         String?
+  payload       Json
+  status        WebhookEventStatus @default(received)
+  attempts      Int                @default(0)
+  error         String?
+  receivedAt    DateTime           @default(now()) @map("received_at") @db.Timestamptz(3)
+  processedAt   DateTime?          @map("processed_at") @db.Timestamptz(3)
+
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, receivedAt(sort: Desc), id(sort: Desc)])
+  @@index([receivedAt])
+  @@map("webhook_events")
+}
+
+/// Meta data deletion callbacks. Not tenant data: keyed by Facebook user, public by code only.
+model DataDeletionRequest {
+  id               String             @id @default(uuid(7)) @db.Uuid
+  metaUserId       String             @map("meta_user_id")
+  confirmationCode String             @unique @map("confirmation_code")
+  status           DataDeletionStatus @default(received)
+  requestedAt      DateTime           @default(now()) @map("requested_at") @db.Timestamptz(3)
+  completedAt      DateTime?          @map("completed_at") @db.Timestamptz(3)
+
+  @@map("data_deletion_requests")
 }

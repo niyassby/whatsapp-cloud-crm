@@ -11,7 +11,9 @@
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {
+    "@wacrm/db": "workspace:^",
     "@wacrm/shared": "workspace:^",
+    "bullmq": "^6.7.0",
     "pino": "^10.4.0",
     "zod": "^4.6.7"
   },

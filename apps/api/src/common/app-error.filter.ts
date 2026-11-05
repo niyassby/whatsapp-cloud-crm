@@ -18,7 +18,7 @@ export class AppErrorFilter implements ExceptionFilter {
     const reply = host.switchToHttp().getResponse<FastifyReply>();
     const { status, body } = this.toResponse(exception);
     if (status >= 500) this.logger.error(exception);
-    void reply.status(status).send(body);
+    void reply.status(status).type('application/json').send(body);
   }
 
   private toResponse(exception: unknown): { status: number; body: ErrorResponse } {

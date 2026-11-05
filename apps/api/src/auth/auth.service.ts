@@ -13,7 +13,7 @@ import {
   rolePermissions,
   type SignupInput,
 } from '@wacrm/shared';
-import { SecretBox, verifyTotp } from '@wacrm/shared/server';
+import { SecretBox, totpAad, verifyTotp } from '@wacrm/shared/server';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import type { RequestMeta } from '../common/request-meta';
 import { PrismaService } from '../db/prisma.service';
@@ -41,8 +41,6 @@ export interface UserLookupRow {
 export interface SessionTokens extends AuthTokensResponse {
   refreshToken: string;
 }
-
-export const totpAad = (userId: string) => `users:${userId}:totp`;
 
 export function slugify(name: string): string {
   const base = name

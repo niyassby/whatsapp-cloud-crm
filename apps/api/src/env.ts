@@ -46,6 +46,22 @@ export const apiEnvSchema = z.object({
     )
     .pipe(z.array(base64Key)),
 
+  /** Optional until a number is connected; required when NODE_ENV=production. */
+  META_APP_ID: z.string().min(1).optional(),
+  META_APP_SECRET: z.string().min(1).optional(),
+  META_WEBHOOK_VERIFY_TOKEN: z.string().min(1).optional(),
+  /** Facebook Login for Business configuration used by Embedded Signup. */
+  META_EMBEDDED_SIGNUP_CONFIG_ID: z.string().min(1).optional(),
+  META_GRAPH_API_VERSION: z
+    .string()
+    .regex(/^v\d+\.\d+$/)
+    .default('v25.0'),
+  /** Point Graph calls at a local fake for end-to-end checks. Refused in production. */
+  META_GRAPH_BASE_URL: z.url().optional(),
+  /** System-user-token connect form. Defaults to on outside production, off in production. */
+  ALLOW_MANUAL_CONNECT: booleanString.optional(),
+  QUEUE_PREFIX: z.string().min(1).default('wacrm'),
+
   SMTP_URL: z.url({ protocol: /^smtps?$/ }).default('smtp://127.0.0.1:1025'),
   MAIL_FROM: z.string().default('WhatsApp CRM <no-reply@localhost>'),
 });
@@ -61,6 +77,15 @@ export const loadApiEnv = (source?: Record<string, string | undefined>): ApiEnv 
       env.JWT_REFRESH_SECRET.includes('dev-only') && 'JWT_REFRESH_SECRET',
       env.ENCRYPTION_KEY === DEV_ENCRYPTION_KEY && 'ENCRYPTION_KEY',
     ].filter(Boolean);
+    if (env.META_GRAPH_BASE_URL) {
+      throw new Error('META_GRAPH_BASE_URL must not be set in production');
+    }
+    const missing = ['META_APP_ID', 'META_APP_SECRET', 'META_WEBHOOK_VERIFY_TOKEN'].filter(
+      (k) => !env[k as keyof ApiEnv],
+    );
+    if (missing.length > 0) {
+      throw new Error(`Missing required production settings: ${missing.join(', ')}`);
+    }
     if (devValues.length > 0) {
       throw new Error(
         `Refusing to start in production with dev-only values: ${devValues.join(', ')}`,

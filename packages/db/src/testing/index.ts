@@ -11,6 +11,9 @@ export { ensureAppRole } from './roles';
 const DEFAULT_DIRECT = 'postgresql://wacrm:wacrm@127.0.0.1:5433/wacrm_test';
 const DEFAULT_APP = 'postgresql://wacrm_app:wacrm_app@127.0.0.1:5433/wacrm_test';
 
+/** Arbitrary constant identifying the test setup lock. */
+const SETUP_LOCK = 727401;
+
 export interface TestDbUrls {
   /** Owner connection: migrations and fixtures only. */
   directUrl: string;
@@ -52,29 +55,33 @@ export async function prepareTestDatabase({ directUrl, appUrl }: TestDbUrls): Pr
   const client = new Client({ connectionString: admin.toString() });
   await client.connect();
   try {
+    // Roles are cluster-wide, so suites running in parallel would collide on CREATE ROLE and
+    // GRANT ("tuple concurrently updated"). Only this setup is serialised, not the tests.
+    await client.query('SELECT pg_advisory_lock($1)', [SETUP_LOCK]);
     const ident = client.escapeIdentifier(dbName);
     await client.query(`DROP DATABASE IF EXISTS ${ident} WITH (FORCE)`);
     await client.query(`CREATE DATABASE ${ident}`);
+
+    // dist/testing or src/testing -> package root
+    const pkgRoot = path.resolve(__dirname, '..', '..');
+    const prismaCli = require.resolve('prisma/build/index.js', { paths: [pkgRoot] });
+    try {
+      execFileSync(process.execPath, [prismaCli, 'migrate', 'deploy'], {
+        cwd: pkgRoot,
+        env: { ...process.env, DIRECT_URL: directUrl },
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      const out = err as { stdout?: Buffer; stderr?: Buffer };
+      throw new Error(
+        `prisma migrate deploy failed:\n${out.stdout?.toString() ?? ''}${out.stderr?.toString() ?? ''}`,
+        { cause: err },
+      );
+    }
+
+    await ensureAppRole(directUrl, appUrl);
   } finally {
+    // Closing the session also releases the advisory lock.
     await client.end();
   }
-
-  // dist/testing or src/testing -> package root
-  const pkgRoot = path.resolve(__dirname, '..', '..');
-  const prismaCli = require.resolve('prisma/build/index.js', { paths: [pkgRoot] });
-  try {
-    execFileSync(process.execPath, [prismaCli, 'migrate', 'deploy'], {
-      cwd: pkgRoot,
-      env: { ...process.env, DIRECT_URL: directUrl },
-      stdio: 'pipe',
-    });
-  } catch (err) {
-    const out = err as { stdout?: Buffer; stderr?: Buffer };
-    throw new Error(
-      `prisma migrate deploy failed:\n${out.stdout?.toString() ?? ''}${out.stderr?.toString() ?? ''}`,
-      { cause: err },
-    );
-  }
-
-  await ensureAppRole(directUrl, appUrl);
 }

@@ -20,6 +20,10 @@ export const AuditAction = {
   INVITE_ACCEPTED: 'team.invite_accepted',
   ROLE_CHANGED: 'team.role_changed',
   MEMBER_REMOVED: 'team.member_removed',
+  WHATSAPP_CONNECTED: 'whatsapp.connected',
+  WHATSAPP_DISCONNECTED: 'whatsapp.disconnected',
+  WHATSAPP_REGISTERED: 'whatsapp.registered',
+  WEBHOOK_REPLAYED: 'whatsapp.webhook_replayed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
