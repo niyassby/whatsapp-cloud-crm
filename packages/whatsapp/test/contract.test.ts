@@ -19,7 +19,10 @@ import {
 import {
   graphError,
   inboundImage,
+  accountWebhookConfig,
   inboundText,
+  statusRead,
+  statusSentTemplate,
   multiTenantDelivery,
   PHONE_ID,
   statusFailed,
@@ -414,6 +417,25 @@ describe('parsed webhook events (shape the app relies on)', () => {
     ]);
   });
 
+  it('read status keeps the callback data that finds our message', () => {
+    expect(parseWebhookEvents(statusRead)).toMatchObject([
+      {
+        type: 'status',
+        messageId: 'wamid.OUT2',
+        status: 'read',
+        recipientId: '919800000001',
+        phoneNumberId: PHONE_ID,
+        bizOpaqueCallbackData: 'msg-456',
+      },
+    ]);
+  });
+
+  it('status for a message sent elsewhere has no callback data', () => {
+    const [event] = parseWebhookEvents(statusSentTemplate);
+    expect(event).toMatchObject({ type: 'status', messageId: 'wamid.OUT3', status: 'sent' });
+    expect(event).not.toHaveProperty('bizOpaqueCallbackData', expect.any(String));
+  });
+
   it('template status update', () => {
     expect(parseWebhookEvents(templateStatus)).toMatchObject([
       { type: 'template_status_update', messageTemplateName: 'welcome', event: 'APPROVED' },
@@ -430,6 +452,12 @@ describe('splitWebhookPayload', () => {
       ['100000000000002', '200000000000002', 'messages'],
     ]);
     expect(new Set(events.map((e) => e.dedupeKey)).size).toBe(3);
+  });
+
+  it('routes an account event by WABA alone, since it has no phone number', () => {
+    expect(splitWebhookPayload(accountWebhookConfig)).toMatchObject([
+      { wabaId: WABA_ID, phoneNumberId: null, field: 'account_update' },
+    ]);
   });
 
   it('each split payload still parses as a webhook body', () => {

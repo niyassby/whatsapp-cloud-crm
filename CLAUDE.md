@@ -97,7 +97,7 @@ Health checks: `GET :4000/health` (api liveness), `GET :4000/health/ready` (api 
 
 Setup steps for a real number: `infra/whatsapp-setup.md`.
 
-- `packages/whatsapp`: `WhatsAppGateway` (per-number client, returns `{ data, error }` with internal `WhatsAppErrorCode`s), `WapiCloudGateway` (SDK, `maxRetries: 0` because BullMQ owns retries), `GraphClient` (code exchange, WABA subscribe, phone and WABA details), `WhatsAppClientFactory` (LRU + 15 min TTL by `phone_number_id`; a cache hit must also match the org, otherwise it goes through the RLS-checked loader), webhook helpers. `test/contract.test.ts` pins requests, results and parsed event shapes. Fixtures in `test/fixtures.ts` follow Meta's docs; replace them with captured payloads once a real number is connected.
+- `packages/whatsapp`: `WhatsAppGateway` (per-number client, returns `{ data, error }` with internal `WhatsAppErrorCode`s), `WapiCloudGateway` (SDK, `maxRetries: 0` because BullMQ owns retries), `GraphClient` (code exchange, WABA subscribe, phone and WABA details), `WhatsAppClientFactory` (LRU + 15 min TTL by `phone_number_id`; a cache hit must also match the org, otherwise it goes through the RLS-checked loader), webhook helpers. `test/contract.test.ts` pins requests, results and parsed event shapes. Fixtures in `test/fixtures.ts` are masked to fake values; its header says which follow captured traffic and which still follow Meta's docs.
 - Webhook flow: `POST /webhooks/meta` verifies the signature on the raw bytes -> `webhook_event_ingest` stores one row per change (a delivery can span WABAs, so a row belongs to one tenant; its payload is itself a valid webhook body) -> job id = event id -> 200. Any failure answers 5xx so Meta redelivers; redelivery dedupes on the payload hash and re-enqueues only events still `received`.
 - Event statuses: `received` -> `routed` (org assigned by the worker) / `ignored` (no live number) / `failed` (out of attempts). Phase 1.5 adds message handling and `processed`. Replay: `POST /whatsapp/webhook-events/:id/replay` resets to `received` and queues a new job; a routed event keeps its original org. Retention: daily job, `WEBHOOK_RETENTION_DAYS` (30).
 - Worker also applies account events: `phone_number_quality_update` -> tier; `account_update` with `PARTNER_APP_UNINSTALLED` / `PARTNER_REMOVED` -> disconnect.
@@ -193,7 +193,7 @@ The package is young and single-maintainer. Treat it as replaceable.
 
 Mark as phases complete.
 
-- [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. Gate NOT passed: real number and CI not verified)
+- [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
 - [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 to 2.6)
 - [ ] Section 3: Automation, integrations, AI (3.1 to 3.7)
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
@@ -253,19 +253,21 @@ Add one line per decision: date, decision, reason.
 - 2026-11-05: Uploads are buffered in the API and capped at 25 MB (Meta allows 100 MB for documents). Revisit with direct-to-S3 presigned uploads.
 - 2026-11-05: Playwright e2e runs a production web build with its own DB, ports and queue prefix; on this drive `next dev` route compilation is too slow to wait on. Fake Meta in `e2e/support/fake-graph.mjs` sends signed status webhooks back.
 - 2026-11-05: BullMQ email queue deferred from 1.5: bodies hold one-time links, so it needs encrypted job data. Background sends remain.
+- 2026-11-05: Code lives in the private repo `niyassby/whatsapp-cloud-crm`; CI runs on pushes to `main`.
 
 ## Known gaps / TODO
 
-- Section 1 gate still open: connect a real number (`infra/whatsapp-setup.md`), and push to GitHub so CI runs.
+- Section 1 gate still open: Embedded Signup through the Meta popup (needs `META_EMBEDDED_SIGNUP_CONFIG_ID`) and replay of a real event from Settings > WhatsApp.
+- Live payloads carry `contacts[].user_id`, `messages[].from_user_id` and `statuses[].recipient_user_id` (format `IN.…`), and `pricing` on statuses. The app ignores all of them and keys contacts on `wa_id`. Decide how to store the user id, and use `pricing` when billing arrives.
+- The first connected number has an empty `messaging_tier` and quality `UNKNOWN`. Check that they fill in, since campaign limits in Section 2 depend on them.
 - Template picker only sends body variables; templates with media headers, header variables or button variables are hidden until Section 2.
 - Sends on one conversation can reorder under concurrency or retries. No manual retry button on failed messages yet.
 - Inbound `system` and `request_welcome` messages are skipped. Opt-out keywords arrive in Section 2.
-- Real Meta connection not verified: needs credentials and a public HTTPS URL (`infra/whatsapp-setup.md`). The FB JS SDK popup has never run against Meta; only its message parsing is tested. Fixtures are from Meta's docs, not captured traffic.
+- The FB JS SDK popup has never run against Meta; only its message parsing is tested. Inbound media, failed sends, template status and quality events have no live capture yet.
 - Data deletion only matches connections with a stored `meta_user_id`; manual connects have none, and FB.login may not report one with `response_type: code`. Check on the first real signup.
 - No mobile navigation: the main sidebar is hidden below `md` with no replacement.
 - Settings > WhatsApp shows the raw event type; friendlier labels can wait for the inbox.
 
-- CI workflow exists but has not run yet (no GitHub remote configured).
 - Verify current Meta pricing, messaging limits and partner requirements before finalizing billing logic.
 - Confirm pgvector is available on the chosen production Postgres host before Phase 3.7 (local image has pgvector 0.8.7).
 - Start Meta Business Verification and App Review early (needed for Embedded Signup at scale).
