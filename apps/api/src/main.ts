@@ -25,7 +25,7 @@ async function bootstrap() {
   if (env.NODE_ENV !== 'production') {
     // Local convenience; production buckets are provisioned separately.
     await (app.get(OBJECT_STORAGE) as S3Storage).ensureBucket().catch((err: unknown) => {
-      app.get(Logger).warn(`could not create the media bucket: ${String(err)}`);
+      new Logger('Bootstrap').warn(`could not create the media bucket: ${String(err)}`);
     });
   }
   await app.listen(env.API_PORT, '0.0.0.0');
