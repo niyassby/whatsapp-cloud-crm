@@ -3,7 +3,7 @@ import type { Prisma } from './generated/prisma/client';
 
 /** Everything `conversationToDto` needs. Requires an org context (RLS). */
 export const conversationInclude = {
-  contact: { select: { id: true, name: true, waId: true } },
+  contact: { select: { id: true, name: true, waId: true, optInStatus: true } },
   phone: { select: { id: true, displayPhoneNumber: true, status: true } },
   assignee: { select: { id: true, name: true } },
   labels: { select: { label: { select: { id: true, name: true, color: true } } } },

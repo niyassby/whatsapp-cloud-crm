@@ -16,6 +16,7 @@
     "@wacrm/shared": "workspace:^",
     "@wacrm/whatsapp": "workspace:^",
     "bullmq": "^6.7.0",
+    "csv-parse": "^7.0.3",
     "ioredis": "^6.0.0",
     "pino": "^10.4.0",
     "zod": "^4.6.7"

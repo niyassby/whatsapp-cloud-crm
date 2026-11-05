@@ -12,9 +12,9 @@ import { OrgSwitcher } from './org-switcher';
 import { UserMenu } from './user-menu';
 import { VerifyEmailBanner } from './verify-email-banner';
 
-const NAV = [
+const NAV: { href: string; label: string; icon: typeof Inbox; soon?: boolean }[] = [
   { href: '/inbox', label: 'Inbox', icon: Inbox },
-  { href: '/contacts', label: 'Contacts', icon: Users, soon: true },
+  { href: '/contacts', label: 'Contacts', icon: Users },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 

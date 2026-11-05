@@ -11,6 +11,7 @@ import {
 import {
   AppError,
   type CannedReplyDto,
+  canReceiveMarketing,
   type ConversationDto,
   type CreateCannedReplyInput,
   createLabelSchema,
@@ -19,6 +20,7 @@ import {
   ErrorCode,
   hasPermission,
   type InboxTemplateDto,
+  isMarketingCategory,
   type LabelDto,
   type ListConversationsQuery,
   type MediaUrlDto,
@@ -103,6 +105,8 @@ export class InboxService {
       ...(q.status === 'any' ? {} : { status: q.status }),
       ...(q.filter === 'mine' ? { assigneeId: actor.userId } : {}),
       ...(q.filter === 'unassigned' ? { assigneeId: null } : {}),
+      // A merge can leave an emptied thread behind on the merged contact.
+      contact: { mergedIntoId: null },
       ...(cursor
         ? {
             OR: [
@@ -263,6 +267,7 @@ export class InboxService {
         select: {
           windowExpiresAt: true,
           phone: { select: { phoneNumberId: true, status: true } },
+          contact: { select: { optInStatus: true } },
         },
       }),
     );
@@ -297,8 +302,16 @@ export class InboxService {
       });
     }
 
-    const { phone } = await this.loadForSend(conversationId, false);
+    const { phone, contact } = await this.loadForSend(conversationId, false);
     const template = await this.findTemplate(actor, phone.phoneNumberId, input);
+    if (isMarketingCategory(template.category) && !canReceiveMarketing(contact.optInStatus)) {
+      throw new AppError(
+        ErrorCode.CONTACT_NOT_OPTED_IN,
+        contact.optInStatus === 'opted_out'
+          ? 'This contact opted out, so marketing templates cannot be sent to them.'
+          : 'Marketing templates need recorded opt-in. Record this contact’s consent first.',
+      );
+    }
     const { paramCount, text } = renderTemplateBody(template.body, input.bodyParams);
     if (paramCount !== input.bodyParams.length) {
       throw new AppError(
@@ -314,6 +327,8 @@ export class InboxService {
         templateName: input.templateName,
         language: input.language,
         bodyParams: input.bodyParams,
+        // Lets the worker re-check consent at send time.
+        category: template.category,
       },
     });
   }

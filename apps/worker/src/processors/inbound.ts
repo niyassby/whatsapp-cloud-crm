@@ -5,9 +5,10 @@ import {
   messageInclude,
   messageToDto,
   type Prisma,
+  setContactConsent,
   withTenant,
 } from '@wacrm/db';
-import { messagePreview } from '@wacrm/shared';
+import { isOptOutMessage, messagePreview } from '@wacrm/shared';
 import { mapError, parseWebhookEvents, type WebhookEvent } from '@wacrm/whatsapp';
 import type { WorkerDeps } from '../deps';
 
@@ -25,6 +26,9 @@ interface Extracted {
 
 /** Types with no customer content. They do not create or touch a conversation. */
 const SKIPPED = new Set(['system', 'request_welcome']);
+
+/** Message types the customer writes or taps. A photo captioned "stop" is not an opt-out. */
+const CAN_OPT_OUT = new Set(['text', 'button', 'interactive']);
 
 function extract(ev: InboundEvent): Extracted {
   switch (ev.messageType) {
@@ -116,12 +120,47 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
     });
     if (!phone) return null;
 
-    const contact = await tx.contact.upsert({
+    const row = await tx.contact.upsert({
       where: { orgId_waId: { orgId, waId: ev.sender } },
-      create: { orgId, waId: ev.sender, name: ev.profileName },
-      update: ev.profileName ? { name: ev.profileName } : {},
-      select: { id: true },
+      create: { orgId, waId: ev.sender, name: ev.profileName, lastActivityAt: sentAt },
+      update: {},
+      select: { id: true, mergedIntoId: true },
     });
+    // A duplicate that was merged: its number now belongs to the primary contact.
+    const contact = { id: row.mergedIntoId ?? row.id };
+    const current = await tx.contact.findUniqueOrThrow({
+      where: { id: contact.id },
+      select: { name: true, lastActivityAt: true, deletedAt: true },
+    });
+    await tx.contact.update({
+      where: { id: contact.id },
+      data: {
+        // Writing in brings a deleted contact back, with its consent record intact.
+        deletedAt: null,
+        // A name someone entered or imported is not replaced by the WhatsApp profile name.
+        ...(!current.name && ev.profileName ? { name: ev.profileName } : {}),
+        ...(!current.lastActivityAt || current.lastActivityAt < sentAt
+          ? { lastActivityAt: sentAt }
+          : {}),
+      },
+    });
+
+    let optedOut = false;
+    if (CAN_OPT_OUT.has(data.type)) {
+      const org = await tx.organization.findUniqueOrThrow({
+        where: { id: orgId },
+        select: { optOutKeywords: true },
+      });
+      if (isOptOutMessage(data.body, org.optOutKeywords)) {
+        optedOut = await setContactConsent(tx, {
+          orgId,
+          contactId: contact.id,
+          status: 'opted_out',
+          source: 'keyword',
+          proof: `Message ${ev.id}: ${data.body?.slice(0, 200)}`,
+        });
+      }
+    }
 
     const key = { orgId_phoneId_contactId: { orgId, phoneId: phone.id, contactId: contact.id } };
     const existing = await tx.conversation.findUnique({
@@ -180,10 +219,11 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
       },
       include: messageInclude,
     });
-    return { conversation, message };
+    return { conversation, message, contactId: contact.id, optedOut };
   });
   if (!saved) return;
 
+  if (saved.optedOut) deps.publisher.emit(orgId, 'contact:updated', { contactId: saved.contactId });
   deps.publisher.emit(orgId, 'message:new', { message: messageToDto(saved.message) });
   deps.publisher.emit(orgId, 'conversation:updated', {
     conversation: conversationToDto(saved.conversation),

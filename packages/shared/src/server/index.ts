@@ -4,3 +4,4 @@ export * from './totp';
 export * from './tokens';
 export * from './redis';
 export * from './storage';
+export * from './phone';

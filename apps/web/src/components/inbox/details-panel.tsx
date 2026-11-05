@@ -3,7 +3,9 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { type ConversationDto, Permission } from '@wacrm/shared';
 import { Check } from 'lucide-react';
+import Link from 'next/link';
 import { useState } from 'react';
+import { ConsentBadge } from '@/components/contacts/consent-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -79,6 +81,15 @@ export function DetailsPanel({ conversation }: { conversation: ConversationDto }
         <p className="mt-1 text-xs text-muted-foreground">
           Via {conversation.phoneNumber.display ?? 'your number'}
         </p>
+        <div className="mt-2 flex items-center gap-2">
+          <ConsentBadge status={conversation.contact.optInStatus} />
+          <Link
+            href={`/contacts/${conversation.contact.id}`}
+            className="text-sm text-primary underline-offset-4 hover:underline"
+          >
+            View contact
+          </Link>
+        </div>
       </div>
 
       <div className="grid gap-1.5">

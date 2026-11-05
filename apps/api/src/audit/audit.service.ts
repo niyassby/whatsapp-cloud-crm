@@ -24,6 +24,14 @@ export const AuditAction = {
   WHATSAPP_DISCONNECTED: 'whatsapp.disconnected',
   WHATSAPP_REGISTERED: 'whatsapp.registered',
   WEBHOOK_REPLAYED: 'whatsapp.webhook_replayed',
+  CONTACT_CONSENT_CHANGED: 'contact.consent_changed',
+  CONTACT_DELETED: 'contact.deleted',
+  CONTACTS_MERGED: 'contact.merged',
+  CONTACTS_BULK_CHANGED: 'contact.bulk_changed',
+  CONTACTS_IMPORT_STARTED: 'contact.import_started',
+  CONTACTS_EXPORT_STARTED: 'contact.export_started',
+  CONTACTS_EXPORT_DOWNLOADED: 'contact.export_downloaded',
+  OPT_OUT_KEYWORDS_CHANGED: 'contact.opt_out_keywords_changed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 

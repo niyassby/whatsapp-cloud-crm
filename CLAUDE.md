@@ -123,6 +123,28 @@ Setup steps for a real number: `infra/whatsapp-setup.md`.
 - Permissions: agents can reply, add notes, self-assign unassigned conversations and release their own. `INBOX_ASSIGN` covers assigning others and managing labels and canned replies (Settings > Inbox).
 - Tests: `apps/worker/test/pipeline.test.ts`, `apps/api/test/inbox.test.ts` (real sockets), `packages/db/test/inbox-tables.test.ts` (partition RLS bypass), `e2e/inbox.spec.ts` (two separate logged-in browsers).
 
+## Contacts and consent (Phase 2.1)
+
+- Contacts are soft-deleted and soft-merged (`deleted_at`, `merged_into_id`; the app role has no DELETE). The row keeps the number and consent, so an opt-out survives a delete and re-import. `liveContactWhere` is the definition of a visible contact. A message from a deleted contact brings it back; a message from a merged number goes to the primary.
+- `wa_id` is E.164 digits without the plus. `normalizePhone` (`@wacrm/shared/server`, libphonenumber-js) is used for manual entry and imports. Numbers from Meta webhooks are stored as sent.
+- Inbound names: the WhatsApp profile name only fills an empty name.
+- Consent: `contacts.opt_in_*` is the current state; `contact_consent_events` is the append-only proof (no UPDATE or DELETE grant). Always change it through `setContactConsent` (`@wacrm/db`), or the bulk and import paths that also write events. Opting in needs a source and proof. There is no bulk opt-in. An import can attest consent for a file, but only moves `unknown` to `opted_in`, never `opted_out`.
+- Marketing block: `canReceiveMarketing` + `isMarketingCategory` (shared). Enforced in the API (`CONTACT_NOT_OPTED_IN`, 409), again by the worker at send time (the template's category is stored in the message content), and in the template picker. Utility templates and replies still reach opted-out contacts. Section 2.4 campaigns must use the same check.
+- Opt-out keywords: `isOptOutMessage` matches the whole message, ignoring case and punctuation, on `text`, `button` and `interactive` messages only. `organizations.opt_out_keywords` overrides `DEFAULT_OPT_OUT_KEYWORDS` (Settings > Contacts). It runs in the inbound transaction, after the wamid claim, so a replay cannot repeat it.
+- Custom fields: definitions in `contact_fields`, values in `contacts.custom_fields` (JSONB), checked by `coerceFieldValue`. Deleting a definition keeps stored values, so adding the key back restores them.
+- Segments: `segments.filter` (`segmentFilterSchema`) compiles to a Prisma `where` in `segmentFilterToWhere` (`@wacrm/db`). No stored counts; counts run on request. Not-equal includes contacts with no value.
+- Import and export: `contact_jobs`, queue `contact-jobs` (concurrency 2, separate from inbox queues), processor `apps/worker/src/processors/contact-jobs.ts`. The API only stores the file (50 MB limit) and checks the mapped headers. The worker streams with csv-parse, one set-based upsert per 1000 rows in its own transaction, and publishes `contact-job:updated` per batch. A retry re-runs the file safely. Per-row errors go to a CSV report. Exports resolve the segment when started and neutralize spreadsheet formulas (`csvCell`). Starting and downloading exports are audited.
+- Merge (`ContactsService.merge`): primary values win, an opt-out on any contact wins. A moved thread loses its 24-hour window, because the window belongs to the number that wrote in and replies go to the primary's number. Emptied threads stay, hidden from the inbox.
+- Permissions: `CONTACTS_WRITE` covers single contacts, tags and notes (agents). `CONTACTS_MANAGE` covers import, export, bulk, delete, merge, fields, keywords and saving segments (owners and admins).
+- Web: `/contacts` (virtualized table, filters, bulk bar, jobs panel), `/contacts/[id]`, `/contacts/segments`, Settings > Contacts.
+- Tests: `apps/worker/test/contacts.test.ts` (import rules, 50k import, keywords, send-time block), `apps/api/test/contacts.test.ts`, `packages/db/test/contacts-tables.test.ts` (isolation, append-only), `contacts-filter.test.ts` (every rule type), `e2e/contacts.spec.ts`.
+
+## Troubleshooting
+
+- Dev page reloads forever, with the terminal repeating `Compiled in Xms` and the browser getting `HMR hash mismatch`: the Turbopack dev cache is stale, which `next build` beside a dev server can cause. Stop the dev server and delete `apps/web/.next/dev`.
+- Prisma `P1001`, or the app hanging on Postgres or Redis while `docker ps` shows them healthy: Docker Desktop's port forwarding has stuck. Restart Docker Desktop, then `pnpm docker:up`.
+- API flapping on port 4000 after an interrupted `pnpm dev`: old watchers may still be running. Check `Get-NetTCPConnection -LocalPort 4000` and stop that process.
+
 ## Environment
 
 Validate with Zod at startup. Never commit real secrets. Keep `.env.example` current.
@@ -194,7 +216,7 @@ The package is young and single-maintainer. Treat it as replaceable.
 Mark as phases complete.
 
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
-- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 to 2.6)
+- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 to 2.6 to do). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
 - [ ] Section 3: Automation, integrations, AI (3.1 to 3.7)
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
 
@@ -255,6 +277,10 @@ Add one line per decision: date, decision, reason.
 - 2026-11-05: BullMQ email queue deferred from 1.5: bodies hold one-time links, so it needs encrypted job data. Background sends remain.
 - 2026-11-05: Code lives in the private repo `niyassby/whatsapp-cloud-crm`; CI runs on pushes to `main`.
 - 2026-11-05: Embedded Signup targets v4 (`extras: { setup: {} }`, the version Meta serves by default). v5 exists, but its page was not reviewed. WhatsApp Business app numbers are refused until connecting can skip registration.
+- 2026-11-05: Contact tags are separate from conversation labels: tags describe a person, labels describe a thread.
+- 2026-11-05: Contacts and consent are never hard-deleted by the app, so a re-import cannot erase an opt-out. Honoring erasure requests is a separate feature (see Known gaps).
+- 2026-11-05: Opt-out keywords match whole messages only, to avoid opting people out on "stop by tomorrow". STOP does not trigger an automatic reply yet.
+- 2026-11-05: Bulk actions work on selected rows (up to 1000 at once), not "everything matching a filter". Filter-wide changes can come with campaigns if needed.
 
 ## Known gaps / TODO
 
@@ -267,6 +293,12 @@ Add one line per decision: date, decision, reason.
 - The FB JS SDK popup has never run against Meta; only its message parsing is tested. Inbound media, failed sends, template status and quality events have no live capture yet.
 - Data deletion only matches connections with a stored `meta_user_id`; manual connects have none, and FB.login may not report one with `response_type: code`. Check on the first real signup.
 - No mobile navigation: the main sidebar is hidden below `md` with no replacement.
+- Personal data erasure is not built: deleting a contact hides it but keeps its data. Needs a real erase flow before launch, and a legal check on what consent proof must stay.
+- Import source files and job results stay in object storage: `ObjectStorage` has no delete. Needs a bucket lifecycle rule or cleanup job before launch.
+- Imports and exports hold the whole file in memory (50 MB cap on imports). Exports of very large lists should move to multipart upload.
+- No automatic duplicate detection: people choose contacts to merge. Numbers are normalized, so the same number cannot exist twice unless a webhook stored it differently.
+- No START keyword: a customer who opted out can only be opted back in by a person recording proof.
+- E2E import and export tests skip in CI, which has no S3 service.
 - Settings > WhatsApp shows the raw event type; friendlier labels can wait for the inbox.
 
 - Verify current Meta pricing, messaging limits and partner requirements before finalizing billing logic.

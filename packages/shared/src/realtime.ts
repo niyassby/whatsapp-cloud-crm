@@ -1,3 +1,4 @@
+import type { ContactJobDto } from './contacts';
 import type { ConversationDto, MessageDto } from './inbox';
 
 /** Socket.IO rooms. Every tenant event goes to one org room, so it cannot reach another org. */
@@ -23,6 +24,8 @@ export interface ServerToClientEvents {
   typing: (e: { conversationId: string; userId: string; name: string; isTyping: boolean }) => void;
   presence: (e: { userId: string; online: boolean }) => void;
   'presence:state': (e: { userIds: string[] }) => void;
+  'contact:updated': (e: { contactId: string }) => void;
+  'contact-job:updated': (e: { job: ContactJobDto }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -34,6 +37,8 @@ export interface TenantEventMap {
   'message:new': { message: MessageDto };
   'message:updated': { message: MessageDto };
   'conversation:updated': { conversation: ConversationDto };
+  'contact:updated': { contactId: string };
+  'contact-job:updated': { job: ContactJobDto };
 }
 
 /** Publish to everyone in an org. API: Socket.IO server. Worker: Redis emitter. */

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createPrismaClient, withTenant } from '@wacrm/db';
 import {
   buildHealth,
+  type ContactJobQueueData,
   DEFAULT_JOB_OPTIONS,
   type MediaDownloadJob,
   type MetaAccountJob,
@@ -32,6 +33,7 @@ import { downloadInboundMedia } from './processors/media';
 import { processMetaAccountJob } from './processors/meta-account';
 import { sendOutboundMessage } from './processors/outbound';
 import { markEventFailed, routeWebhookEvent } from './processors/webhook-events';
+import { processContactJob } from './processors/contact-jobs';
 
 const rootEnv = path.resolve(__dirname, '../../../.env');
 if (process.env.NODE_ENV !== 'production' && existsSync(rootEnv)) process.loadEnvFile(rootEnv);
@@ -177,6 +179,17 @@ metaWorker.on('failed', (job, err) => {
   log.error({ jobId: job?.id, err: err.message }, 'meta account job failed');
 });
 
+// Low concurrency on its own queue: a big import uses spare capacity, never the inbox's.
+const contactJobsWorker = new Worker<ContactJobQueueData>(
+  QueueName.CONTACT_JOBS,
+  (job) => processContactJob(deps, job.data, { finalAttempt: isFinalAttempt(job) }),
+  // A 50 MB file can hold the job for minutes; a long lock stops it being taken for stalled.
+  { ...queueOpts, concurrency: 2, lockDuration: 120_000 },
+);
+contactJobsWorker.on('failed', (job, err) => {
+  log.warn({ jobId: job?.id, err: err.message }, 'contact job attempt failed');
+});
+
 const maintenanceQueue = new Queue(QueueName.MAINTENANCE, queueOpts);
 const maintenanceWorker = new Worker(
   QueueName.MAINTENANCE,
@@ -230,6 +243,7 @@ async function shutdown() {
     outboundWorker.close(),
     mediaWorker.close(),
     metaWorker.close(),
+    contactJobsWorker.close(),
     maintenanceWorker.close(),
     maintenanceQueue.close(),
     mediaQueue.close(),

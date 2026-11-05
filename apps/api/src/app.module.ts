@@ -2,6 +2,7 @@ import { type DynamicModule, Module } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { AuthModule } from './auth/auth.module';
 import { AppErrorFilter } from './common/app-error.filter';
+import { ContactsModule } from './contacts/contacts.module';
 import { DbModule } from './db/db.module';
 import { API_ENV, type ApiEnv, loadApiEnv } from './env';
 import { HealthController } from './health.controller';
@@ -30,6 +31,7 @@ export class AppModule {
         WhatsAppModule,
         RealtimeModule,
         InboxModule,
+        ContactsModule,
       ],
       controllers: [HealthController],
       providers: [

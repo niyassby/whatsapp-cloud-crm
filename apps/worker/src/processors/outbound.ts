@@ -1,6 +1,11 @@
 import { messageInclude, messageToDto, type Prisma, withTenant } from '@wacrm/db';
 import type { OutboundJob } from '@wacrm/shared';
-import { WhatsAppErrorCode } from '@wacrm/shared';
+import {
+  canReceiveMarketing,
+  ErrorCode,
+  isMarketingCategory,
+  WhatsAppErrorCode,
+} from '@wacrm/shared';
 import type { GatewayResult, MediaKind, SentMessage, WhatsAppGateway } from '@wacrm/whatsapp';
 import { RetryableJobError, type WorkerDeps } from '../deps';
 import { callbackData } from './inbound';
@@ -11,6 +16,7 @@ interface TemplateContent {
   templateName: string;
   language: string;
   bodyParams: string[];
+  category?: string;
 }
 
 export interface OutboundOptions {
@@ -63,7 +69,7 @@ export async function sendOutboundMessage(
         conversation: {
           select: {
             phone: { select: { phoneNumberId: true, status: true } },
-            contact: { select: { waId: true } },
+            contact: { select: { waId: true, optInStatus: true } },
           },
         },
       },
@@ -87,6 +93,17 @@ export async function sendOutboundMessage(
   const { phone, contact } = message.conversation;
   if (phone.status === 'disconnected') {
     return fail(WhatsAppErrorCode.NOT_REGISTERED, 'This WhatsApp number is no longer connected.');
+  }
+  // Checked again here: a contact can opt out while their message waits in the queue.
+  if (
+    message.type === 'template' &&
+    isMarketingCategory((message.content as unknown as TemplateContent).category) &&
+    !canReceiveMarketing(contact.optInStatus)
+  ) {
+    return fail(
+      ErrorCode.CONTACT_NOT_OPTED_IN,
+      'This contact has not opted in to marketing, so this template was not sent.',
+    );
   }
 
   let gateway: WhatsAppGateway;

@@ -46,6 +46,12 @@ export const ErrorCode = {
   NUMBER_NOT_CONNECTED: 'NUMBER_NOT_CONNECTED',
   TEMPLATE_NOT_SENDABLE: 'TEMPLATE_NOT_SENDABLE',
   MEDIA_NOT_ALLOWED: 'MEDIA_NOT_ALLOWED',
+
+  // contacts
+  /** Marketing needs recorded opt-in, and an opted-out contact never gets marketing. */
+  CONTACT_NOT_OPTED_IN: 'CONTACT_NOT_OPTED_IN',
+  INVALID_PHONE: 'INVALID_PHONE',
+  CONTACT_EXISTS: 'CONTACT_EXISTS',
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -82,6 +88,9 @@ export const errorHttpStatus: Record<ErrorCode, number> = {
   NUMBER_NOT_CONNECTED: 409,
   TEMPLATE_NOT_SENDABLE: 400,
   MEDIA_NOT_ALLOWED: 400,
+  CONTACT_NOT_OPTED_IN: 409,
+  INVALID_PHONE: 400,
+  CONTACT_EXISTS: 409,
 };
 
 /** Typed application error carrying a stable code. */

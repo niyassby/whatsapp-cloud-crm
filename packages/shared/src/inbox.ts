@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { OptInStatus } from './contacts';
 import type { WhatsAppErrorCode } from './whatsapp';
 
 export const CONVERSATION_FILTERS = ['all', 'mine', 'unassigned'] as const;
@@ -105,7 +106,7 @@ export interface MessageDto {
 export interface ConversationDto {
   id: string;
   status: ConversationStatus;
-  contact: { id: string; name: string | null; waId: string };
+  contact: { id: string; name: string | null; waId: string; optInStatus: OptInStatus };
   phoneNumber: { id: string; display: string | null; status: string };
   assignee: { id: string; name: string } | null;
   labels: LabelDto[];

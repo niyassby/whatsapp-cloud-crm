@@ -1,7 +1,14 @@
 'use client';
 
 import { useQueryClient } from '@tanstack/react-query';
-import { type InboxTemplateDto, type MessageDto, renderTemplateBody } from '@wacrm/shared';
+import {
+  canReceiveMarketing,
+  type InboxTemplateDto,
+  isMarketingCategory,
+  type MessageDto,
+  type OptInStatus,
+  renderTemplateBody,
+} from '@wacrm/shared';
 import { useState } from 'react';
 import { FormField } from '@/components/form-field';
 import { Button } from '@/components/ui/button';
@@ -19,7 +26,13 @@ import { api } from '@/lib/api';
 import { handleApiError } from '@/lib/forms';
 import { upsertMessage, useTemplates } from '@/lib/inbox';
 
-export function TemplateDialog({ conversationId }: { conversationId: string }) {
+export function TemplateDialog({
+  conversationId,
+  optInStatus,
+}: {
+  conversationId: string;
+  optInStatus: OptInStatus;
+}) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<InboxTemplateDto | null>(null);
@@ -79,20 +92,31 @@ export function TemplateDialog({ conversationId }: { conversationId: string }) {
           </p>
         ) : !selected ? (
           <ul className="grid max-h-72 gap-1 overflow-y-auto">
-            {templates.data.map((t) => (
-              <li key={`${t.name}:${t.language}`}>
-                <button
-                  type="button"
-                  className="w-full rounded-md border p-2 text-left hover:bg-muted"
-                  onClick={() => pick(t)}
-                >
-                  <span className="block text-sm font-medium">
-                    {t.name} <span className="text-muted-foreground">({t.language})</span>
-                  </span>
-                  <span className="line-clamp-2 text-sm text-muted-foreground">{t.body}</span>
-                </button>
-              </li>
-            ))}
+            {templates.data.map((t) => {
+              const blocked = isMarketingCategory(t.category) && !canReceiveMarketing(optInStatus);
+              return (
+                <li key={`${t.name}:${t.language}`}>
+                  <button
+                    type="button"
+                    disabled={blocked}
+                    className="w-full rounded-md border p-2 text-left enabled:hover:bg-muted disabled:opacity-60"
+                    onClick={() => pick(t)}
+                  >
+                    <span className="block text-sm font-medium">
+                      {t.name} <span className="text-muted-foreground">({t.language})</span>
+                    </span>
+                    <span className="line-clamp-2 text-sm text-muted-foreground">{t.body}</span>
+                    {blocked && (
+                      <span className="mt-1 block text-xs text-destructive">
+                        {optInStatus === 'opted_out'
+                          ? 'Marketing template: this contact opted out'
+                          : 'Marketing template: record this contact’s consent first'}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <div className="grid gap-3">

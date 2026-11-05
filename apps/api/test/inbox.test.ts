@@ -31,6 +31,14 @@ const TEMPLATES = [
     components: [{ type: 'BODY', text: 'Not approved' }],
   },
   {
+    id: '4',
+    name: 'promo',
+    language: 'en_US',
+    category: 'MARKETING',
+    status: 'APPROVED',
+    components: [{ type: 'BODY', text: 'Big sale this week' }],
+  },
+  {
     id: '3',
     name: 'with_image',
     language: 'en_US',
@@ -419,7 +427,82 @@ describe('24-hour window, enforced on the server', () => {
         body: 'Hi {{1}}, your order {{2}} shipped',
         paramCount: 2,
       },
+      {
+        name: 'promo',
+        language: 'en_US',
+        category: 'MARKETING',
+        body: 'Big sale this week',
+        paramCount: 0,
+      },
     ]);
+  });
+
+  describe('marketing consent', () => {
+    const sendPromo = (org: Org, conversationId: string) =>
+      org.client.post(`/inbox/conversations/${conversationId}/messages`, {
+        type: 'template',
+        clientMessageId: randomUUID(),
+        templateName: 'promo',
+        language: 'en_US',
+        bodyParams: [],
+      });
+    const contactIdOf = async (org: Org, conversationId: string) =>
+      (await org.client.get(`/inbox/conversations/${conversationId}`)).body.contact.id as string;
+
+    it('refuses marketing to a contact with no recorded consent', async () => {
+      const org = await signup();
+      const conv = await seedConversation(org);
+      const res = await sendPromo(org, conv.id);
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe(ErrorCode.CONTACT_NOT_OPTED_IN);
+    });
+
+    it('allows marketing once consent is recorded, and stops after an opt-out', async () => {
+      const org = await signup();
+      const conv = await seedConversation(org);
+      const contactId = await contactIdOf(org, conv.id);
+      await org.client.post(`/contacts/${contactId}/consent`, {
+        status: 'opted_in',
+        source: 'Form',
+        proof: 'Signed up on the website',
+      });
+      const allowed = await sendPromo(org, conv.id);
+      expect(allowed.status).toBe(201);
+
+      await org.client.post(`/contacts/${contactId}/consent`, { status: 'opted_out' });
+      const blocked = await sendPromo(org, conv.id);
+      expect(blocked.status).toBe(409);
+      expect(blocked.body.message).toContain('opted out');
+    });
+
+    it('still allows utility templates and replies to an opted-out contact', async () => {
+      const org = await signup();
+      const conv = await seedConversation(org);
+      await org.client.post(`/contacts/${await contactIdOf(org, conv.id)}/consent`, {
+        status: 'opted_out',
+      });
+      const utility = await org.client.post(`/inbox/conversations/${conv.id}/messages`, {
+        type: 'template',
+        clientMessageId: randomUUID(),
+        templateName: 'welcome',
+        language: 'en_US',
+        bodyParams: ['Asha', '#42'],
+      });
+      expect(utility.status).toBe(201);
+      const reply = await org.client.post(`/inbox/conversations/${conv.id}/messages`, {
+        type: 'text',
+        clientMessageId: randomUUID(),
+        body: 'Your order is on its way',
+      });
+      expect(reply.status).toBe(201);
+    });
+
+    it('shows consent on the conversation', async () => {
+      const org = await signup();
+      const conv = await seedConversation(org);
+      const res = await org.client.get(`/inbox/conversations/${conv.id}`);
+      expect(res.body.contact.optInStatus).toBe('unknown');
+    });
   });
 
   describe('media upload', () => {

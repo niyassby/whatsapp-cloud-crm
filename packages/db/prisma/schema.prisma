@@ -97,6 +97,32 @@ enum MediaStatus {
   failed
 }
 
+enum ContactOptInStatus {
+  unknown
+  opted_in
+  opted_out
+}
+
+enum ContactFieldType {
+  text
+  number
+  date
+  boolean
+  select
+}
+
+enum ContactJobKind {
+  import
+  export
+}
+
+enum ContactJobStatus {
+  queued
+  processing
+  completed
+  failed
+}
+
 enum AuthTokenType {
   email_verification
   password_reset
@@ -118,15 +144,17 @@ model Partner {
 
 /// Tenant root. organizations.id is the value of app.org_id.
 model Organization {
-  id        String    @id @default(uuid(7)) @db.Uuid
-  name      String
-  slug      String    @unique
-  partnerId String?   @map("partner_id") @db.Uuid
-  status    OrgStatus @default(active)
-  timezone  String    @default("UTC")
-  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+  id             String    @id @default(uuid(7)) @db.Uuid
+  name           String
+  slug           String    @unique
+  partnerId      String?   @map("partner_id") @db.Uuid
+  status         OrgStatus @default(active)
+  timezone       String    @default("UTC")
+  /// Whole-message opt-out keywords. Empty uses DEFAULT_OPT_OUT_KEYWORDS from @wacrm/shared.
+  optOutKeywords String[]  @default([]) @map("opt_out_keywords")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(3)
 
   partner       Partner?       @relation(fields: [partnerId], references: [id], onDelete: SetNull)
   memberships   Membership[]
@@ -142,6 +170,10 @@ model Organization {
   messages      Message[]
   labels        Label[]
   cannedReplies CannedReply[]
+  tags          Tag[]
+  contactFields ContactField[]
+  segments      Segment[]
+  contactJobs   ContactJob[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -171,12 +203,16 @@ model User {
   auditLogs             AuditLog[]
   refreshTokens         RefreshToken[]
   authTokens            AuthToken[]
-  invitationsSent       Invitation[]   @relation("InvitedBy")
-  invitationsAccepted   Invitation[]   @relation("AcceptedBy")
+  invitationsSent       Invitation[]          @relation("InvitedBy")
+  invitationsAccepted   Invitation[]          @relation("AcceptedBy")
   wabaAccountsConnected WabaAccount[]
   conversationsAssigned Conversation[]
   messagesSent          Message[]
   cannedRepliesCreated  CannedReply[]
+  contactNotes          ContactNote[]
+  consentEvents         ContactConsentEvent[]
+  segmentsCreated       Segment[]
+  contactJobs           ContactJob[]
 
   @@map("users")
 }
@@ -405,19 +441,170 @@ model DataDeletionRequest {
 }
 
 /// A customer on WhatsApp. wa_id is the phone number, or a business-scoped id for username users.
+/// Deleted and merged contacts keep their row: the number stays reserved, so a later message or
+/// import finds the existing consent record (an opt-out must survive a re-import).
 model Contact {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  orgId     String   @map("org_id") @db.Uuid
-  waId      String   @map("wa_id")
-  name      String?
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id             String             @id @default(uuid(7)) @db.Uuid
+  orgId          String             @map("org_id") @db.Uuid
+  /// E.164 digits without the plus.
+  waId           String             @map("wa_id")
+  name           String?
+  email          String?
+  /// Values validated against contact_fields by the service.
+  customFields   Json               @default("{}") @map("custom_fields")
+  optInStatus    ContactOptInStatus @default(unknown) @map("opt_in_status")
+  optInSource    String?            @map("opt_in_source")
+  optInProof     String?            @map("opt_in_proof")
+  optInAt        DateTime?          @map("opt_in_at") @db.Timestamptz(3)
+  optOutAt       DateTime?          @map("opt_out_at") @db.Timestamptz(3)
+  /// Last message from this contact.
+  lastActivityAt DateTime?          @map("last_activity_at") @db.Timestamptz(3)
+  /// Set on the duplicate. Messages from its number go to the primary contact.
+  mergedIntoId   String?            @map("merged_into_id") @db.Uuid
+  deletedAt      DateTime?          @map("deleted_at") @db.Timestamptz(3)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization  Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  organization  Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
   conversations Conversation[]
+  mergedInto    Contact?              @relation("ContactMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  duplicates    Contact[]             @relation("ContactMerge")
+  tags          ContactTag[]
+  notes         ContactNote[]
+  consentEvents ContactConsentEvent[]
 
   @@unique([orgId, waId])
+  @@index([orgId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([orgId, optInStatus])
+  @@index([orgId, lastActivityAt])
   @@map("contacts")
+}
+
+/// Contact tags. Separate from labels, which classify conversations.
+model Tag {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  name      String
+  color     String   @default("#64748b")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contacts     ContactTag[]
+
+  @@unique([orgId, name])
+  @@map("tags")
+}
+
+model ContactTag {
+  orgId     String @map("org_id") @db.Uuid
+  contactId String @map("contact_id") @db.Uuid
+  tagId     String @map("tag_id") @db.Uuid
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@index([tagId])
+  @@index([orgId])
+  @@map("contact_tags")
+}
+
+/// Definitions of a workspace's custom fields. Values live in contacts.custom_fields.
+model ContactField {
+  id        String           @id @default(uuid(7)) @db.Uuid
+  orgId     String           @map("org_id") @db.Uuid
+  key       String
+  label     String
+  type      ContactFieldType
+  options   String[]         @default([])
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, key])
+  @@map("contact_fields")
+}
+
+model ContactNote {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  contactId String   @map("contact_id") @db.Uuid
+  authorId  String?  @map("author_id") @db.Uuid
+  body      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  author  User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([contactId, createdAt(sort: Desc)])
+  @@index([orgId])
+  @@map("contact_notes")
+}
+
+/// Append-only proof of every consent change (no UPDATE or DELETE grant).
+model ContactConsentEvent {
+  id          String             @id @default(uuid(7)) @db.Uuid
+  orgId       String             @map("org_id") @db.Uuid
+  contactId   String             @map("contact_id") @db.Uuid
+  status      ContactOptInStatus
+  /// manual, import, keyword, merge, ...
+  source      String?
+  proof       String?
+  actorUserId String?            @map("actor_user_id") @db.Uuid
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  actor   User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([contactId, createdAt(sort: Desc)])
+  @@index([orgId])
+  @@map("contact_consent_events")
+}
+
+/// A saved filter. Counts are computed when asked, so they are never stale.
+model Segment {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  orgId       String   @map("org_id") @db.Uuid
+  name        String
+  filter      Json
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([orgId, name])
+  @@map("segments")
+}
+
+/// Background contact imports and exports.
+model ContactJob {
+  id            String           @id @default(uuid(7)) @db.Uuid
+  orgId         String           @map("org_id") @db.Uuid
+  kind          ContactJobKind
+  status        ContactJobStatus @default(queued)
+  createdById   String?          @map("created_by_id") @db.Uuid
+  filename      String?
+  /// Import: column mapping and consent statement. Export: the filter.
+  options       Json
+  processedRows Int              @default(0) @map("processed_rows")
+  createdCount  Int              @default(0) @map("created_count")
+  updatedCount  Int              @default(0) @map("updated_count")
+  errorCount    Int              @default(0) @map("error_count")
+  /// Import: the per-row error report. Export: the contacts file.
+  resultKey     String?          @map("result_key")
+  error         String?
+  startedAt     DateTime?        @map("started_at") @db.Timestamptz(3)
+  finishedAt    DateTime?        @map("finished_at") @db.Timestamptz(3)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([orgId, createdAt(sort: Desc)])
+  @@map("contact_jobs")
 }
 
 /// One thread per (business number, contact). A new inbound message reopens a closed one.

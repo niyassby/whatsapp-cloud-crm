@@ -31,6 +31,14 @@ const TEMPLATES = [
     status: 'APPROVED',
     components: [{ type: 'BODY', text: 'Hi {{1}}, your order is ready.' }],
   },
+  {
+    id: '2',
+    name: 'e2e_promo',
+    language: 'en_US',
+    category: 'MARKETING',
+    status: 'APPROVED',
+    components: [{ type: 'BODY', text: 'Big sale this week.' }],
+  },
 ];
 
 async function postStatus(wabaId, phoneId, status) {

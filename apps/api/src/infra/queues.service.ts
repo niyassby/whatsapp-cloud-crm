@@ -1,5 +1,6 @@
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import {
+  type ContactJobQueueData,
   DEFAULT_JOB_OPTIONS,
   type MetaAccountJob,
   type OutboundJob,
@@ -19,6 +20,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   readonly webhookEvents: Queue<WebhookEventJob>;
   readonly metaAccount: Queue<MetaAccountJob>;
   readonly outbound: Queue<OutboundJob>;
+  readonly contactJobs: Queue<ContactJobQueueData>;
 
   constructor(@Inject(API_ENV) env: ApiEnv) {
     const opts = {
@@ -33,6 +35,10 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
     this.webhookEvents = new Queue(QueueName.WEBHOOK_EVENTS, opts);
     this.metaAccount = new Queue(QueueName.META_ACCOUNT, opts);
     this.outbound = new Queue(QueueName.OUTBOUND, opts);
+    this.contactJobs = new Queue(QueueName.CONTACT_JOBS, {
+      ...opts,
+      defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, attempts: 3 },
+    });
   }
 
   async onModuleInit(): Promise<void> {
@@ -40,7 +46,13 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.webhookEvents.waitUntilReady(),
       this.metaAccount.waitUntilReady(),
       this.outbound.waitUntilReady(),
+      this.contactJobs.waitUntilReady(),
     ]);
+  }
+
+  /** Job id = contact job id, so one import cannot be queued twice. */
+  async enqueueContactJob(job: ContactJobQueueData): Promise<void> {
+    await this.contactJobs.add('run', job, { jobId: job.jobId });
   }
 
   /** Job id = event id: a redelivery or retry cannot queue the same event twice. */
@@ -67,6 +79,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.webhookEvents.close(),
       this.metaAccount.close(),
       this.outbound.close(),
+      this.contactJobs.close(),
     ]);
   }
 }

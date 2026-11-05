@@ -165,7 +165,10 @@ export function Composer({ conversation }: { conversation: ConversationDto }) {
             The 24-hour window has closed. You can only send an approved template until the customer
             replies.
           </span>
-          <TemplateDialog conversationId={conversation.id} />
+          <TemplateDialog
+            conversationId={conversation.id}
+            optInStatus={conversation.contact.optInStatus}
+          />
         </div>
       )}
 

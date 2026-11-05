@@ -22,6 +22,8 @@ export const Permission = {
   INBOX_ASSIGN: 'inbox:assign',
   CONTACTS_READ: 'contacts:read',
   CONTACTS_WRITE: 'contacts:write',
+  /** Whole-list operations: import, export, bulk changes, delete, merge, fields and segments. */
+  CONTACTS_MANAGE: 'contacts:manage',
   TEMPLATES_READ: 'templates:read',
   TEMPLATES_MANAGE: 'templates:manage',
   CAMPAIGNS_MANAGE: 'campaigns:manage',

@@ -3,6 +3,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import {
   type ClientToServerEvents,
+  type ContactJobDto,
   ErrorCode,
   type ServerToClientEvents,
   SOCKET_PATH,
@@ -12,6 +13,7 @@ import { io, type Socket } from 'socket.io-client';
 import { create } from 'zustand';
 import { refreshSession } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
+import { contactKeys } from '@/lib/contacts';
 import { env } from '@/lib/env';
 import { applyConversationUpdate, inboxKeys, upsertMessage } from '@/lib/inbox';
 import { queryKeys, useMe } from '@/lib/queries';
@@ -89,6 +91,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       useRealtime.setState({ connected: true });
       // Events may have been missed while offline: the server is the source of truth.
       void queryClient.invalidateQueries({ queryKey: inboxKeys.all });
+      void queryClient.invalidateQueries({ queryKey: contactKeys.all });
     });
     socket.on('disconnect', (reason) => {
       useRealtime.setState({ connected: false });
@@ -114,6 +117,23 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     socket.on('conversation:updated', ({ conversation }) => {
       applyConversationUpdate(queryClient, conversation);
       refreshLists();
+    });
+    socket.on('contact:updated', () => {
+      void queryClient.invalidateQueries({ queryKey: contactKeys.all });
+      // Consent shows on the conversation, and a merge moves threads.
+      void queryClient.invalidateQueries({ queryKey: inboxKeys.all });
+    });
+    socket.on('contact-job:updated', ({ job }) => {
+      queryClient.setQueryData<ContactJobDto[]>(contactKeys.jobs, (jobs) =>
+        jobs?.some((j) => j.id === job.id)
+          ? jobs.map((j) => (j.id === job.id ? job : j))
+          : [job, ...(jobs ?? [])],
+      );
+      if (job.kind === 'import' && job.status === 'completed') {
+        void queryClient.invalidateQueries({ queryKey: contactKeys.lists });
+        void queryClient.invalidateQueries({ queryKey: ['contacts', 'count'] });
+        void queryClient.invalidateQueries({ queryKey: contactKeys.tags });
+      }
     });
     socket.on('typing', ({ conversationId, userId, name, isTyping }) => {
       setTyping(conversationId, { userId, name }, isTyping);

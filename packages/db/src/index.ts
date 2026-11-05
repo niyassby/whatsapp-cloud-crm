@@ -5,3 +5,4 @@ export type * from './generated/prisma/models';
 export * from './generated/prisma/enums';
 export * from './whatsapp';
 export * from './inbox';
+export * from './contacts';

@@ -10,7 +10,14 @@ export const QueueName = {
   MEDIA_DOWNLOAD: 'media-download',
   /** Repeatable housekeeping (retention, message partitions). */
   MAINTENANCE: 'maintenance',
+  /** Contact imports and exports. Their own queue, so a big file cannot delay the inbox. */
+  CONTACT_JOBS: 'contact-jobs',
 } as const;
+
+export interface ContactJobQueueData {
+  orgId: string;
+  jobId: string;
+}
 
 export interface WebhookEventJob {
   eventId: string;
