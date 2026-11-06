@@ -59,6 +59,19 @@ export const apiEnvSchema = z.object({
     .default('v25.0'),
   /** Point Graph calls at a local fake for end-to-end checks. Refused in production. */
   META_GRAPH_BASE_URL: z.url().optional(),
+
+  /** A provider is only active when all of its values are set. Local fakes use the *_API_BASE. */
+  STRIPE_SECRET_KEY: z.string().optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  STRIPE_API_BASE: z.url().optional(),
+  RAZORPAY_KEY_ID: z.string().optional(),
+  RAZORPAY_KEY_SECRET: z.string().optional(),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
+  RAZORPAY_API_BASE: z.url().optional(),
+  /** Printed on invoices. The name defaults to APP_NAME. */
+  BILLING_SELLER_NAME: z.string().optional(),
+  BILLING_SELLER_ADDRESS: z.string().optional(),
+  BILLING_SELLER_TAX_ID: z.string().optional(),
   /** System-user-token connect form. Defaults to on outside production, off in production. */
   ALLOW_MANUAL_CONNECT: booleanString.optional(),
   QUEUE_PREFIX: z.string().min(1).default('wacrm'),
@@ -91,6 +104,9 @@ export const loadApiEnv = (source?: Record<string, string | undefined>): ApiEnv 
     ].filter(Boolean);
     if (env.META_GRAPH_BASE_URL) {
       throw new Error('META_GRAPH_BASE_URL must not be set in production');
+    }
+    if (env.STRIPE_API_BASE || env.RAZORPAY_API_BASE) {
+      throw new Error('STRIPE_API_BASE and RAZORPAY_API_BASE must not be set in production');
     }
     const missing = ['META_APP_ID', 'META_APP_SECRET', 'META_WEBHOOK_VERIFY_TOKEN'].filter(
       (k) => !env[k as keyof ApiEnv],

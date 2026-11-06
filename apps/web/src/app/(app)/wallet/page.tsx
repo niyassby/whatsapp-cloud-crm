@@ -11,8 +11,10 @@ import {
   type WalletDto,
   type WalletEntryType,
 } from '@wacrm/shared';
-import { type FormEvent, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { type FormEvent, Suspense, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { TopupDialog } from '@/components/billing/topup-dialog';
 import { FormField } from '@/components/form-field';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -378,9 +380,27 @@ function Ledger({ currency }: { currency: string }) {
   );
 }
 
+/** Shown after coming back from the provider. The balance itself only moves by webhook. */
+function PaymentNotice() {
+  const payment = useSearchParams().get('payment');
+  if (payment === 'done') {
+    return (
+      <p className="rounded-lg border p-3 text-sm">
+        Thanks, your payment is being confirmed. The balance updates by itself.
+      </p>
+    );
+  }
+  if (payment === 'cancelled') {
+    return <p className="rounded-lg border p-3 text-sm">Payment cancelled. Nothing was charged.</p>;
+  }
+  return null;
+}
+
 export default function WalletPage() {
   const canRead = useCan(Permission.WALLET_READ);
+  const canPay = useCan(Permission.BILLING_MANAGE);
   const wallet = useWallet(canRead);
+  const [addingFunds, setAddingFunds] = useState(false);
 
   if (!canRead) {
     return (
@@ -389,7 +409,16 @@ export default function WalletPage() {
   }
   return (
     <div className="mx-auto grid max-w-5xl gap-4">
-      <h1 className="text-2xl font-semibold">Wallet</h1>
+      <div className="flex items-center justify-between gap-2">
+        <h1 className="text-2xl font-semibold">Wallet</h1>
+        {canPay && wallet.data && <Button onClick={() => setAddingFunds(true)}>Add funds</Button>}
+      </div>
+      <Suspense>
+        <PaymentNotice />
+      </Suspense>
+      {wallet.data && addingFunds && (
+        <TopupDialog open onClose={() => setAddingFunds(false)} currency={wallet.data.currency} />
+      )}
       {wallet.isPending ? (
         <Skeleton className="h-24 w-full" />
       ) : wallet.isError || !wallet.data ? (

@@ -9,6 +9,7 @@ import {
   segmentFilterToWhere,
   setContactConsent,
   type TenantTx,
+  assertWithinLimit,
 } from '@wacrm/db';
 import {
   AppError,
@@ -243,6 +244,7 @@ export class ContactsService {
           contactId: existing.mergedIntoId ?? existing.id,
         });
       }
+      await assertWithinLimit(tx, actor.orgId, 'contacts');
       // Re-adding a deleted contact restores the row, which keeps its consent history.
       const contact = existing
         ? await tx.contact.update({

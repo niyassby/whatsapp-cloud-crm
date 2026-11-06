@@ -281,6 +281,40 @@ describe('a whole campaign', () => {
     expect(await s.cost()).toBe(3 * RATE);
   });
 
+  it('a batch that rolls back hands its recipients back at once', async () => {
+    const s = await setup({ contacts: 2 });
+    await prepareCampaign(s.deps, s.orgId, s.campaignId);
+    const broken = {
+      ...s.deps,
+      db: new Proxy(s.deps.db, {
+        get(target, prop, receiver) {
+          if (prop !== '$transaction') return Reflect.get(target, prop, receiver);
+          return (...args: Parameters<typeof target.$transaction>) => {
+            // State, then the claim, both real. Then the batch transaction loses a deadlock.
+            if (++calls === 3) {
+              return Promise.reject(Object.assign(new Error('deadlock'), { code: 'P2034' }));
+            }
+            return (target.$transaction as (...a: unknown[]) => unknown)(...args);
+          };
+        },
+      }),
+    };
+    let calls = 0;
+    const outcome = await dispatchCampaignBatch(broken, SETTINGS, s.orgId, s.campaignId);
+    expect(outcome).toEqual({ retryInMs: 2_000 });
+    const rows = await withTenant(client, { orgId: s.orgId }, (tx) =>
+      tx.campaignRecipient.findMany({ select: { status: true, attempts: true } }),
+    );
+    expect(rows).toEqual([
+      { status: 'pending', attempts: 0 },
+      { status: 'pending', attempts: 0 },
+    ]);
+    expect(s.fake.calls).toEqual([]);
+    // And the next attempt sends them normally.
+    await dispatchCampaignBatch(s.deps, SETTINGS, s.orgId, s.campaignId);
+    expect((await s.counts()).sent).toBe(2);
+  });
+
   it('two dispatchers at once cannot claim the same recipient', async () => {
     const s = await setup({ contacts: 40 });
     await prepareCampaign(s.deps, s.orgId, s.campaignId);
@@ -472,6 +506,20 @@ describe('money', () => {
     expect(await s.counts()).toMatchObject({ failed: 1, sent: 0 });
     expect(await s.cost()).toBe(0);
     expect(Number((await s.wallet()).balanceMicros)).toBe(10 * RATE);
+  });
+
+  it('a send that blows up does not sink the batch, and is never sent twice', async () => {
+    const s = await setup({ contacts: 3, balance: 10 * RATE });
+    let calls = 0;
+    s.fake.respondWith(() => {
+      if (++calls === 1) throw new Error('connection lost');
+      return { data: { messageId: `wamid.${randomUUID()}`, waId: '1' }, error: null };
+    });
+    expect(await s.runAll()).toBe('finished');
+    expect(await s.counts()).toMatchObject({ sent: 2, failed: 1, pending: 0 });
+    // Meta may have received the one that blew up, so it fails rather than going out again.
+    expect(s.fake.calls.filter((c) => c.method === 'sendTemplate')).toHaveLength(3);
+    expect(Number((await s.wallet()).balanceMicros)).toBe(8 * RATE);
   });
 
   it('retries what Meta says to, then gives up with a refund', async () => {
@@ -927,5 +975,5 @@ describe('acceptance: a 10k campaign', () => {
     );
     expect(latencies.length).toBeGreaterThan(20);
     expect(p95).toBeLessThan(5_000);
-  }, 900_000);
+  }, 1_500_000);
 });

@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { Prisma, type TenantTx, withDbContext, withTenant } from '@wacrm/db';
+import { Prisma, type TenantTx, withDbContext, withTenant, startTrial } from '@wacrm/db';
 import {
   AppError,
   type AuthTokensResponse,
@@ -98,6 +98,7 @@ export class AuthService {
           data: { id: orgId, name: input.orgName, slug: slugify(input.orgName) },
         });
         await tx.membership.create({ data: { orgId, userId, role: 'owner' } });
+        await startTrial(tx, orgId);
         await tx.authToken.create({
           data: {
             userId,

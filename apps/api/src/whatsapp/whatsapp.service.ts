@@ -1,6 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { disconnectWabaTx, Prisma, withTenant } from '@wacrm/db';
+import { disconnectWabaTx, Prisma, withTenant, assertWithinLimit } from '@wacrm/db';
 import {
   AppError,
   type CursorPage,
@@ -144,6 +144,13 @@ export class WhatsAppService {
     p: ConnectParams,
     meta: RequestMeta,
   ): Promise<PhoneNumberDto> {
+    // Before any call to Meta. Reconnecting a number already here adds nothing to the count.
+    await this.db.run(async (tx) => {
+      const live = await tx.phoneNumber.count({
+        where: { phoneNumberId: p.phoneNumberId, status: { not: 'disconnected' } },
+      });
+      if (live === 0) await assertWithinLimit(tx, actor.orgId, 'numbers');
+    });
     // Reading the WABA's numbers with this token proves the token really has access to it, so
     // a client cannot claim another customer's WABA by sending its id.
     const numbers = await this.graph.listPhoneNumbers(p.wabaId, p.accessToken);

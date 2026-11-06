@@ -7,6 +7,7 @@ import { execSync, spawn } from 'node:child_process';
 import {
   API_URL,
   APP_SECRET,
+  STRIPE_WEBHOOK_SECRET,
   DB_NAME,
   PORTS,
   QUEUE_PREFIX,
@@ -38,6 +39,9 @@ const env = {
   META_APP_SECRET: APP_SECRET,
   META_WEBHOOK_VERIFY_TOKEN: VERIFY_TOKEN,
   META_GRAPH_BASE_URL: `http://127.0.0.1:${PORTS.graph}`,
+  STRIPE_SECRET_KEY: 'sk_test_e2e',
+  STRIPE_WEBHOOK_SECRET,
+  STRIPE_API_BASE: `http://127.0.0.1:${PORTS.payments}`,
   SMTP_URL: 'smtp://127.0.0.1:1025',
   S3_ENDPOINT: 'http://127.0.0.1:9000',
   S3_PUBLIC_ENDPOINT: 'http://localhost:9000',
@@ -51,6 +55,11 @@ execSync(`pnpm --filter @wacrm/db exec tsx scripts/prepare-test-db.ts ${DB_NAME}
 });
 
 execSync('pnpm --filter @wacrm/db exec tsx scripts/rates-import.ts prisma/sample-rate-cards.csv', {
+  env,
+  stdio: 'inherit',
+});
+
+execSync('pnpm --filter @wacrm/db exec tsx scripts/plans-import.ts prisma/sample-plans.json', {
   env,
   stdio: 'inherit',
 });
@@ -77,6 +86,7 @@ async function waitFor(url) {
 }
 
 start('node', ['e2e/support/fake-graph.mjs']);
+start('node', ['e2e/support/fake-payments.mjs']);
 start('pnpm', [
   '--filter',
   '@wacrm/api',

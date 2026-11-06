@@ -1,5 +1,6 @@
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import {
+  type BillingEventJob,
   type CampaignJob,
   type ContactJobQueueData,
   DEFAULT_JOB_OPTIONS,
@@ -25,6 +26,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   readonly contactJobs: Queue<ContactJobQueueData>;
   readonly templateSync: Queue<TemplateSyncJob>;
   readonly campaigns: Queue<CampaignJob>;
+  readonly billingEvents: Queue<BillingEventJob>;
 
   constructor(@Inject(API_ENV) env: ApiEnv) {
     const opts = {
@@ -41,6 +43,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
     this.outbound = new Queue(QueueName.OUTBOUND, opts);
     this.templateSync = new Queue(QueueName.TEMPLATE_SYNC, opts);
     this.campaigns = new Queue(QueueName.CAMPAIGNS, opts);
+    this.billingEvents = new Queue(QueueName.BILLING_EVENTS, opts);
     this.contactJobs = new Queue(QueueName.CONTACT_JOBS, {
       ...opts,
       defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, attempts: 3 },
@@ -55,12 +58,18 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.contactJobs.waitUntilReady(),
       this.templateSync.waitUntilReady(),
       this.campaigns.waitUntilReady(),
+      this.billingEvents.waitUntilReady(),
     ]);
   }
 
   /** Compare a WABA's templates with Meta, for example after connecting a number. */
   async enqueueTemplateSync(job: TemplateSyncJob): Promise<void> {
     await this.templateSync.add('sync', job);
+  }
+
+  /** Job id = event id: a redelivery cannot queue the same event twice. */
+  async enqueueBillingEvent(eventId: string): Promise<void> {
+    await this.billingEvents.add('process', { eventId }, { jobId: eventId });
   }
 
   async enqueueCampaignJob(job: CampaignJob): Promise<void> {
@@ -99,6 +108,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.contactJobs.close(),
       this.templateSync.close(),
       this.campaigns.close(),
+      this.billingEvents.close(),
     ]);
   }
 }

@@ -46,7 +46,7 @@ import {
 } from '@wacrm/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
-import { CurrentAuth, RequirePermission } from '../auth/decorators';
+import { CurrentAuth, RequireFeature, RequirePermission } from '../auth/decorators';
 import { requestMeta } from '../common/request-meta';
 import { zod } from '../common/zod.pipe';
 import type { AuthContext } from '../tenancy/request-context';
@@ -71,6 +71,7 @@ export class CampaignsController {
     return this.campaigns.list(q);
   }
 
+  @RequireFeature('campaigns')
   @Post()
   @RequirePermission(Permission.CAMPAIGNS_MANAGE)
   create(
@@ -154,6 +155,7 @@ export class CampaignsController {
     return this.campaigns.estimate(actor(auth), id);
   }
 
+  @RequireFeature('campaigns')
   @Post(':id/launch')
   @HttpCode(200)
   @RequirePermission(Permission.CAMPAIGNS_MANAGE)
@@ -177,6 +179,7 @@ export class CampaignsController {
     return this.campaigns.pause(actor(auth, req), id);
   }
 
+  @RequireFeature('campaigns')
   @Post(':id/resume')
   @HttpCode(200)
   @RequirePermission(Permission.CAMPAIGNS_MANAGE)
@@ -232,6 +235,7 @@ export class DripsController {
     return this.drips.list();
   }
 
+  @RequireFeature('drips')
   @Post()
   @RequirePermission(Permission.CAMPAIGNS_MANAGE)
   create(
@@ -267,6 +271,7 @@ export class DripsController {
     return this.drips.setStatus(id, body.status);
   }
 
+  @RequireFeature('drips')
   @Post(':id/enroll')
   @HttpCode(200)
   @RequirePermission(Permission.CAMPAIGNS_MANAGE)

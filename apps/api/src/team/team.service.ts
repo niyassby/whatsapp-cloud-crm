@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { type TenantTx, withDbContext, withTenant } from '@wacrm/db';
+import { type TenantTx, withDbContext, withTenant, assertWithinLimit } from '@wacrm/db';
 import {
   type AcceptInvitationInput,
   AppError,
@@ -197,6 +197,7 @@ export class TeamService {
         where: { email: input.email, acceptedAt: null, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      await assertWithinLimit(tx, actor.orgId, 'seats');
       const invitation = await tx.invitation.create({
         data: {
           orgId: actor.orgId,

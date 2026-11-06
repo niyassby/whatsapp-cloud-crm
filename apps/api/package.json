@@ -20,6 +20,7 @@
     "@nestjs/websockets": "12.3.2",
     "@node-rs/argon2": "^2.2.2",
     "@socket.io/redis-adapter": "^8.3.0",
+    "@wacrm/billing": "workspace:^",
     "@wacrm/db": "workspace:^",
     "@wacrm/shared": "workspace:^",
     "@wacrm/whatsapp": "workspace:^",
@@ -28,6 +29,7 @@
     "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "nodemailer": "^10.3.1",
+    "pdfkit": "^0.20.2",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "socket.io": "^4.8.4",
@@ -39,6 +41,7 @@
     "@swc/core": "^1.16.21",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/nodemailer": "^8.0.2",
+    "@types/pdfkit": "^0.17.7",
     "socket.io-client": "^4.8.4",
     "unplugin-swc": "^2.0.0"
   }

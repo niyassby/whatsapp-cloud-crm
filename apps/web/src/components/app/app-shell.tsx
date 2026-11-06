@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import { LowBalanceBanner } from './low-balance-banner';
 import { NoOrg } from './no-org';
 import { OrgSwitcher } from './org-switcher';
+import { TrialBanner } from './trial-banner';
 import { UserMenu } from './user-menu';
 import { VerifyEmailBanner } from './verify-email-banner';
 
@@ -100,6 +101,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           {me.data ? <UserMenu me={me.data} /> : <Skeleton className="size-8 rounded-full" />}
         </header>
         {me.data && !me.data.user.emailVerified && <VerifyEmailBanner email={me.data.user.email} />}
+        <TrialBanner />
         <LowBalanceBanner />
         <main className="min-h-0 flex-1 overflow-auto p-6">
           {me.isPending ? (

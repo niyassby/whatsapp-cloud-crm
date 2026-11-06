@@ -1,3 +1,5 @@
+import type { PaymentProviders } from '@wacrm/billing';
+import { PAYMENT_PROVIDERS } from '../src/billing/billing.tokens';
 import 'reflect-metadata';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -18,6 +20,7 @@ export interface BuildOptions {
   controllers?: unknown[];
   env?: Record<string, string>;
   graph?: GraphConfig;
+  payments?: PaymentProviders;
 }
 
 export interface TestApp {
@@ -55,6 +58,8 @@ export async function buildApp(extra: BuildOptions = {}): Promise<TestApp> {
     .useValue(storage)
     .overrideProvider(GRAPH_CONFIG)
     .useValue(extra.graph ?? { apiVersion: env.META_GRAPH_API_VERSION })
+    .overrideProvider(PAYMENT_PROVIDERS)
+    .useValue(extra.payments ?? {})
     .compile();
   const app = mod.createNestApplication<NestFastifyApplication>(createAdapter(env), NEST_OPTIONS);
   await configureApp(app, env);

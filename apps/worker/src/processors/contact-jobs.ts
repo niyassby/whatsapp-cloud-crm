@@ -4,7 +4,9 @@ import {
   contactJobToDto,
   contactListWhere,
   type ContactListFilter,
+  liveContactWhere,
   type Prisma,
+  roomLeft,
   type TenantTx,
   withTenant,
 } from '@wacrm/db';
@@ -272,15 +274,48 @@ interface UpsertResult {
  * - A deleted contact comes back with its consent record. A merged one is refused, so its row
  *   is reported rather than silently changing a hidden record.
  */
-async function applyBatch(
+async function withinContactLimit(
   tx: TenantTx,
   orgId: string,
   rows: PendingRow[],
+  totals: Totals,
+  addError: (e: RowError) => void,
+): Promise<PendingRow[]> {
+  let room = await roomLeft(tx, orgId, 'contacts');
+  if (room === null) return rows;
+  const existing = await tx.contact.findMany({
+    where: { orgId, waId: { in: rows.map((r) => r.waId) }, ...liveContactWhere },
+    select: { waId: true },
+  });
+  const live = new Set(existing.map((c) => c.waId));
+  return rows.filter((row) => {
+    // Updating someone who is already a contact does not use up the limit.
+    if (live.has(row.waId)) return true;
+    if (room! > 0) {
+      room!--;
+      return true;
+    }
+    totals.processed++;
+    addError({
+      rowNumber: row.rowNumber,
+      phone: row.phone,
+      error: 'Over your plan’s contact limit',
+    });
+    return false;
+  });
+}
+
+async function applyBatch(
+  tx: TenantTx,
+  orgId: string,
+  allRows: PendingRow[],
   options: ContactImportOptions,
   tagIds: Map<string, string>,
   totals: Totals,
   addError: (e: RowError) => void,
 ): Promise<void> {
+  const rows = await withinContactLimit(tx, orgId, allRows, totals, addError);
+  if (rows.length === 0) return;
   const payload = JSON.stringify(
     rows.map((r) => ({
       wa_id: r.waId,

@@ -12,11 +12,25 @@ export async function purgeWebhookEvents(
   return row?.n ?? 0;
 }
 
-/** Create this month's and upcoming message partitions. Returns how many were new. */
+const PARTITION_ATTEMPTS = 3;
+
+/**
+ * Create this month's and upcoming message partitions. Returns how many were new. Adding a
+ * partition can deadlock with messages being inserted, in which case Postgres cancels one side, so
+ * this tries again. Partitions are made months ahead, so waiting a moment costs nothing.
+ */
 export async function ensureMessagePartitions(db: DbClient, now = new Date()): Promise<number> {
-  const [row] = await db.$queryRaw<{ n: number }[]>`
-    SELECT ensure_message_partitions(${now.toISOString().slice(0, 10)}::date, 4) AS n`;
-  return row?.n ?? 0;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const [row] = await db.$queryRaw<{ n: number }[]>`
+        SELECT ensure_message_partitions(${now.toISOString().slice(0, 10)}::date, 4) AS n`;
+      return row?.n ?? 0;
+    } catch (err) {
+      const deadlock = err instanceof Error && err.message.includes('deadlock detected');
+      if (!deadlock || attempt >= PARTITION_ATTEMPTS) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    }
+  }
 }
 
 /**

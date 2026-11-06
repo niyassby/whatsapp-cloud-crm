@@ -30,6 +30,8 @@ export const Permission = {
   /** See the balance, ledger and usage. Changing wallet settings needs BILLING_MANAGE. */
   WALLET_READ: 'wallet:read',
   ANALYTICS_READ: 'analytics:read',
+  /** See the plan, usage and invoices. Paying or changing anything needs BILLING_MANAGE. */
+  BILLING_READ: 'billing:read',
 } as const;
 export type Permission = (typeof Permission)[keyof typeof Permission];
 

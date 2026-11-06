@@ -16,7 +16,12 @@ export const QueueName = {
   TEMPLATE_SYNC: 'template-sync',
   /** Campaigns and drips. Separate from OUTBOUND, so a big send cannot delay the inbox. */
   CAMPAIGNS: 'campaigns',
+  BILLING_EVENTS: 'billing-events',
 } as const;
+
+export interface BillingEventJob {
+  eventId: string;
+}
 
 export type CampaignJob =
   | { kind: 'prepare'; orgId: string; campaignId: string }

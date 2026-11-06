@@ -23,6 +23,7 @@
     "db:seed": "pnpm --filter @wacrm/db run seed",
     "rates:import": "pnpm --filter @wacrm/db run rates:import",
     "wallet:credit": "pnpm --filter @wacrm/db run wallet:credit",
+    "plans:import": "pnpm --filter @wacrm/db run plans:import",
     "db:studio": "pnpm --filter @wacrm/db run studio",
     "prepare": "husky",
     "db:setup": "pnpm db:migrate:deploy && pnpm db:roles && pnpm db:seed",

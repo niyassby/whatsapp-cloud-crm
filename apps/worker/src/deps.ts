@@ -1,3 +1,4 @@
+import type { PaymentProviders } from '@wacrm/billing';
 import type { DbClient } from '@wacrm/db';
 import type {
   CampaignJob,
@@ -22,6 +23,7 @@ export interface WorkerDeps {
    * Shares its counter with the inbox's limit, so campaigns only use what the inbox leaves.
    */
   acquireCampaignSlots: (phoneNumberId: string, wanted: number) => Promise<number>;
+  payments: PaymentProviders;
   /** For a workspace whose first paid send comes from a drip. */
   defaultCurrency: string;
 }

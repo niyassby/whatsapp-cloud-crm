@@ -12,6 +12,7 @@ import {
   findRate,
   type Prisma,
   releaseCampaignFunds,
+  roomLeft,
   type TenantTx,
   withTenant,
 } from '@wacrm/db';
@@ -41,7 +42,7 @@ import {
 } from '@wacrm/shared';
 import { countryOfWaId, normalizePhone } from '@wacrm/shared/server';
 import { parse } from 'csv-parse';
-import { RetryableJobError, type WorkerDeps } from '../deps';
+import type { WorkerDeps } from '../deps';
 import { runDripBatch } from './drips';
 import { sendOutboundMessage } from './outbound';
 
@@ -53,6 +54,11 @@ const RETRY_DELAY_MS = 30_000;
 /** A send this old was left behind by a crashed worker. */
 const STALE_SENDING_MS = 5 * 60_000;
 const LOW_QUALITY = new Set(['RED', 'LOW']);
+/**
+ * Sends running at once within a batch. Each takes several transactions from the pool the worker
+ * shares with inbound messages, so a batch must leave room for them.
+ */
+const SEND_CONCURRENCY = 5;
 
 export interface CampaignSettings {
   /** Messages per second for one number. Stays below the inbox's, which share the same counter. */
@@ -297,9 +303,19 @@ export async function prepareCampaign(
       const rows = batch;
       batch = [];
       const recipients = await withTenant(deps.db, { orgId }, async (tx) => {
-        // A number in the file becomes a contact, with no consent recorded.
+        // A number in the file becomes a contact, with no consent recorded, while the plan has
+        // room. Beyond that, a row with no contact is counted as invalid.
+        const room = await roomLeft(tx, orgId, 'contacts');
+        const known = await tx.contact.findMany({
+          where: { waId: { in: rows.map((r) => r.waId) } },
+          select: { waId: true },
+        });
+        const knownIds = new Set(known.map((c) => c.waId));
+        const fresh = rows.filter((r) => !knownIds.has(r.waId));
+        const allowed = room === null ? fresh : fresh.slice(0, room);
+        invalid += fresh.length - allowed.length;
         await tx.contact.createMany({
-          data: rows.map((r) => ({ orgId, waId: r.waId, name: r.name })),
+          data: allowed.map((r) => ({ orgId, waId: r.waId, name: r.name })),
           skipDuplicates: true,
         });
         const contacts = await tx.contact.findMany({
@@ -573,7 +589,22 @@ export async function dispatchCampaignBatch(
     );
   }
 
-  const prepared = await prepareMessages(deps, orgId, campaign, template, recipients);
+  let prepared: Awaited<ReturnType<typeof prepareMessages>>;
+  try {
+    prepared = await prepareMessages(deps, orgId, campaign, template, recipients);
+  } catch (err) {
+    // Rolled back, so nothing was charged or sent. Hand the claims back rather than leaving them
+    // to go stale. A deadlock or timeout just tries again, and anything else fails the job.
+    await withTenant(deps.db, { orgId }, (tx) =>
+      tx.campaignRecipient.updateMany({
+        where: { id: { in: recipients.map((r) => r.id) }, status: 'sending' },
+        data: { status: 'pending', attempts: { decrement: 1 } },
+      }),
+    );
+    const code = (err as { code?: unknown }).code;
+    if (code === 'P2034' || code === 'P2028') return { retryInMs: 2_000 };
+    throw err;
+  }
   if (prepared.outOfFunds) {
     await pause(
       deps,
@@ -583,7 +614,7 @@ export async function dispatchCampaignBatch(
       'The funds held for this campaign ran out. Top up, then resume it.',
     );
   }
-  await Promise.all(prepared.messages.map((m) => sendOne(deps, orgId, m)));
+  await forEachLimited(prepared.messages, SEND_CONCURRENCY, (m) => sendOne(deps, orgId, m));
   // Touching the row tells the scheduler this campaign is alive.
   await withTenant(deps.db, { orgId }, (tx) =>
     tx.campaign.update({ where: { id: campaignId }, data: { updatedAt: new Date() } }),
@@ -797,6 +828,18 @@ async function prepareMessages(
   );
 }
 
+async function forEachLimited<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const runner = async () => {
+    while (next < items.length) await fn(items[next++] as T);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runner));
+}
+
 async function sendOne(deps: WorkerDeps, orgId: string, m: PreparedMessage): Promise<void> {
   const job = { orgId, messageId: m.messageId, createdAt: m.createdAt.toISOString() };
   const finalAttempt = m.attempts >= MAX_SEND_ATTEMPTS;
@@ -818,20 +861,19 @@ async function sendOne(deps: WorkerDeps, orgId: string, m: PreparedMessage): Pro
       }
     });
   } catch (err) {
-    if (err instanceof RetryableJobError) {
-      await withTenant(deps.db, { orgId }, (tx) =>
-        tx.campaignRecipient.update({
-          where: { id: m.recipientId },
-          data: {
-            status: 'pending',
-            nextAttemptAt: new Date(Date.now() + RETRY_DELAY_MS * m.attempts),
-            errorMessage: err.message.slice(0, 500),
-          },
-        }),
-      );
-      return;
-    }
-    throw err;
+    // Retryable or not, one send must not sink the batch: the others are still in flight. This is
+    // safe to try again, because a message already claimed fails rather than being sent twice.
+    // If even this write fails, the stale claim is picked up after STALE_SENDING_MS.
+    await withTenant(deps.db, { orgId }, (tx) =>
+      tx.campaignRecipient.update({
+        where: { id: m.recipientId },
+        data: {
+          status: 'pending',
+          nextAttemptAt: new Date(Date.now() + RETRY_DELAY_MS * m.attempts),
+          errorMessage: (err instanceof Error ? err.message : String(err)).slice(0, 500),
+        },
+      }),
+    ).catch(() => undefined);
   }
 }
 

@@ -111,6 +111,7 @@ export function buildDeps(client: DbClient) {
       campaignJobs.push({ job, delayMs });
     },
     acquireCampaignSlots: async (_phoneNumberId, wanted) => wanted,
+    payments: {},
     defaultCurrency: 'INR',
   };
   return { deps, publisher, storage, media, syncs, campaignJobs, fake };

@@ -18,6 +18,7 @@ import { env } from '@/lib/env';
 import { applyConversationUpdate, inboxKeys, upsertMessage } from '@/lib/inbox';
 import { queryKeys, useMe } from '@/lib/queries';
 import { templateKeys } from '@/lib/templates';
+import { billingKeys } from '@/lib/billing';
 import { campaignKeys } from '@/lib/campaigns';
 import { walletKeys } from '@/lib/wallet';
 
@@ -153,6 +154,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           void queryClient.invalidateQueries({ queryKey: campaignKeys.lists });
         }, 1000),
       );
+    });
+    socket.on('billing:updated', () => {
+      void queryClient.invalidateQueries({ queryKey: billingKeys.all });
     });
     socket.on('wallet:updated', () => {
       void queryClient.invalidateQueries({ queryKey: walletKeys.all });

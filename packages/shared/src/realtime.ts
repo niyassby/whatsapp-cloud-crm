@@ -29,6 +29,7 @@ export interface ServerToClientEvents {
   'template:updated': (e: { templateId: string | null }) => void;
   'wallet:updated': () => void;
   'campaign:updated': (e: { campaignId: string }) => void;
+  'billing:updated': (e: Record<string, never>) => void;
 }
 
 export interface ClientToServerEvents {
@@ -46,6 +47,7 @@ export interface TenantEventMap {
   'template:updated': { templateId: string | null };
   'wallet:updated': Record<string, never>;
   'campaign:updated': { campaignId: string };
+  'billing:updated': Record<string, never>;
 }
 
 /** Publish to everyone in an org. API: Socket.IO server. Worker: Redis emitter. */

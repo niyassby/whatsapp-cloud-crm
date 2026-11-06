@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Body, Controller, Get, Patch, Post, Query } from '@nestjs/common';
-import { withTenant } from '@wacrm/db';
+import { withTenant, startTrial } from '@wacrm/db';
 import {
   type AuditLogDto,
   type CreateOrgInput,
@@ -54,6 +54,7 @@ export class OrgsController {
         data: { id: orgId, name: body.name, slug: slugify(body.name) },
       });
       await tx.membership.create({ data: { orgId, userId: auth.userId, role: 'owner' } });
+      await startTrial(tx, orgId);
       await this.audit.record(tx, orgId, {
         action: AuditAction.ORG_CREATED,
         actorUserId: auth.userId,

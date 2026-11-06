@@ -34,7 +34,8 @@ packages/
   db/         Prisma schema, migrations, RLS SQL, TenantPrisma helper
   shared/     Zod schemas, DTO types, error codes, permission map
   whatsapp/   WhatsAppGateway interface + wapi-cloud implementation
-  connectors/ Integration connectors (shopify, woocommerce, razorpay, stripe, ...)
+  billing/    PaymentProvider interface + Stripe and Razorpay adapters (platform billing)
+  connectors/ Integration connectors (shopify, woocommerce, ...)
   ui/         Shared React components
 infra/        Docker, CI, deployment notes
 ```
@@ -63,6 +64,7 @@ pnpm db:seed            # demo org "demo" with owner + agent (credentials in pac
 pnpm db:studio
 pnpm rates:import <file.csv>                       # add rate cards: country,category,currency,rate,valid_from
 pnpm wallet:credit <org slug or id> <amount> "<reason>"   # manual balance adjustment
+pnpm plans:import <file.json>                      # plans and prices; see packages/db/prisma/sample-plans.json
 pnpm --filter @wacrm/db run migrate:create -- --name <name>   # empty migration to hand-edit (RLS!)
 pnpm --filter @wacrm/api dev   # run a single app
 pnpm secrets:reencrypt  # key rotation: rewrite secrets still under an old ENCRYPTION_KEY
@@ -190,6 +192,24 @@ Setup steps for a real number: `infra/whatsapp-setup.md`.
 - Web: `/campaigns`, `/campaigns/new` (saves a draft), `/campaigns/[id]` (review and launch as a draft, then the live report), `/campaigns/drips`, `/dashboard`. The volume chart is hand-written SVG in `components/dashboard/volume-chart.tsx`, with colors checked by the dataviz validator in both modes.
 - Tests: `apps/worker/test/campaigns.test.ts` (includes the 10k acceptance test), `apps/api/test/campaigns.test.ts`, `packages/db/test/campaigns-tables.test.ts`, `packages/shared/src/campaigns.test.ts`, `e2e/campaigns.spec.ts`.
 
+## Plans, subscriptions and payments (Phase 2.5)
+
+- Tables: `plans`, `plan_prices`, `tax_rates` (config, no org_id, read-only to the app), `subscriptions` (one per org), `wallet_topups`, `invoices` (no UPDATE or DELETE grant), `billing_events` (written only through definer functions), `invoice_counter` (no app access). Billing details live on `organizations`.
+- Plans are config: `pnpm plans:import <file.json>`, sample in `packages/db/prisma/sample-plans.json` (not real prices). The migration inserts Free, Starter, Growth and Scale with no prices. A plan can only be bought once it has a `plan_prices` row with the provider's price or plan id. Prices are what the provider charges, tax included.
+- Trial: `startTrial` at signup and when creating an org, on the plan with `is_trial` (Growth, 14 days). The migration gave existing orgs one too. `effectiveStatus` works out expiry when read, so no job has to run: an ended trial or cancelled period means the Free plan. Nothing is deleted when a plan drops; only adding more stops. `past_due` keeps the plan while the provider retries.
+- `packages/billing`: `PaymentProvider` interface, `StripeProvider`, `RazorpayProvider`, built on fetch with no SDK. `createPaymentProviders(env)` only creates a provider whose values are all set. Stripe's API version is pinned in `STRIPE_API_VERSION`. `providersForCurrency`: INR prefers Razorpay, everything else is Stripe. `test/providers.test.ts` pins requests, signatures and event parsing; payloads follow the docs and have not been checked against live traffic.
+- Webhooks: `POST /webhooks/stripe` and `/webhooks/razorpay` verify the signature on the raw bytes (Stripe also checks a 5-minute tolerance), store through `billing_event_ingest` (unique on provider and event id), enqueue on `billing-events`, answer 200. Any failure answers 5xx so the provider redelivers. The worker handles them in `apps/worker/src/processors/billing.ts`.
+- Wallet credits: only from a verified `topup.paid` event (Stripe `checkout.session.completed` or `async_payment_succeeded` with `payment_status: paid`; Razorpay `payment_link.paid` with a captured payment), never from a browser redirect. The idempotency key is `topup:<id>`, so the same event twice, or two different events about one payment, credit once. The credit, invoice and status change share a transaction. An amount or currency that differs from the top-up credits nothing and marks it `failed` for someone to look at.
+- Subscription state: both providers say events can arrive out of order, so a subscription event carries no state. The worker asks the provider for the current subscription (`getSubscription`) and sets the row to it, outside any transaction. Running it again or in any order lands in the same place. The cancellation of an old subscription cannot cancel its replacement. A price no plan knows marks the event `failed` and leaves the plan alone. Razorpay does not report a pending cancel, so `cancelAtPeriodEnd` is set locally once it accepts the request.
+- Finding the org: from metadata or notes we put on the checkout (trustworthy after the signature check, and RLS still confines the work), or `billing_org_for_ref`. A webhook can beat the API saving the provider's reference, so that case throws and retries.
+- Top-ups add tax on top: 1000 at 18% costs 1180, and 1000 reaches the wallet. Tax comes from `tax_rates` by `organizations.billing_country`. Subscriptions split the tax out of the price. Each is copied onto the invoice.
+- Invoices: `recordInvoice`, unique on provider and payment reference, gapless numbers (`INV-2026-000123`) from `next_invoice_number()`, buyer details copied on so they never change. `GET /billing/invoices/:id/pdf` renders from the stored row with pdfkit. Seller details come from `BILLING_SELLER_*`.
+- Limits: `assertWithinLimit` / `roomLeft` (`@wacrm/db`), error `PLAN_LIMIT_REACHED` (402). Seats count active members plus pending invites. Enforced at invite, connecting a number (before any Meta call), adding a contact, CSV import (rows past the limit go in the error report) and CSV audiences (counted as invalid rows). A customer writing in is never refused. Counts are not locked, so concurrent adds can overshoot slightly.
+- Features: `@RequireFeature('campaigns')` on actions, checked by `PlanFeatureGuard` after `AccessGuard`, error `PLAN_FEATURE_UNAVAILABLE` (402). Reading stays open, so past work stays visible after a downgrade. New features go in `PLAN_FEATURES`. A campaign already running finishes.
+- Permissions: `BILLING_READ` (owners and admins), `BILLING_MANAGE` (owners) for paying and changing anything.
+- Web: `/settings/billing` (current plan, usage, plan picker, billing details, invoices), Add funds on `/wallet`, `TrialBanner` in the shell. Updates arrive over `billing:updated`.
+- Tests: `packages/billing/test/providers.test.ts`, `apps/worker/test/billing.test.ts` (the exactly-once acceptance tests), `apps/api/test/billing.test.ts`, `packages/db/test/billing-tables.test.ts`, `packages/shared/src/billing.test.ts`, `e2e/billing.spec.ts` with `e2e/support/fake-payments.mjs`, a fake Stripe that sends every signed webhook twice.
+
 ## Troubleshooting
 
 - Dev page reloads forever, with the terminal repeating `Compiled in Xms` and the browser getting `HMR hash mismatch`: the Turbopack dev cache is stale, which `next build` beside a dev server can cause. Stop the dev server and delete `apps/web/.next/dev`.
@@ -214,7 +234,8 @@ Validate with Zod at startup. Never commit real secrets. Keep `.env.example` cur
 - `OUTBOUND_MPS_PER_NUMBER` (80). The worker also needs `ENCRYPTION_KEY` and `META_GRAPH_API_VERSION`
 - `WALLET_DEFAULT_CURRENCY` (INR), `WALLET_LOW_BALANCE_DEFAULT` (100)
 - `CAMPAIGN_MPS_PER_NUMBER` (40, below `OUTBOUND_MPS_PER_NUMBER` on purpose), `CAMPAIGN_MAX_FAILURE_RATE` (0.2). Worker only
-- `RAZORPAY_*`, `STRIPE_*` for platform billing
+- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`: API and worker both need them, and a provider exists only with all its values. `STRIPE_API_BASE`, `RAZORPAY_API_BASE` for local fakes only (refused in production)
+- `BILLING_SELLER_NAME` (defaults to `APP_NAME`), `BILLING_SELLER_ADDRESS`, `BILLING_SELLER_TAX_ID`: printed on invoices
 - `SENTRY_DSN`
 
 ## Architecture rules (must follow)
@@ -269,7 +290,7 @@ The package is young and single-maintainer. Treat it as replaceable.
 Mark as phases complete.
 
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
-- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 campaigns and dashboard DONE; 2.5 and 2.6 to do). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
+- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 campaigns and dashboard DONE; 2.5 billing code DONE, real sandbox payments not verified; 2.6 to do). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
 - [ ] Section 3: Automation, integrations, AI (3.1 to 3.7)
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
 
@@ -344,7 +365,7 @@ Add one line per decision: date, decision, reason.
 - 2026-11-06: A send interrupted by a crash is refunded, although Meta may have delivered it. Reason: when unknown, the customer should not pay. Costs the platform at most that message.
 - 2026-11-06: A chargeable send with no rate is refused, not sent for free. Reason: silently free sends lose real money.
 - 2026-11-06: One wallet currency per org, set at creation from `WALLET_DEFAULT_CURRENCY` (INR). Rate cards must exist in it.
-- 2026-11-06: A hot wallet serializes on its row lock. Checked under campaign load in 2.4: a batch charges in one short transaction, and inbox round trips during the 10k test measured median 81 ms, p95 706 ms, worst 2.9 s, with both in one test process.
+- 2026-11-06: A hot wallet serializes on its row lock. Checked under campaign load in 2.4: a batch charges in one short transaction, and inbox round trips during the 10k test measured median 88 ms, p95 234 ms, worst 1.5 s, with both in one test process. Sends within a batch are capped at 5 at once, to leave the pool for inbound work.
 - 2026-11-06: Broadcasts are stricter than one-to-one sends: an opted-out contact gets no broadcast at all, even utility. Reason: someone who said STOP should not hear from a mass send.
 - 2026-11-06: Threads created by a broadcast start closed. Reason: 10,000 new open threads would bury the team's real conversations. A reply opens them.
 - 2026-11-06: A chain of short jobs rather than one long campaign job. Reason: pause and cancel take effect by the next batch, deploys are cheap, and BullMQ locks stay simple.
@@ -352,6 +373,13 @@ Add one line per decision: date, decision, reason.
 - 2026-11-06: A reply is credited to the contact's latest broadcast within 72 hours. Reason: simple and explainable. This is attribution, not proof the broadcast caused it.
 - 2026-11-06: Unknown messaging tier means 250 a day, the limit Meta starts numbers on. Reason: failing safe protects the number, and the first real connection showed an empty tier.
 - 2026-11-06: Automatic pauses appear in the app only, with no email yet.
+- 2026-11-06: Provider adapters use fetch, not the Stripe and Razorpay SDKs. Reason: a small surface, one error path, and the same injectable fetch for tests. Stripe's version is pinned per request.
+- 2026-11-06: Subscription webhooks are only triggers: the worker reads current state from the provider. Reason: both providers say order is not guaranteed, and Stripe says not to order by `created`. Costs one API call per event.
+- 2026-11-06: Top-ups add tax on top, and plan prices include it. Reason: a customer topping up 1000 expects 1000 of credit, and provider plans have a fixed price. Worth a check with an accountant, including whether GST applies to prepaid wallet credit at top-up or at use.
+- 2026-11-06: The wallet currency decides the billing currency, so one org has one currency. INR prefers Razorpay.
+- 2026-11-06: Missing subscription row means no limits. Reason: signup and the migration create one, and a bookkeeping gap must not stop a business. The billing page creates one if it finds none.
+- 2026-11-06: A plan drop keeps everything and only stops adding more. Reason: deleting or disabling a customer's data because a card failed is the wrong failure.
+- 2026-11-06: Free replies and the inbox keep working on every plan, including Free.
 
 ## Known gaps / TODO
 
@@ -376,6 +404,12 @@ Add one line per decision: date, decision, reason.
 - Campaigns: variables come from the template's mapping or CSV columns, with no per-campaign mapping screen yet (the API accepts one). Tier limits in `messaging_tier_limits` come from Meta's published tiers and need checking against current limits. A real campaign has not run against Meta.
 - Campaign throughput measured about 23 messages a second in the 10k test on the dev machine, under the 40 limit: each send takes several transactions. Fine for now, but a large number on a high tier would want this tuned.
 - Worker dispatch sends a batch concurrently, so messages within one batch can go out of order. Harmless for a broadcast, since each goes to a different person.
+- Phase 2.5 not verified with real sandboxes: run a test top-up and subscription on Stripe and Razorpay test keys (steps in `infra/billing-setup.md`). Real plan prices, provider price ids and seller details are not set. Razorpay's webhook blocks localhost, so it needs a tunnel that is not on its blocklist.
+- Refunds and disputes are not handled: `charge.refunded` and Razorpay refund events are stored and ignored, so a refunded top-up leaves its credit. Handle them by hand for now, and decide what happens when the money is already spent.
+- Plan changes and renewals are not in the audit log, since only the API writes it and the worker makes these changes. The provider's events are kept in `billing_events`, with no screen or replay yet.
+- No trial-ending email, only the banner. No proration preview before switching plans. Razorpay subscriptions authorized by UPI or e-mandate cannot change plan, and the provider's refusal is shown as is.
+- Invoice PDFs use a built-in font: non-Latin names (Hindi, for example) will not render. Embed a font before relying on them.
+- Invoice wording and fields need a check with an accountant for GST compliance (HSN or SAC code, place of supply, CGST and SGST split).
 - Real rate cards are not loaded. `sample-rate-cards.csv` is not Meta's pricing. Before charging anyone: build a CSV from Meta's current rate card with your margin, and run `pnpm rates:import`. Check how Meta's market groups map to countries.
 - Meta bills by its own rules, such as volume tiers, which flat per-country rates do not model. Reconcile against Meta's invoices.
 - No platform-admin screen for rate cards or manual credits: CLI only until Section 4.

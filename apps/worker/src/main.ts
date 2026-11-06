@@ -1,9 +1,11 @@
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
+import { createPaymentProviders } from '@wacrm/billing';
 import { createPrismaClient, withTenant } from '@wacrm/db';
 import {
   buildHealth,
+  type BillingEventJob,
   type CampaignJob,
   type ContactJobQueueData,
   DEFAULT_JOB_OPTIONS,
@@ -36,6 +38,7 @@ import { processMetaAccountJob } from './processors/meta-account';
 import { sendOutboundMessage } from './processors/outbound';
 import { markEventFailed, routeWebhookEvent } from './processors/webhook-events';
 import { processContactJob } from './processors/contact-jobs';
+import { processBillingEvent } from './processors/billing';
 import { campaignTickTargets, runCampaignJob } from './processors/campaigns';
 import { dripTargets } from './processors/drips';
 import { syncTemplates, templateSyncTargets } from './processors/templates';
@@ -127,6 +130,7 @@ const deps: WorkerDeps = {
     if (allowed < wanted) await redis.decrby(key, wanted - allowed);
     return allowed;
   },
+  payments: createPaymentProviders(env),
   defaultCurrency: env.WALLET_DEFAULT_CURRENCY,
 };
 
@@ -254,6 +258,15 @@ campaignWorker.on('failed', (job, err) => {
   log.warn({ jobId: job?.id, err: err.message }, 'campaign job attempt failed');
 });
 
+const billingWorker = new Worker<BillingEventJob>(
+  QueueName.BILLING_EVENTS,
+  (job) => processBillingEvent(deps, job.data.eventId, { finalAttempt: isFinalAttempt(job) }),
+  { ...queueOpts, concurrency: 5 },
+);
+billingWorker.on('failed', (job, err) => {
+  log.error({ jobId: job?.id, err: err.message }, 'billing event attempt failed');
+});
+
 const maintenanceQueue = new Queue(QueueName.MAINTENANCE, queueOpts);
 const maintenanceWorker = new Worker(
   QueueName.MAINTENANCE,
@@ -348,6 +361,7 @@ async function shutdown() {
     contactJobsWorker.close(),
     templateSyncWorker.close(),
     campaignWorker.close(),
+    billingWorker.close(),
     campaignQueue.close(),
     maintenanceWorker.close(),
     maintenanceQueue.close(),
