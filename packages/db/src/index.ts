@@ -7,3 +7,4 @@ export * from './whatsapp';
 export * from './inbox';
 export * from './contacts';
 export * from './templates';
+export * from './wallet';

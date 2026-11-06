@@ -25,6 +25,11 @@ export function normalizePhone(raw: string, defaultCountry?: string): string | n
   return null;
 }
 
+/** The country a wa_id belongs to, for pricing. Null when it cannot be told. */
+export function countryOfWaId(waId: string): string | null {
+  return parsePhoneNumberFromString(`+${waId}`)?.country ?? null;
+}
+
 /** A template's header file: the sample shown to Meta, and what customers receive. */
 export const templateHeaderKey = (orgId: string, templateId: string) =>
   `orgs/${orgId}/templates/${templateId}/header`;

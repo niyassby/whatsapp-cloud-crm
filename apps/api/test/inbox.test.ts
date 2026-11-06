@@ -1,7 +1,13 @@
 /** Inbox API and realtime gateway. Real Postgres, Redis and sockets; Meta is faked. */
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
-import { createPrismaClient, type DbClient, withTenant } from '@wacrm/db';
+import {
+  createPrismaClient,
+  creditWallet,
+  type DbClient,
+  ensureWallet,
+  withTenant,
+} from '@wacrm/db';
 import { ErrorCode } from '@wacrm/shared';
 import { phoneTokenAad, SecretBox } from '@wacrm/shared/server';
 import { io, type Socket } from 'socket.io-client';
@@ -79,6 +85,17 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${port}`;
   owner = createPrismaClient({ connectionString: urls.directUrl });
   queues = t.app.get(QueuesService);
+  // Templates cost money now. What they cost is tested in wallet.test.ts.
+  await owner.rateCard.createMany({
+    data: ['marketing', 'utility'].map((category) => ({
+      country: '*',
+      category,
+      currency: 'INR',
+      rateMicros: 1n,
+      validFrom: new Date('2026-01-01'),
+    })),
+    skipDuplicates: true,
+  });
 });
 
 afterAll(async () => {
@@ -97,6 +114,10 @@ interface Org {
 async function signup(): Promise<Org> {
   const client = new Client(t.app);
   const s = await client.signup();
+  await withTenant(owner, { orgId: s.orgId }, async (tx) => {
+    await ensureWallet(tx, s.orgId, 'INR');
+    await creditWallet(tx, { orgId: s.orgId, amountMicros: 1_000_000, idempotencyKey: 'seed' });
+  });
   return { client, orgId: s.orgId, userId: s.userId };
 }
 

@@ -5,10 +5,11 @@ import {
   messageInclude,
   messageToDto,
   type Prisma,
+  refundDebit,
   setContactConsent,
   withTenant,
 } from '@wacrm/db';
-import { isOptOutMessage, messagePreview } from '@wacrm/shared';
+import { isOptOutMessage, messageDebitKey, messagePreview } from '@wacrm/shared';
 import { mapError, parseWebhookEvents, type WebhookEvent } from '@wacrm/whatsapp';
 import type { WorkerDeps } from '../deps';
 
@@ -267,6 +268,7 @@ async function applyStatus(deps: WorkerDeps, orgId: string, ev: StatusEvent): Pr
   const { status } = ev;
   const at = new Date(Number(ev.timestamp) * 1000);
 
+  let refunded = false;
   const updated = await withTenant(deps.db, { orgId }, async (tx) => {
     let target = parseCallback(ev.bizOpaqueCallbackData);
     if (!target) {
@@ -280,6 +282,17 @@ async function applyStatus(deps: WorkerDeps, orgId: string, ev: StatusEvent): Pr
     const where = { id_createdAt: { id: target.messageId, createdAt: target.createdAt } };
     const message = await tx.message.findUnique({ where, select: { status: true } });
     if (!message) return null;
+
+    // Meta's word on billing beats our estimate. Refunding twice is impossible, so this can run
+    // on every status that says so, whatever the order they arrive in.
+    if (status === 'failed' || ev.pricing?.billable === false) {
+      const refund = await refundDebit(tx, {
+        orgId,
+        debitKey: messageDebitKey(target.messageId),
+        description: status === 'failed' ? 'Delivery failed' : 'Not billed by Meta',
+      });
+      refunded = refund.applied;
+    }
 
     let data: Prisma.MessageUpdateInput;
     if (status === 'failed') {
@@ -311,6 +324,7 @@ async function applyStatus(deps: WorkerDeps, orgId: string, ev: StatusEvent): Pr
     return tx.message.update({ where, data, include: messageInclude });
   });
   if (updated) deps.publisher.emit(orgId, 'message:updated', { message: messageToDto(updated) });
+  if (refunded) deps.publisher.emit(orgId, 'wallet:updated', {});
 }
 
 /** Handle a `messages` webhook change. Each message commits on its own, so retries are cheap. */

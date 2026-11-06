@@ -62,6 +62,16 @@ export const apiEnvSchema = z.object({
   /** System-user-token connect form. Defaults to on outside production, off in production. */
   ALLOW_MANUAL_CONNECT: booleanString.optional(),
   QUEUE_PREFIX: z.string().min(1).default('wacrm'),
+  /** Set when a workspace's wallet is created. Rate cards must exist in this currency. */
+  WALLET_DEFAULT_CURRENCY: z
+    .string()
+    .regex(/^[A-Z]{3}$/)
+    .default('INR'),
+  /** Where a new wallet's low balance alert starts, in that currency. */
+  WALLET_LOW_BALANCE_DEFAULT: z
+    .string()
+    .regex(/^\d+(\.\d{1,6})?$/)
+    .default('100'),
   ...s3EnvShape,
 
   SMTP_URL: z.url({ protocol: /^smtps?$/ }).default('smtp://127.0.0.1:1025'),

@@ -13,6 +13,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { TeamModule } from './team/team.module';
 import { TemplatesModule } from './templates/templates.module';
 import { TenancyModule } from './tenancy/tenancy.module';
+import { WalletModule } from './wallet/wallet.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
 @Module({})
@@ -34,6 +35,7 @@ export class AppModule {
         InboxModule,
         ContactsModule,
         TemplatesModule,
+        WalletModule,
       ],
       controllers: [HealthController],
       providers: [

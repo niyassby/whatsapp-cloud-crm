@@ -1,0 +1,10 @@
+# SAMPLE VALUES FOR DEVELOPMENT ONLY. These are not Meta's prices.
+# Before charging real customers, load rates built from Meta's current rate card:
+#   pnpm rates:import path/to/rates.csv
+country,category,currency,rate,valid_from
+IN,marketing,INR,0.90,2026-01-01
+IN,utility,INR,0.15,2026-01-01
+IN,authentication,INR,0.15,2026-01-01
+*,marketing,INR,5.00,2026-01-01
+*,utility,INR,2.00,2026-01-01
+*,authentication,INR,2.00,2026-01-01

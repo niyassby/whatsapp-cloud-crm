@@ -26,6 +26,7 @@ const env = {
   TEST_DIRECT_URL: pg('wacrm'),
   REDIS_URL: 'redis://127.0.0.1:6379',
   QUEUE_PREFIX,
+  TRUST_PROXY: 'true',
   WEB_URL,
   API_PORT: String(PORTS.api),
   WORKER_HEALTH_PORT: String(PORTS.worker),
@@ -45,6 +46,11 @@ const env = {
 };
 
 execSync(`pnpm --filter @wacrm/db exec tsx scripts/prepare-test-db.ts ${DB_NAME}`, {
+  env,
+  stdio: 'inherit',
+});
+
+execSync('pnpm --filter @wacrm/db exec tsx scripts/rates-import.ts prisma/sample-rate-cards.csv', {
   env,
   stdio: 'inherit',
 });

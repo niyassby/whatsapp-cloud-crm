@@ -118,6 +118,29 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   return parse<T>(res);
 }
 
+/** Fetch a file that needs the access token, so a plain link cannot be used. */
+export async function apiDownload(path: string, filename: string): Promise<void> {
+  const send = () => {
+    const token = useAuthStore.getState().accessToken;
+    return fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, {
+      credentials: 'include',
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+  };
+  let res = await send();
+  if (res.status === 401 && (await refreshSession())) res = await send();
+  if (!res.ok) {
+    await parse(res);
+    return;
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 /** Store tokens returned by login/signup/switch-org/accept-invite. */
 export function setSession(tokens: AuthTokensResponse): void {
   useAuthStore.getState().setAccessToken(tokens.accessToken);

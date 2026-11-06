@@ -3,6 +3,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   applyTemplateSync,
   type MetaTemplateSnapshot,
+  priceMessage,
   type Prisma,
   templateToDto,
   type TenantTx,
@@ -31,7 +32,7 @@ import {
   type UpdateTemplateParsed,
   type VariableSource,
 } from '@wacrm/shared';
-import { type ObjectStorage, templateHeaderKey } from '@wacrm/shared/server';
+import { countryOfWaId, type ObjectStorage, templateHeaderKey } from '@wacrm/shared/server';
 import {
   type TemplateCategory,
   type WhatsAppError,
@@ -44,6 +45,7 @@ import { OBJECT_STORAGE } from '../infra/infra.tokens';
 import { decodeCursor, encodeCursor } from '../orgs/cursor';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { TenantPrismaService } from '../tenancy/tenant-prisma.service';
+import { WalletService } from '../wallet/wallet.service';
 
 export interface TemplateActor {
   userId: string;
@@ -65,6 +67,7 @@ export class TemplatesService {
     private readonly audit: AuditService,
     private readonly realtime: RealtimeGateway,
     private readonly whatsapp: WhatsAppClientFactory,
+    private readonly wallet: WalletService,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
   ) {}
 
@@ -520,6 +523,7 @@ export class TemplatesService {
     orgId: string,
     wabaAccountId: string,
     contact: ContactForTemplate,
+    windowOpen: boolean,
   ): Promise<InboxTemplateDto[]> {
     const waba = await this.db.run((tx) =>
       tx.wabaAccount.findUnique({
@@ -533,13 +537,28 @@ export class TemplatesService {
         this.logger.warn(`first template sync failed: ${String(err)}`);
       });
     }
-    const rows = await this.db.run((tx) =>
-      tx.messageTemplate.findMany({
+    const country = countryOfWaId(contact.waId);
+    const { rows, prices } = await this.db.run(async (tx) => {
+      const found = await tx.messageTemplate.findMany({
         where: { wabaAccountId, status: 'approved', supported: true },
         orderBy: [{ name: 'asc' }, { language: 'asc' }],
         take: 500,
-      }),
-    );
+      });
+      const byCategory = new Map<string, Awaited<ReturnType<typeof priceMessage>>>();
+      for (const category of new Set(found.map((t) => t.category))) {
+        byCategory.set(
+          category,
+          await priceMessage(tx, {
+            orgId,
+            category,
+            country,
+            windowOpen,
+            defaults: this.wallet.defaults,
+          }),
+        );
+      }
+      return { rows: found, prices: byCategory };
+    });
     return rows.flatMap((row) => {
       const parsed = templateDefinitionSchema.safeParse(row.definition);
       if (!parsed.success) return [];
@@ -547,6 +566,8 @@ export class TemplatesService {
       const mapping = row.variableMapping as Record<string, VariableSource>;
       const samples = row.samples as Record<string, string>;
       const mediaHeader = definition.header && definition.header.format !== 'TEXT';
+      const price = prices.get(row.category);
+      const unpriced = price && !price.free && !price.quote;
       return [
         {
           id: row.id,
@@ -565,8 +586,13 @@ export class TemplatesService {
                 (copyCode?.type === 'COPY_CODE' ? copyCode.example : ''),
             };
           }),
-          sendIssue:
-            mediaHeader && !row.headerMediaKey
+          cost:
+            price && !unpriced
+              ? { micros: price.quote?.rateMicros ?? 0, currency: price.currency }
+              : null,
+          sendIssue: unpriced
+            ? 'No price is set for this kind of message'
+            : mediaHeader && !row.headerMediaKey
               ? 'Upload a header file on the template page first'
               : null,
         },

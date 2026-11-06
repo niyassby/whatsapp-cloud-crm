@@ -1,6 +1,12 @@
 /** Template manager API. Real Postgres and Redis; Meta is a scripted fake. */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { createPrismaClient, type DbClient, withTenant } from '@wacrm/db';
+import {
+  createPrismaClient,
+  creditWallet,
+  type DbClient,
+  ensureWallet,
+  withTenant,
+} from '@wacrm/db';
 import { ErrorCode } from '@wacrm/shared';
 import { phoneTokenAad, SecretBox } from '@wacrm/shared/server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -86,6 +92,16 @@ beforeAll(async () => {
     graph: { apiVersion: 'v25.0', appId: 'app-1', fetch: fakeFetch },
   });
   db = createPrismaClient({ connectionString: urls.directUrl });
+  await db.rateCard.createMany({
+    data: ['marketing', 'utility'].map((category) => ({
+      country: '*',
+      category,
+      currency: 'INR',
+      rateMicros: 1n,
+      validFrom: new Date('2026-01-01'),
+    })),
+    skipDuplicates: true,
+  });
 });
 afterAll(async () => {
   await t?.close();
@@ -617,6 +633,8 @@ describe('the inbox picker', () => {
         where: { id: w.wabaAccountId },
         data: { templatesSyncedAt: new Date() },
       });
+      await ensureWallet(tx, w.orgId, 'INR');
+      await creditWallet(tx, { orgId: w.orgId, amountMicros: 1_000_000, idempotencyKey: 'seed' });
       return { conversationId: c.id };
     });
     const template = await submitted(w, {
@@ -643,6 +661,7 @@ describe('the inbox picker', () => {
 
     const res = await agent.get(`/inbox/conversations/${conversationId}/templates`);
     expect(res.status).toBe(200);
+    expect(res.body[0].cost).toEqual({ micros: 1, currency: 'INR' });
     expect(res.body[0].variables).toEqual([
       { key: 'body.1', label: 'Body {{1}}', value: 'Asha' },
       { key: 'body.2', label: 'Body {{2}}', value: 'gold' },

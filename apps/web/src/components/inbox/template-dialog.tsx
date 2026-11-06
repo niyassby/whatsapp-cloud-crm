@@ -3,6 +3,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import {
   canReceiveMarketing,
+  formatMoney,
   type InboxTemplateDto,
   isMarketingCategory,
   type MessageDto,
@@ -110,6 +111,11 @@ export function TemplateDialog({
                     <span className="line-clamp-2 text-sm text-muted-foreground">
                       {t.definition.body}
                     </span>
+                    {t.cost && t.cost.micros > 0 && (
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        Costs {formatMoney(t.cost.micros, t.cost.currency)}
+                      </span>
+                    )}
                     {consentBlocked ? (
                       <span className="mt-1 block text-xs text-destructive">
                         {optInStatus === 'opted_out'
@@ -128,6 +134,13 @@ export function TemplateDialog({
           </ul>
         ) : (
           <div className="grid gap-3">
+            {selected.cost && (
+              <p className="text-sm text-muted-foreground">
+                {selected.cost.micros > 0
+                  ? `This send costs ${formatMoney(selected.cost.micros, selected.cost.currency)} from your wallet.`
+                  : 'This send is free.'}
+              </p>
+            )}
             <TemplatePreview
               definition={selected.definition}
               values={Object.fromEntries(

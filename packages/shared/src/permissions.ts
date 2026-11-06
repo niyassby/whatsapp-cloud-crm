@@ -27,6 +27,8 @@ export const Permission = {
   TEMPLATES_READ: 'templates:read',
   TEMPLATES_MANAGE: 'templates:manage',
   CAMPAIGNS_MANAGE: 'campaigns:manage',
+  /** See the balance, ledger and usage. Changing wallet settings needs BILLING_MANAGE. */
+  WALLET_READ: 'wallet:read',
 } as const;
 export type Permission = (typeof Permission)[keyof typeof Permission];
 

@@ -61,6 +61,8 @@ pnpm db:migrate:deploy  # apply pending migrations only (CI / prod)
 pnpm db:roles           # dev/CI: create the DATABASE_URL login role as a member of app_user
 pnpm db:seed            # demo org "demo" with owner + agent (credentials in packages/db/prisma/seed.ts)
 pnpm db:studio
+pnpm rates:import <file.csv>                       # add rate cards: country,category,currency,rate,valid_from
+pnpm wallet:credit <org slug or id> <amount> "<reason>"   # manual balance adjustment
 pnpm --filter @wacrm/db run migrate:create -- --name <name>   # empty migration to hand-edit (RLS!)
 pnpm --filter @wacrm/api dev   # run a single app
 pnpm secrets:reencrypt  # key rotation: rewrite secrets still under an old ENCRYPTION_KEY
@@ -152,6 +154,22 @@ Setup steps for a real number: `infra/whatsapp-setup.md`.
 - Web: `/templates`, `/templates/new`, `/templates/[id]` (`TemplateForm` with live `TemplatePreview`). Status updates arrive over `template:updated`.
 - Tests: `packages/shared/src/templates.test.ts`, `apps/api/test/templates.test.ts` (scripted Graph), `apps/worker/test/templates.test.ts`, `packages/db/test/templates-tables.test.ts`, `e2e/templates.spec.ts`. The fake Meta approves templates by webhook, and rejects names ending in `_rejected`.
 
+## Wallet and rate cards (Phase 2.3)
+
+- Money is whole micro-units (1 unit = 1,000,000) in BIGINT, never floats. `decimalToMicros`, `microsToDecimal` and `formatMoney` are in `packages/shared/src/wallet.ts`. DTOs carry `*Micros` numbers.
+- `wallet_ledger` is the record of every movement: append-only (no UPDATE or DELETE grant), with the rate, country and category copied onto each entry. `wallets.balance_micros` is its running total. CHECK constraints refuse a negative balance, a hold above the balance, and a negative `balance_after`, even if the code were wrong.
+- All money moves through `packages/db/src/wallet.ts`, inside the transaction of what it pays for: `creditWallet`, `debitWallet`, `refundDebit`, `reserveFunds`, `releaseReservation`, `chargeMessage`. Each takes the row lock first (`SELECT ... FOR UPDATE`), so changes to one wallet happen one at a time. Each has an idempotency key, unique per org. There is deliberately no HTTP endpoint that adds or takes money.
+- Charging: `chargeMessage` runs in the transaction that creates the message, after the client-key claim, so a message and its charge exist together or not at all. A refused send rolls back and the same key can retry. `messageDebitKey(messageId)` is the debit's key.
+- What is charged: templates, at the rate for the recipient's country from the wa_id, falling back to `*`. Marketing and authentication always. Utility only outside the 24-hour window. Free-form replies are free, and keep working at zero balance. A chargeable send with no rate is refused (`RATE_NOT_CONFIGURED`), never given away. A zero rate is free.
+- Refunds: `refundDebit`, once per debit, carrying its rate and category. Triggered by any failure in `outbound.ts` (including an interrupted send and marketing refused at send time), a `failed` status webhook, `pricing.billable: false` on any status, and a failure to queue. Retries keep the charge until the last attempt.
+- Reservations (for 2.4 campaigns): `reserveFunds` lowers what is available without changing the balance; `debitWallet` with `reservationId` spends from it; `releaseReservation` returns the rest. Holds past `expires_at` are released on the next reservation, so a crashed campaign cannot strand money.
+- Rate cards: `rate_cards` has no org_id, since prices are the same for every org, and the app role can only read it. A new price is a new row with a later `valid_from`. `findRate` takes the newest in force. Load with `pnpm rates:import <file.csv>`. `packages/db/prisma/sample-rate-cards.csv` is sample data, not Meta's prices.
+- Manual credit: `pnpm wallet:credit <org slug or id> <amount> "<reason>"`, an operator tool using the owner connection, recorded as an `adjustment`. Top-ups through payments arrive in 2.5.
+- Low balance: `debitWallet` reports `crossedLowBalance` once per crossing (`low_balance_alerted_at`, cleared when the balance recovers). The API emails people with `BILLING_MANAGE` in the background, and the web shows `LowBalanceBanner`. The threshold starts at `WALLET_LOW_BALANCE_DEFAULT`.
+- Permissions: `WALLET_READ` (owners, admins), `BILLING_MANAGE` (owners) for settings.
+- Web: `/wallet`. Updates arrive over `wallet:updated`.
+- Tests: `packages/db/test/wallet.test.ts` (the acceptance test, 200 parallel debits with funds for 50. Removing the row lock makes it fail, which was checked), `apps/api/test/wallet.test.ts` (the same over HTTP), `apps/worker/test/wallet.test.ts` (refunds), `e2e/wallet.spec.ts`.
+
 ## Troubleshooting
 
 - Dev page reloads forever, with the terminal repeating `Compiled in Xms` and the browser getting `HMR hash mismatch`: the Turbopack dev cache is stale, which `next build` beside a dev server can cause. Stop the dev server and delete `apps/web/.next/dev`.
@@ -174,6 +192,7 @@ Validate with Zod at startup. Never commit real secrets. Keep `.env.example` cur
 - `QUEUE_PREFIX`, `WORKER_CONCURRENCY` (10), `WEBHOOK_RETENTION_DAYS` (30). An empty `KEY=` counts as unset
 - `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT` (address browsers use for signed links), `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
 - `OUTBOUND_MPS_PER_NUMBER` (80). The worker also needs `ENCRYPTION_KEY` and `META_GRAPH_API_VERSION`
+- `WALLET_DEFAULT_CURRENCY` (INR), `WALLET_LOW_BALANCE_DEFAULT` (100)
 - `RAZORPAY_*`, `STRIPE_*` for platform billing
 - `SENTRY_DSN`
 
@@ -229,7 +248,7 @@ The package is young and single-maintainer. Treat it as replaceable.
 Mark as phases complete.
 
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
-- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 to 2.6 to do). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
+- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 to 2.6 to do). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
 - [ ] Section 3: Automation, integrations, AI (3.1 to 3.7)
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
 
@@ -299,6 +318,12 @@ Add one line per decision: date, decision, reason.
 - 2026-11-06: The builder offers Marketing and Utility only. Authentication templates need OTP buttons and are shown as unsupported.
 - 2026-11-06: Link buttons always use {{1}}, even in templates with named variables. Meta's documentation of named link variables at creation is unclear, so check this on a real named template.
 - 2026-11-06: The header file stored on a template is what customers receive, with no per-send override yet.
+- 2026-11-06: Charged when a template is queued, not when Meta reports a billable status. Reason: the zero-balance block has to happen before sending. Meta's `pricing.billable: false` then refunds. The reverse case, Meta billing something estimated as free, is not charged.
+- 2026-11-06: Free replies still work at zero balance. "Block sends at zero balance" is applied to sends that cost money: Meta does not charge for replies inside the window, and blocking them would stop a business answering its customers.
+- 2026-11-06: A send interrupted by a crash is refunded, although Meta may have delivered it. Reason: when unknown, the customer should not pay. Costs the platform at most that message.
+- 2026-11-06: A chargeable send with no rate is refused, not sent for free. Reason: silently free sends lose real money.
+- 2026-11-06: One wallet currency per org, set at creation from `WALLET_DEFAULT_CURRENCY` (INR). Rate cards must exist in it.
+- 2026-11-06: A hot wallet serializes on its row lock. Inbox sends are low volume. Check this under campaign load in 2.4.
 
 ## Known gaps / TODO
 
@@ -320,6 +345,9 @@ Add one line per decision: date, decision, reason.
 - E2E import and export tests skip in CI, which has no S3 service.
 - Settings > WhatsApp shows the raw event type; friendlier labels can wait for the inbox.
 
-- Verify current Meta pricing, messaging limits and partner requirements before finalizing billing logic.
+- Real rate cards are not loaded. `sample-rate-cards.csv` is not Meta's pricing. Before charging anyone: build a CSV from Meta's current rate card with your margin, and run `pnpm rates:import`. Check how Meta's market groups map to countries.
+- Meta bills by its own rules, such as volume tiers, which flat per-country rates do not model. Reconcile against Meta's invoices.
+- No platform-admin screen for rate cards or manual credits: CLI only until Section 4.
+- Verify current Meta messaging limits and partner requirements.
 - Confirm pgvector is available on the chosen production Postgres host before Phase 3.7 (local image has pgvector 0.8.7).
 - Start Meta Business Verification and App Review early (needed for Embedded Signup at scale).

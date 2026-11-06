@@ -18,6 +18,8 @@
     "migrate:create": "prisma migrate dev --create-only",
     "roles": "tsx scripts/ensure-app-role.ts",
     "seed": "prisma db seed",
+    "rates:import": "tsx scripts/rates-import.ts",
+    "wallet:credit": "tsx scripts/wallet-credit.ts",
     "studio": "prisma studio",
     "clean": "rimraf dist .turbo src/generated"
   },

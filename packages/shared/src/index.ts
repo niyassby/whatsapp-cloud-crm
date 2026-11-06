@@ -8,4 +8,5 @@ export * from './queues';
 export * from './inbox';
 export * from './contacts';
 export * from './templates';
+export * from './wallet';
 export * from './realtime';

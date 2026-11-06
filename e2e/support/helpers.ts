@@ -1,6 +1,7 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import { execSync } from 'node:child_process';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { type Browser, expect, type Page } from '@playwright/test';
-import { API_URL, APP_SECRET } from './config.mjs';
+import { API_URL, APP_SECRET, DB_NAME } from './config.mjs';
 
 export const WABA_ID = '100000000000777';
 export const PHONE_ID = '200000000000888';
@@ -8,12 +9,18 @@ export const PASSWORD = 'e2e-test-password-1';
 
 const json = async (res: Response) => (res.status === 204 ? null : res.json());
 
-async function post(path: string, body: unknown, token?: string) {
+async function post(
+  path: string,
+  body: unknown,
+  token?: string,
+  extraHeaders: Record<string, string> = {},
+) {
   const res = await fetch(`${API_URL}${path}`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...extraHeaders,
     },
     body: JSON.stringify(body),
   });
@@ -21,20 +28,45 @@ async function post(path: string, body: unknown, token?: string) {
   return { status: res.status, data };
 }
 
+/** Through the operator tool, since payments arrive in a later phase. */
+export function creditWallet(orgId: string, amount: string) {
+  execSync(
+    `pnpm --filter @wacrm/db exec tsx scripts/wallet-credit.ts ${orgId} ${amount} "E2E balance"`,
+    {
+      env: {
+        ...process.env,
+        DIRECT_URL: `postgresql://wacrm:wacrm@127.0.0.1:5433/${DB_NAME}`,
+      },
+      stdio: 'pipe',
+    },
+  );
+}
+
 /** Workspace with a connected (fake) number and an invited agent. */
-export async function createWorkspace() {
+export async function createWorkspace(opts: { funded?: boolean } = {}) {
   const tag = randomUUID().slice(0, 8);
   const ownerEmail = `owner-${tag}@e2e.test`;
   const agentEmail = `agent-${tag}@e2e.test`;
 
-  const signup = await post('/auth/signup', {
-    name: 'Olivia Owner',
-    email: ownerEmail,
-    password: PASSWORD,
-    orgName: `E2E ${tag}`,
-  });
+  // Signups are limited per address, and repeat runs share that limit in Redis.
+  const signup = await post(
+    '/auth/signup',
+    {
+      name: 'Olivia Owner',
+      email: ownerEmail,
+      password: PASSWORD,
+      orgName: `E2E ${tag}`,
+    },
+    undefined,
+    { 'x-forwarded-for': `10.${randomBytes(3).join('.')}` },
+  );
   expect(signup.status).toBe(201);
   const token = signup.data.accessToken as string;
+
+  const me = await (
+    await fetch(`${API_URL}/auth/me`, { headers: { authorization: `Bearer ${token}` } })
+  ).json();
+  if (opts.funded !== false) creditWallet(me.currentOrg.id as string, '1000');
 
   // A number is live in one org at a time, so free it from any earlier test first.
   const connect = await post(
@@ -62,6 +94,7 @@ export async function createWorkspace() {
     ownerEmail,
     agentEmail,
     token,
+    orgId: me.currentOrg.id as string,
     wabaId: connect.data.wabaId as string,
     phoneId: connect.data.id as string,
     disconnect: async () => {

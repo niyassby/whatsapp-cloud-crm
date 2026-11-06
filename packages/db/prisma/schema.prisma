@@ -123,6 +123,19 @@ enum ContactJobStatus {
   failed
 }
 
+enum WalletEntryType {
+  credit
+  debit
+  refund
+  adjustment
+}
+
+enum WalletReservationStatus {
+  active
+  released
+  expired
+}
+
 enum AuthTokenType {
   email_verification
   password_reset
@@ -156,7 +169,7 @@ model Organization {
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(3)
 
-  partner       Partner?          @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  partner       Partner?            @relation(fields: [partnerId], references: [id], onDelete: SetNull)
   memberships   Membership[]
   apiKeys       ApiKey[]
   auditLogs     AuditLog[]
@@ -175,6 +188,9 @@ model Organization {
   segments      Segment[]
   contactJobs   ContactJob[]
   templates     MessageTemplate[]
+  wallet        Wallet?
+  walletEntries WalletLedger[]
+  walletHolds   WalletReservation[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -215,6 +231,7 @@ model User {
   segmentsCreated       Segment[]
   contactJobs           ContactJob[]
   templatesCreated      MessageTemplate[]
+  walletEntries         WalletLedger[]
 
   @@map("users")
 }
@@ -780,4 +797,107 @@ model MessageTemplate {
   @@index([orgId, metaTemplateId])
   @@index([orgId, createdAt(sort: Desc), id(sort: Desc)])
   @@map("message_templates")
+}
+
+/// One per org. balance_micros is the running total of wallet_ledger, kept so a check under the
+/// row lock does not add up history. CHECK constraints refuse a negative balance. All changes go
+/// through the functions in src/wallet.ts.
+model Wallet {
+  id                        String    @id @default(uuid(7)) @db.Uuid
+  orgId                     String    @unique @map("org_id") @db.Uuid
+  currency                  String
+  balanceMicros             BigInt    @default(0) @map("balance_micros")
+  /// Held for running campaigns. What new sends can use is balance minus this.
+  reservedMicros            BigInt    @default(0) @map("reserved_micros")
+  /// Null turns the alert off.
+  lowBalanceThresholdMicros BigInt?   @map("low_balance_threshold_micros")
+  /// Set when an alert went out, and cleared by a top-up, so each crossing alerts once.
+  lowBalanceAlertedAt       DateTime? @map("low_balance_alerted_at") @db.Timestamptz(3)
+  createdAt                 DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  entries      WalletLedger[]
+  reservations WalletReservation[]
+
+  @@map("wallets")
+}
+
+/// Append-only: the app role has no UPDATE or DELETE. The rate is copied onto each entry, so a
+/// later rate change cannot alter what a past message cost.
+model WalletLedger {
+  id                 String          @id @default(uuid(7)) @db.Uuid
+  orgId              String          @map("org_id") @db.Uuid
+  walletId           String          @map("wallet_id") @db.Uuid
+  type               WalletEntryType
+  /// Positive adds to the balance. Negative takes from it.
+  amountMicros       BigInt          @map("amount_micros")
+  balanceAfterMicros BigInt          @map("balance_after_micros")
+  /// message, campaign, payment, manual, ...
+  referenceType      String?         @map("reference_type")
+  referenceId        String?         @map("reference_id")
+  /// The same key never applies twice in one org.
+  idempotencyKey     String          @map("idempotency_key")
+  description        String?
+  actorUserId        String?         @map("actor_user_id") @db.Uuid
+  rateCardId         String?         @map("rate_card_id") @db.Uuid
+  rateMicros         BigInt?         @map("rate_micros")
+  country            String?
+  category           String?
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  wallet       Wallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  actor        User?        @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  rateCard     RateCard?    @relation(fields: [rateCardId], references: [id], onDelete: SetNull)
+
+  @@unique([orgId, idempotencyKey])
+  @@index([orgId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([orgId, category, createdAt])
+  @@index([orgId, referenceType, referenceId])
+  @@map("wallet_ledger")
+}
+
+/// Funds held for a campaign. They stay in the balance until a send uses them.
+model WalletReservation {
+  id             String                  @id @default(uuid(7)) @db.Uuid
+  orgId          String                  @map("org_id") @db.Uuid
+  walletId       String                  @map("wallet_id") @db.Uuid
+  amountMicros   BigInt                  @map("amount_micros")
+  consumedMicros BigInt                  @default(0) @map("consumed_micros")
+  status         WalletReservationStatus @default(active)
+  referenceType  String                  @map("reference_type")
+  referenceId    String                  @map("reference_id")
+  idempotencyKey String                  @map("idempotency_key")
+  /// A hold left by a crashed campaign goes back after this.
+  expiresAt      DateTime                @map("expires_at") @db.Timestamptz(3)
+  releasedAt     DateTime?               @map("released_at") @db.Timestamptz(3)
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  wallet       Wallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, idempotencyKey])
+  @@index([walletId, status, expiresAt])
+  @@map("wallet_reservations")
+}
+
+/// Platform prices, the same for every org, so no org_id. The app role can only read them.
+/// Versioned: a new price is a new row with a later valid_from, and rows are never changed.
+model RateCard {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  /// Two-letter country code, or * for any country with no rate of its own.
+  country    String
+  /// marketing, utility, authentication, service
+  category   String
+  currency   String
+  rateMicros BigInt   @map("rate_micros")
+  validFrom  DateTime @map("valid_from") @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  entries WalletLedger[]
+
+  @@unique([country, category, currency, validFrom])
+  @@index([currency, category, country, validFrom(sort: Desc)])
+  @@map("rate_cards")
 }

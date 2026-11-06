@@ -34,6 +34,8 @@ export const AuditAction = {
   OPT_OUT_KEYWORDS_CHANGED: 'contact.opt_out_keywords_changed',
   TEMPLATE_SUBMITTED: 'template.submitted',
   TEMPLATE_DELETED: 'template.deleted',
+  WALLET_SETTINGS_CHANGED: 'wallet.settings_changed',
+  WALLET_EXPORTED: 'wallet.exported',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 

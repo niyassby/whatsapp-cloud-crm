@@ -8,11 +8,14 @@
  * Runs through withTenant so it works under FORCE ROW LEVEL SECURITY on hosts where the
  * owner is not a superuser.
  */
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { config as loadDotenv } from 'dotenv';
 import { hash } from '@node-rs/argon2';
 import { createPrismaClient } from '../src/client';
+import { parseRateCsv } from '../scripts/rates-import';
 import { withDbContext, withTenant } from '../src/tenant';
+import { creditWallet, ensureWallet } from '../src/wallet';
 
 loadDotenv({ path: path.resolve(__dirname, '../../../.env'), quiet: true });
 
@@ -61,6 +64,20 @@ async function main() {
       }
       await tx.auditLog.create({
         data: { orgId: DEMO_ORG_ID, actorUserId: DEMO_OWNER_ID, action: 'seed.run' },
+      });
+    });
+    // Sample prices and some money, so sending works out of the box in development.
+    const sample = readFileSync(path.resolve(__dirname, 'sample-rate-cards.csv'), 'utf8');
+    await prisma.rateCard.createMany({ data: parseRateCsv(sample), skipDuplicates: true });
+    await withTenant(prisma, { orgId: DEMO_ORG_ID }, async (tx) => {
+      await ensureWallet(tx, DEMO_ORG_ID, 'INR');
+      await creditWallet(tx, {
+        orgId: DEMO_ORG_ID,
+        type: 'adjustment',
+        amountMicros: 1_000_000_000,
+        referenceType: 'manual',
+        idempotencyKey: 'seed:demo-credit',
+        description: 'Demo balance',
       });
     });
     console.log('Seeded demo org (slug: demo) with owner and agent.');

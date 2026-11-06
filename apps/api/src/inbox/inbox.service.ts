@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
+  chargeMessage,
   conversationInclude,
   conversationToDto,
   messageInclude,
   messageToDto,
   type Prisma,
+  refundDebit,
   type TenantTx,
 } from '@wacrm/db';
 import {
@@ -28,6 +30,7 @@ import {
   type ListConversationsQuery,
   type MediaUrlDto,
   mediaRuleFor,
+  messageDebitKey,
   type MessageDto,
   messagePreview,
   Permission,
@@ -40,13 +43,14 @@ import {
   templateVariables,
   type UpdateConversationInput,
 } from '@wacrm/shared';
-import { mediaKey, type ObjectStorage } from '@wacrm/shared/server';
+import { countryOfWaId, mediaKey, type ObjectStorage } from '@wacrm/shared/server';
 import { OBJECT_STORAGE } from '../infra/infra.tokens';
 import { QueuesService } from '../infra/queues.service';
 import { decodeCursor, encodeCursor } from '../orgs/cursor';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { TenantPrismaService } from '../tenancy/tenant-prisma.service';
 import { contactForTemplate, TemplatesService } from '../templates/templates.service';
+import { WalletService } from '../wallet/wallet.service';
 
 export interface InboxActor {
   userId: string;
@@ -63,7 +67,12 @@ interface OutboundDraft {
   content?: Prisma.InputJsonValue;
   messageId?: string;
   media?: { key: string; mime: string; size: number; filename: string | null };
+  /** A template's category, and what decides its price. Free-form replies have none. */
+  charge?: { category: string; waId: string; windowOpen: boolean };
 }
+
+const isOpen = (windowExpiresAt: Date | null) =>
+  windowExpiresAt !== null && windowExpiresAt > new Date();
 
 @Injectable()
 export class InboxService {
@@ -74,6 +83,7 @@ export class InboxService {
     private readonly queues: QueuesService,
     private readonly realtime: RealtimeGateway,
     private readonly templates: TemplatesService,
+    private readonly wallet: WalletService,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
   ) {}
 
@@ -287,7 +297,7 @@ export class InboxService {
       });
     }
 
-    const { phone, contact } = await this.loadForSend(conversationId, false);
+    const { phone, contact, windowExpiresAt } = await this.loadForSend(conversationId, false);
     const template = await this.db.run((tx) =>
       tx.messageTemplate.findFirst({
         where: { id: input.templateId, wabaAccountId: phone.wabaAccountId },
@@ -352,6 +362,11 @@ export class InboxService {
         category: template.category,
         ...(mediaHeader ? { headerKind: headerMediaKind(mediaHeader.format) } : {}),
       } as unknown as Prisma.InputJsonValue,
+      charge: {
+        category: template.category,
+        waId: contact.waId,
+        windowOpen: isOpen(windowExpiresAt),
+      },
       ...(mediaHeader && template.headerMediaKey
         ? {
             media: {
@@ -425,49 +440,68 @@ export class InboxService {
     const createdAt = new Date();
     const preview = messagePreview(draft.type, draft.body);
 
-    const saved = await this.db.run(async (tx) => {
-      const claim = await tx.messageRef.createMany({
-        data: {
-          orgId: actor.orgId,
-          kind: 'client',
-          ref: draft.clientMessageId,
-          messageId,
-          messageCreatedAt: createdAt,
-        },
-        skipDuplicates: true,
-      });
-      if (claim.count === 0) return null;
-      const message = await tx.message.create({
-        data: {
-          id: messageId,
-          createdAt,
-          orgId: actor.orgId,
-          conversationId,
-          direction: 'outbound',
-          type: draft.type,
-          status: 'queued',
-          body: draft.body,
-          content: draft.content,
-          senderUserId: actor.userId,
-          ...(draft.media
-            ? {
-                mediaKey: draft.media.key,
-                mediaMime: draft.media.mime,
-                mediaSize: draft.media.size,
-                mediaFilename: draft.media.filename,
-                mediaStatus: 'stored' as const,
-              }
-            : {}),
-        },
-        include: messageInclude,
-      });
-      const conversation = await tx.conversation.update({
-        where: { id: conversationId },
-        data: { lastMessageAt: createdAt, lastMessagePreview: preview, status: 'open' },
-        include: conversationInclude,
-      });
-      return { message, conversation };
-    });
+    const saved = await this.db.run(
+      async (tx) => {
+        const claim = await tx.messageRef.createMany({
+          data: {
+            orgId: actor.orgId,
+            kind: 'client',
+            ref: draft.clientMessageId,
+            messageId,
+            messageCreatedAt: createdAt,
+          },
+          skipDuplicates: true,
+        });
+        if (claim.count === 0) return null;
+        // Refused for lack of funds or a price: this rolls back, so the same key can try again.
+        const charged = draft.charge
+          ? await chargeMessage(tx, {
+              orgId: actor.orgId,
+              messageId,
+              category: draft.charge.category,
+              country: countryOfWaId(draft.charge.waId),
+              windowOpen: draft.charge.windowOpen,
+              defaults: this.wallet.defaults,
+            })
+          : null;
+        const message = await tx.message.create({
+          data: {
+            id: messageId,
+            createdAt,
+            orgId: actor.orgId,
+            conversationId,
+            direction: 'outbound',
+            type: draft.type,
+            status: 'queued',
+            body: draft.body,
+            content: draft.content,
+            senderUserId: actor.userId,
+            ...(draft.media
+              ? {
+                  mediaKey: draft.media.key,
+                  mediaMime: draft.media.mime,
+                  mediaSize: draft.media.size,
+                  mediaFilename: draft.media.filename,
+                  mediaStatus: 'stored' as const,
+                }
+              : {}),
+          },
+          include: messageInclude,
+        });
+        const conversation = await tx.conversation.update({
+          where: { id: conversationId },
+          data: { lastMessageAt: createdAt, lastMessagePreview: preview, status: 'open' },
+          include: conversationInclude,
+        });
+        return { message, conversation, charged };
+        // Longer than the default: a charge may queue behind others on the wallet's row lock.
+      },
+      { timeout: 20_000 },
+    );
+    if (saved?.charged) {
+      this.wallet.changed(actor.orgId);
+      if (saved.charged.crossedLowBalance) this.wallet.alertLowBalance(actor.orgId);
+    }
     if (!saved) {
       const existing = await this.findByClientId(draft.clientMessageId);
       if (!existing) throw new AppError(ErrorCode.INTERNAL, 'Could not load the message');
@@ -487,8 +521,13 @@ export class InboxService {
     } catch (err) {
       // Never leave a message stuck as "queued": show the agent it did not go out.
       this.logger.error(`could not queue a message: ${String(err)}`);
-      const failed = await this.db.run((tx) =>
-        tx.message.update({
+      const failed = await this.db.run(async (tx) => {
+        await refundDebit(tx, {
+          orgId: actor.orgId,
+          debitKey: messageDebitKey(messageId),
+          description: 'Could not be queued',
+        });
+        return tx.message.update({
           where: { id_createdAt: { id: messageId, createdAt } },
           data: {
             status: 'failed',
@@ -497,8 +536,9 @@ export class InboxService {
             failedAt: new Date(),
           },
           include: messageInclude,
-        }),
-      );
+        });
+      });
+      if (saved.charged) this.wallet.changed(actor.orgId);
       dto = messageToDto(failed);
       this.realtime.emit(actor.orgId, 'message:updated', { message: dto });
     }
@@ -575,11 +615,12 @@ export class InboxService {
   // ------------------------------------------------------------------ templates
 
   async listTemplates(actor: InboxActor, conversationId: string): Promise<InboxTemplateDto[]> {
-    const { phone, contact } = await this.loadForSend(conversationId, false);
+    const { phone, contact, windowExpiresAt } = await this.loadForSend(conversationId, false);
     return this.templates.forConversation(
       actor.orgId,
       phone.wabaAccountId,
       contactForTemplate(contact),
+      isOpen(windowExpiresAt),
     );
   }
 

@@ -1,21 +1,30 @@
 'use client';
 
-import { FileText, Inbox, MessageCircle, Settings, Users } from 'lucide-react';
+import { Permission } from '@wacrm/shared';
+import { FileText, Inbox, MessageCircle, Settings, Users, Wallet } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useMe } from '@/lib/queries';
 import { cn } from '@/lib/utils';
+import { LowBalanceBanner } from './low-balance-banner';
 import { NoOrg } from './no-org';
 import { OrgSwitcher } from './org-switcher';
 import { UserMenu } from './user-menu';
 import { VerifyEmailBanner } from './verify-email-banner';
 
-const NAV: { href: string; label: string; icon: typeof Inbox; soon?: boolean }[] = [
+const NAV: {
+  href: string;
+  label: string;
+  icon: typeof Inbox;
+  soon?: boolean;
+  permission?: Permission;
+}[] = [
   { href: '/inbox', label: 'Inbox', icon: Inbox },
   { href: '/contacts', label: 'Contacts', icon: Users },
   { href: '/templates', label: 'Templates', icon: FileText },
+  { href: '/wallet', label: 'Wallet', icon: Wallet, permission: Permission.WALLET_READ },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -34,31 +43,33 @@ export function AppShell({ children }: { children: ReactNode }) {
           WhatsApp CRM
         </div>
         <nav className="flex flex-1 flex-col gap-1 p-2" aria-label="Main">
-          {NAV.map(({ href, label, icon: Icon, soon }) => {
-            const active = pathname === href || pathname.startsWith(`${href}/`);
-            return soon ? (
-              <span
-                key={href}
-                className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground/60"
-                aria-disabled
-              >
-                <Icon className="size-4" aria-hidden /> {label}
-                <span className="ml-auto text-[10px] uppercase tracking-wide">Soon</span>
-              </span>
-            ) : (
-              <Link
-                key={href}
-                href={href}
-                aria-current={active ? 'page' : undefined}
-                className={cn(
-                  'flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors hover:bg-sidebar-accent',
-                  active && 'bg-sidebar-accent font-medium text-sidebar-accent-foreground',
-                )}
-              >
-                <Icon className="size-4" aria-hidden /> {label}
-              </Link>
-            );
-          })}
+          {NAV.filter((n) => !n.permission || me.data?.permissions.includes(n.permission)).map(
+            ({ href, label, icon: Icon, soon }) => {
+              const active = pathname === href || pathname.startsWith(`${href}/`);
+              return soon ? (
+                <span
+                  key={href}
+                  className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground/60"
+                  aria-disabled
+                >
+                  <Icon className="size-4" aria-hidden /> {label}
+                  <span className="ml-auto text-[10px] uppercase tracking-wide">Soon</span>
+                </span>
+              ) : (
+                <Link
+                  key={href}
+                  href={href}
+                  aria-current={active ? 'page' : undefined}
+                  className={cn(
+                    'flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors hover:bg-sidebar-accent',
+                    active && 'bg-sidebar-accent font-medium text-sidebar-accent-foreground',
+                  )}
+                >
+                  <Icon className="size-4" aria-hidden /> {label}
+                </Link>
+              );
+            },
+          )}
         </nav>
       </aside>
 
@@ -68,6 +79,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           {me.data ? <UserMenu me={me.data} /> : <Skeleton className="size-8 rounded-full" />}
         </header>
         {me.data && !me.data.user.emailVerified && <VerifyEmailBanner email={me.data.user.email} />}
+        <LowBalanceBanner />
         <main className="min-h-0 flex-1 overflow-auto p-6">
           {me.isPending ? (
             <Skeleton className="h-40 w-full" />

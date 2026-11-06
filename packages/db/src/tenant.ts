@@ -36,6 +36,12 @@ export class InvalidDbContextError extends Error {
 type TransactionCapable = Pick<PrismaClient, '$transaction'>;
 
 /**
+ * How long a transaction may wait for a free connection. Prisma's default of 2 seconds turned a
+ * short burst of traffic into server errors, when waiting a little longer would have worked.
+ */
+const DEFAULT_MAX_WAIT_MS = 10_000;
+
+/**
  * Run `fn` in a transaction with the given RLS context applied via
  * set_config(name, value, is_local => true), which is equivalent to SET LOCAL:
  * the settings vanish when the transaction ends, so pooled connections never leak a tenant.
@@ -52,13 +58,16 @@ export async function withDbContext<T>(
   }
   const { orgId = '', userId = '', partnerId = '' } = parsed.data;
 
-  return client.$transaction(async (tx) => {
-    await tx.$queryRaw`
+  return client.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`
       SELECT set_config('app.org_id', ${orgId}, true),
              set_config('app.user_id', ${userId}, true),
              set_config('app.partner_id', ${partnerId}, true)`;
-    return fn(tx);
-  }, options);
+      return fn(tx);
+    },
+    { maxWait: DEFAULT_MAX_WAIT_MS, ...options },
+  );
 }
 
 /** Like withDbContext, but an org is mandatory. Use this for all tenant-scoped work. */

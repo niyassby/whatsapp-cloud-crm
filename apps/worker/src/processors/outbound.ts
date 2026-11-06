@@ -1,9 +1,10 @@
-import { messageInclude, messageToDto, type Prisma, withTenant } from '@wacrm/db';
+import { messageInclude, messageToDto, refundDebit, withTenant } from '@wacrm/db';
 import type { OutboundJob } from '@wacrm/shared';
 import {
   canReceiveMarketing,
   ErrorCode,
   isMarketingCategory,
+  messageDebitKey,
   WhatsAppErrorCode,
 } from '@wacrm/shared';
 import type {
@@ -45,19 +46,27 @@ export async function sendOutboundMessage(
   const { orgId, messageId } = job;
   const where = { id_createdAt: { id: messageId, createdAt: new Date(job.createdAt) } };
 
-  const finish = async (data: Prisma.MessageUpdateInput) => {
-    const row = await withTenant(deps.db, { orgId }, (tx) =>
-      tx.message.update({ where, data, include: messageInclude }),
-    );
-    deps.publisher.emit(orgId, 'message:updated', { message: messageToDto(row) });
-  };
   const fail = async (code: string, message: string): Promise<OutboundOutcome> => {
-    await finish({
-      status: 'failed',
-      errorCode: code,
-      errorMessage: message.slice(0, 1000),
-      failedAt: new Date(),
-    });
+    // Together: a failed message and its refund are one change.
+    const { row, refund } = await withTenant(deps.db, { orgId }, async (tx) => ({
+      refund: await refundDebit(tx, {
+        orgId,
+        debitKey: messageDebitKey(messageId),
+        description: message.slice(0, 200),
+      }),
+      row: await tx.message.update({
+        where,
+        data: {
+          status: 'failed',
+          errorCode: code,
+          errorMessage: message.slice(0, 1000),
+          failedAt: new Date(),
+        },
+        include: messageInclude,
+      }),
+    }));
+    deps.publisher.emit(orgId, 'message:updated', { message: messageToDto(row) });
+    if (refund.applied) deps.publisher.emit(orgId, 'wallet:updated', {});
     return 'failed';
   };
 

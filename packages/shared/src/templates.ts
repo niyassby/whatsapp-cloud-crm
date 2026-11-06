@@ -485,6 +485,8 @@ export interface InboxTemplateDto {
   definition: TemplateDefinition;
   samples: Record<string, string>;
   variables: InboxTemplateVariable[];
+  /** What this send costs to this contact right now. Zero when Meta does not bill it. */
+  cost: { micros: number; currency: string } | null;
   /** Set when this template cannot be sent yet, with what is missing. */
   sendIssue: string | null;
 }

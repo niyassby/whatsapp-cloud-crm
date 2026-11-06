@@ -18,6 +18,7 @@ import { env } from '@/lib/env';
 import { applyConversationUpdate, inboxKeys, upsertMessage } from '@/lib/inbox';
 import { queryKeys, useMe } from '@/lib/queries';
 import { templateKeys } from '@/lib/templates';
+import { walletKeys } from '@/lib/wallet';
 
 type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -94,6 +95,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: inboxKeys.all });
       void queryClient.invalidateQueries({ queryKey: contactKeys.all });
       void queryClient.invalidateQueries({ queryKey: templateKeys.all });
+      void queryClient.invalidateQueries({ queryKey: walletKeys.all });
     });
     socket.on('disconnect', (reason) => {
       useRealtime.setState({ connected: false });
@@ -136,6 +138,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         void queryClient.invalidateQueries({ queryKey: ['contacts', 'count'] });
         void queryClient.invalidateQueries({ queryKey: contactKeys.tags });
       }
+    });
+    socket.on('wallet:updated', () => {
+      void queryClient.invalidateQueries({ queryKey: walletKeys.all });
     });
     socket.on('template:updated', () => {
       void queryClient.invalidateQueries({ queryKey: templateKeys.all });

@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { normalizePhone } from './phone';
+import { countryOfWaId, normalizePhone } from './phone';
+
+describe('countryOfWaId', () => {
+  it('finds the country that sets the price', () => {
+    expect(countryOfWaId('919876543210')).toBe('IN');
+    expect(countryOfWaId('14155552671')).toBe('US');
+    expect(countryOfWaId('5511987654321')).toBe('BR');
+  });
+  it('gives null when it cannot tell', () => {
+    expect(countryOfWaId('123')).toBeNull();
+    expect(countryOfWaId('')).toBeNull();
+  });
+});
 
 describe('normalizePhone', () => {
   it.each([
