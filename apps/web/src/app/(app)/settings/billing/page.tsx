@@ -243,7 +243,9 @@ function PlanPicker({ summary, canManage }: { summary: BillingSummaryDto; canMan
                 {PLAN_LIMITS.map((limit) => (
                   <li key={limit}>
                     {plan[limit] === null ? 'Unlimited' : plan[limit]?.toLocaleString()}{' '}
-                    {PLAN_LIMIT_LABELS[limit]}
+                    {plan[limit] === 1
+                      ? PLAN_LIMIT_LABELS[limit].replace(/s$/, '')
+                      : PLAN_LIMIT_LABELS[limit]}
                   </li>
                 ))}
                 {plan.features.map((f) => (

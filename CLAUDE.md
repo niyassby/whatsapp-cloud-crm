@@ -64,7 +64,7 @@ pnpm db:seed            # demo org "demo" with owner + agent (credentials in pac
 pnpm db:studio
 pnpm rates:import <file.csv>                       # add rate cards: country,category,currency,rate,valid_from
 pnpm wallet:credit <org slug or id> <amount> "<reason>"   # manual balance adjustment
-pnpm plans:import <file.json>                      # plans and prices; see packages/db/prisma/sample-plans.json
+pnpm plans:import prisma/sample-plans.json         # plans and prices; path is relative to packages/db
 pnpm --filter @wacrm/db run migrate:create -- --name <name>   # empty migration to hand-edit (RLS!)
 pnpm --filter @wacrm/api dev   # run a single app
 pnpm secrets:reencrypt  # key rotation: rewrite secrets still under an old ENCRYPTION_KEY
