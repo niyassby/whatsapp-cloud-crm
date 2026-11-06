@@ -36,7 +36,10 @@ export interface WhatsAppGateway {
     templateId: string,
     patch: UpdateTemplateInput,
   ): Promise<GatewayResult<{ success: boolean }>>;
-  deleteTemplate(nameOrId: string): Promise<GatewayResult<{ success: boolean }>>;
+  /** Deletes one language of a template. Meta's name-only form would delete all of them. */
+  deleteTemplate(input: DeleteTemplateInput): Promise<GatewayResult<{ success: boolean }>>;
+  /** Upload a media header sample for review. Returns the handle Meta asks for on create. */
+  uploadTemplateSample(input: UploadMediaInput): Promise<GatewayResult<{ handle: string }>>;
 
   // ---------------------------------------------------------------- media
   uploadMedia(input: UploadMediaInput): Promise<GatewayResult<{ mediaId: string }>>;
@@ -70,7 +73,8 @@ export interface SendTextInput {
 }
 
 export interface TemplateParameter {
-  type: 'text' | 'currency' | 'date_time' | 'image' | 'document' | 'video' | 'payload';
+  type:
+    'text' | 'currency' | 'date_time' | 'image' | 'document' | 'video' | 'payload' | 'coupon_code';
   text?: string;
   /** Required for templates created with named parameters. */
   parameterName?: string;
@@ -80,7 +84,7 @@ export interface TemplateParameter {
 
 export interface TemplateComponentInput {
   type: 'header' | 'body' | 'button';
-  subType?: 'quick_reply' | 'url';
+  subType?: 'quick_reply' | 'url' | 'copy_code';
   index?: number;
   parameters: TemplateParameter[];
 }
@@ -143,6 +147,8 @@ export interface MessageTemplate {
   status: string;
   components: TemplateComponentDefinition[];
   rejectedReason?: string;
+  qualityScore?: string;
+  parameterFormat?: string;
 }
 
 export interface ListTemplatesInput {
@@ -174,6 +180,12 @@ export interface CreatedTemplate {
 export interface UpdateTemplateInput {
   category?: TemplateCategory;
   components?: TemplateComponentDefinition[];
+  parameterFormat?: 'positional' | 'named';
+}
+
+export interface DeleteTemplateInput {
+  name: string;
+  templateId: string;
 }
 
 export interface UploadMediaInput {

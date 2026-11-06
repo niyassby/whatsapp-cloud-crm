@@ -41,6 +41,47 @@ const TEMPLATES = [
   },
 ];
 
+/** Templates created through the app, approved a moment later, as Meta's review would. */
+const created = [];
+
+async function postSigned(payload) {
+  const body = JSON.stringify(payload);
+  const signature = createHmac('sha256', APP_SECRET).update(body).digest('hex');
+  await fetch(`${API_URL}/webhooks/meta`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-hub-signature-256': `sha256=${signature}` },
+    body,
+  }).catch((err) => console.error('webhook failed', err));
+}
+
+/** A template named *_rejected is refused, so both outcomes can be tested. */
+function afterTemplateCreate(wabaId, template) {
+  const rejected = template.name.endsWith('_rejected');
+  setTimeout(() => {
+    void postSigned({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: wabaId,
+          time: Math.floor(Date.now() / 1000) + 1,
+          changes: [
+            {
+              field: 'message_template_status_update',
+              value: {
+                event: rejected ? 'REJECTED' : 'APPROVED',
+                message_template_id: Number(template.id),
+                message_template_name: template.name,
+                message_template_language: template.language,
+                reason: rejected ? 'PROMOTIONAL' : 'NONE',
+              },
+            },
+          ],
+        },
+      ],
+    });
+  }, 300);
+}
+
 async function postStatus(wabaId, phoneId, status) {
   const body = JSON.stringify({
     object: 'whatsapp_business_account',
@@ -100,7 +141,25 @@ http
     if (isWaba(id)) {
       if (sub === 'phone_numbers') return send({ data: [phoneInfo('200000000000888')] });
       if (sub === 'subscribed_apps') return send({ success: true });
-      if (sub === 'message_templates') return send({ data: TEMPLATES });
+      if (sub === 'message_templates') {
+        if (req.method === 'POST') {
+          const input = JSON.parse(raw.toString('utf8'));
+          const template = {
+            ...input,
+            id: String(Math.floor(Math.random() * 1e12) + 1e12),
+            status: 'PENDING',
+          };
+          created.push(template);
+          afterTemplateCreate(id, template);
+          return send({ id: template.id, status: 'PENDING', category: input.category });
+        }
+        if (req.method === 'DELETE') {
+          const at = created.findIndex((t) => t.id === url.searchParams.get('hsm_id'));
+          if (at >= 0) created.splice(at, 1);
+          return send({ success: true });
+        }
+        return send({ data: [...TEMPLATES, ...created] });
+      }
       return send({ id, name: 'E2E WABA', currency: 'INR', timezone_id: '53' });
     }
     if (isPhone(id)) {
@@ -118,6 +177,16 @@ http
       if (sub === 'register') return send({ success: true });
       return send(phoneInfo(id));
     }
+    // Editing a template.
+    if (created.some((t) => t.id === id) && req.method === 'POST') {
+      const template = created.find((t) => t.id === id);
+      Object.assign(template, JSON.parse(raw.toString('utf8')));
+      afterTemplateCreate('100000000000777', template);
+      return send({ success: true });
+    }
+    // Resumable upload of a template sample.
+    if (sub === 'uploads') return send({ id: 'upload:e2e-session' });
+    if (id?.startsWith('upload:')) return send({ h: '4::e2e-handle' });
     // Inbound media: metadata, then bytes. A 1x1 PNG.
     if (id?.startsWith('inbound-media')) {
       return send({

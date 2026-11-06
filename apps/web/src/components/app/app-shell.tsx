@@ -1,6 +1,6 @@
 'use client';
 
-import { Inbox, MessageCircle, Settings, Users } from 'lucide-react';
+import { FileText, Inbox, MessageCircle, Settings, Users } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
@@ -15,6 +15,7 @@ import { VerifyEmailBanner } from './verify-email-banner';
 const NAV: { href: string; label: string; icon: typeof Inbox; soon?: boolean }[] = [
   { href: '/inbox', label: 'Inbox', icon: Inbox },
   { href: '/contacts', label: 'Contacts', icon: Users },
+  { href: '/templates', label: 'Templates', icon: FileText },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 

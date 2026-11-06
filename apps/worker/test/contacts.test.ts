@@ -498,7 +498,7 @@ describe('marketing at send time', () => {
           direction: 'outbound',
           type: 'template',
           status: 'queued',
-          content: { templateName: 'promo', language: 'en', bodyParams: [], category },
+          content: { templateName: 'promo', language: 'en', components: [], category },
         },
       });
     });

@@ -4,6 +4,7 @@ import { type GatewayResult, mapError, result } from './errors';
 import type {
   CreatedTemplate,
   CreateTemplateInput,
+  DeleteTemplateInput,
   DownloadedMedia,
   ListTemplatesInput,
   MediaInfo,
@@ -165,12 +166,9 @@ export class WapiCloudGateway implements WhatsAppGateway {
     return convert(await this.sdk.messages.sendInteractive(to, input, sdkOpts(opts)), sent);
   }
 
-  async listTemplates(params?: ListTemplatesInput): Promise<GatewayResult<TemplatePage>> {
-    const res = await this.sdk.templates.list(params as never);
-    return convert(res, (page) => ({
-      items: page.items.map(toTemplate),
-      nextCursor: page.pageInfo.nextCursor,
-    }));
+  /** Through Graph directly: the SDK cannot ask for rejection reasons and quality scores. */
+  listTemplates(params?: ListTemplatesInput): Promise<GatewayResult<TemplatePage>> {
+    return this.graph.listTemplates(this.wabaId, this.token, params);
   }
 
   async getTemplate(templateId: string) {
@@ -189,12 +187,20 @@ export class WapiCloudGateway implements WhatsAppGateway {
   }
 
   async updateTemplate(templateId: string, patch: UpdateTemplateInput) {
-    const res = await this.sdk.templates.update(templateId, patch as unknown as SdkUpdateTemplate);
+    const res = await this.sdk.templates.update(templateId, {
+      ...(patch.category ? { category: patch.category } : {}),
+      ...(patch.components ? { components: patch.components } : {}),
+      ...(patch.parameterFormat ? { parameter_format: patch.parameterFormat } : {}),
+    } as unknown as SdkUpdateTemplate);
     return convert(res, (d) => d);
   }
 
-  async deleteTemplate(nameOrId: string) {
-    return convert(await this.sdk.templates.delete(nameOrId), (d) => d);
+  deleteTemplate(input: DeleteTemplateInput) {
+    return this.graph.deleteTemplate(this.wabaId, input, this.token);
+  }
+
+  uploadTemplateSample(input: UploadMediaInput) {
+    return this.graph.uploadTemplateSample(input, this.token);
   }
 
   async uploadMedia(input: UploadMediaInput) {

@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { createPrismaClient, type DbClient, withTenant } from '@wacrm/db';
 import { testDbUrls } from '@wacrm/db/testing';
-import type { MediaDownloadJob, RealtimePublisher, TenantEventMap } from '@wacrm/shared';
+import type {
+  MediaDownloadJob,
+  RealtimePublisher,
+  TemplateSyncJob,
+  TenantEventMap,
+} from '@wacrm/shared';
 import { MemoryStorage } from '@wacrm/shared/server';
 import { WhatsAppClientFactory, type WhatsAppError, type WhatsAppGateway } from '@wacrm/whatsapp';
 import type { WorkerDeps } from '../src/deps';
@@ -34,6 +39,8 @@ export const metaError = (over: Partial<WhatsAppError> = {}): WhatsAppError => (
 /** A gateway whose responses each test scripts. Records every call. */
 export function fakeGateway(phoneNumberId = 'p') {
   const calls: { method: string; args: unknown[] }[] = [];
+  const templates: unknown[] = [];
+  let templateError: unknown = null;
   let sendResult: () => unknown = () => ({
     data: { messageId: `wamid.OUT.${randomUUID()}`, waId: '919800000001' },
     error: null,
@@ -49,6 +56,10 @@ export function fakeGateway(phoneNumberId = 'p') {
     wabaId: 'w',
     sendText: send('sendText'),
     sendTemplate: send('sendTemplate'),
+    listTemplates: async (input: unknown) => {
+      calls.push({ method: 'listTemplates', args: [input] });
+      return { data: { items: templates }, error: templateError };
+    },
     sendMedia: send('sendMedia'),
     uploadMedia: async (input: unknown) => {
       calls.push({ method: 'uploadMedia', args: [input] });
@@ -62,6 +73,11 @@ export function fakeGateway(phoneNumberId = 'p') {
   return {
     gateway,
     calls,
+    /** What listTemplates answers with. */
+    templates,
+    failListing: (error: unknown) => {
+      templateError = error;
+    },
     respondWith: (fn: () => unknown) => {
       sendResult = fn;
     },
@@ -72,6 +88,7 @@ export function buildDeps(client: DbClient) {
   const publisher = new RecordingPublisher();
   const storage = new MemoryStorage();
   const media: MediaDownloadJob[] = [];
+  const syncs: TemplateSyncJob[] = [];
   const fake = fakeGateway();
   const deps: WorkerDeps = {
     db: client,
@@ -85,8 +102,11 @@ export function buildDeps(client: DbClient) {
     enqueueMediaDownload: async (job) => {
       media.push(job);
     },
+    enqueueTemplateSync: async (job) => {
+      syncs.push(job);
+    },
   };
-  return { deps, publisher, storage, media, fake };
+  return { deps, publisher, storage, media, syncs, fake };
 }
 
 export async function createOrg(client: DbClient) {

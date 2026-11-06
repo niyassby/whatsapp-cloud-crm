@@ -156,7 +156,7 @@ model Organization {
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(3)
 
-  partner       Partner?       @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  partner       Partner?          @relation(fields: [partnerId], references: [id], onDelete: SetNull)
   memberships   Membership[]
   apiKeys       ApiKey[]
   auditLogs     AuditLog[]
@@ -174,6 +174,7 @@ model Organization {
   contactFields ContactField[]
   segments      Segment[]
   contactJobs   ContactJob[]
+  templates     MessageTemplate[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -213,6 +214,7 @@ model User {
   consentEvents         ContactConsentEvent[]
   segmentsCreated       Segment[]
   contactJobs           ContactJob[]
+  templatesCreated      MessageTemplate[]
 
   @@map("users")
 }
@@ -355,13 +357,16 @@ model WabaAccount {
   metaUserId          String?    @map("meta_user_id")
   connectedById       String?    @map("connected_by_id") @db.Uuid
   webhookSubscribedAt DateTime?  @map("webhook_subscribed_at") @db.Timestamptz(3)
+  /// Null until the first comparison with Meta.
+  templatesSyncedAt   DateTime?  @map("templates_synced_at") @db.Timestamptz(3)
   disconnectedAt      DateTime?  @map("disconnected_at") @db.Timestamptz(3)
   createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt           DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  connectedBy  User?         @relation(fields: [connectedById], references: [id], onDelete: SetNull)
+  organization Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  connectedBy  User?             @relation(fields: [connectedById], references: [id], onDelete: SetNull)
   phoneNumbers PhoneNumber[]
+  templates    MessageTemplate[]
 
   @@unique([orgId, wabaId])
   @@index([metaUserId])
@@ -729,4 +734,50 @@ model CannedReply {
 
   @@unique([orgId, shortcut])
   @@map("canned_replies")
+}
+
+/// A message template in one language on one WABA. Mirrors Meta, which is the authority: once
+/// submitted, edits go to Meta first, so this never differs from what was approved.
+model MessageTemplate {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  orgId           String    @map("org_id") @db.Uuid
+  wabaAccountId   String    @map("waba_account_id") @db.Uuid
+  /// Null while a draft that has never been submitted.
+  metaTemplateId  String?   @map("meta_template_id")
+  name            String
+  language        String
+  /// Strings: Meta adds categories and statuses over time.
+  category        String
+  /// draft, pending, approved, rejected, paused, disabled, ...
+  status          String    @default("draft")
+  parameterFormat String    @default("positional") @map("parameter_format")
+  /// TemplateDefinition from @wacrm/shared. Null when Meta's template could not be read.
+  definition      Json?
+  samples         Json      @default("{}")
+  /// Variable key -> where its value comes from when sending to a contact.
+  variableMapping Json      @default("{}") @map("variable_mapping")
+  /// False for templates made elsewhere that use parts this app cannot send.
+  supported       Boolean   @default(true)
+  rejectedReason  String?   @map("rejected_reason")
+  /// Meta's recommendation or pause details, as text for people.
+  statusDetail    String?   @map("status_detail")
+  qualityScore    String?   @map("quality_score")
+  headerMediaKey  String?   @map("header_media_key")
+  headerMediaMime String?   @map("header_media_mime")
+  headerMediaName String?   @map("header_media_name")
+  submittedAt     DateTime? @map("submitted_at") @db.Timestamptz(3)
+  /// When the status last changed. An older webhook, such as a replay, cannot move it back.
+  statusAt        DateTime  @default(now()) @map("status_at") @db.Timestamptz(3)
+  createdById     String?   @map("created_by_id") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  wabaAccount  WabaAccount  @relation(fields: [wabaAccountId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([orgId, wabaAccountId, name, language])
+  @@index([orgId, metaTemplateId])
+  @@index([orgId, createdAt(sort: Desc), id(sort: Desc)])
+  @@map("message_templates")
 }

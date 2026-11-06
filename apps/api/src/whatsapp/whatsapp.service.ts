@@ -167,7 +167,23 @@ export class WhatsAppService {
 
     const row = await this.persist(actor, p, waba.data, phone.data, registration, meta);
     this.factory.invalidate(p.phoneNumberId);
+    await this.queueTemplateSync(actor.orgId, p.wabaId);
     return row;
+  }
+
+  /** The customer may already have templates at Meta. The connection stands if this fails. */
+  private async queueTemplateSync(orgId: string, wabaId: string): Promise<void> {
+    try {
+      const account = await this.db.run((tx) =>
+        tx.wabaAccount.findUniqueOrThrow({
+          where: { orgId_wabaId: { orgId, wabaId } },
+          select: { id: true },
+        }),
+      );
+      await this.queues.enqueueTemplateSync({ orgId, wabaAccountId: account.id });
+    } catch (err) {
+      this.logger.warn(`could not queue a template sync: ${String(err)}`);
+    }
   }
 
   private async registerOnConnect(

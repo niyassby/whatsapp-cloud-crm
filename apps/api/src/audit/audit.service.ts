@@ -32,6 +32,8 @@ export const AuditAction = {
   CONTACTS_EXPORT_STARTED: 'contact.export_started',
   CONTACTS_EXPORT_DOWNLOADED: 'contact.export_downloaded',
   OPT_OUT_KEYWORDS_CHANGED: 'contact.opt_out_keywords_changed',
+  TEMPLATE_SUBMITTED: 'template.submitted',
+  TEMPLATE_DELETED: 'template.deleted',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 

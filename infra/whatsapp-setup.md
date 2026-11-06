@@ -35,7 +35,8 @@ In **WhatsApp > Configuration > Webhook**:
 - Callback URL: `https://<your-tunnel>/webhooks/meta`
 - Verify token: the value of `META_WEBHOOK_VERIFY_TOKEN`
 - Subscribe to at least: `messages`, `message_template_status_update`,
-  `phone_number_quality_update`, `account_update`
+  `template_category_update`, `message_template_quality_update`,
+  `message_template_components_update`, `phone_number_quality_update`, `account_update`
 
 The API answers the verification handshake, so **Verify and save** should succeed while it runs.
 
@@ -56,6 +57,17 @@ Meta gives every app a free test number.
 1. Send a WhatsApp message from your phone to the test number.
 2. **Settings > WhatsApp > Recent webhook events** shows a `messages` event as `processed`.
 3. The message appears in the inbox, and a reply shows its ticks there.
+
+## Template approval check
+
+1. In **Templates > New template**, create a Utility template and click **Submit to Meta**.
+2. Wait for it to show **Approved**, which arrives by webhook. Review can take up to 24 hours. Use
+   **Sync with Meta** if the webhook is not reaching you.
+3. Message the number from your phone, then in the inbox click **Send a template**, choose it, and
+   send. Check it arrives, and that its ticks reach read.
+4. Repeat with an image header. This checks the sample upload as well as sending media.
+
+Meta test numbers can only message recipients allowed in **API Setup**.
 
 ## 6. Embedded Signup (how customers connect)
 

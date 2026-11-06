@@ -52,6 +52,10 @@ export const ErrorCode = {
   CONTACT_NOT_OPTED_IN: 'CONTACT_NOT_OPTED_IN',
   INVALID_PHONE: 'INVALID_PHONE',
   CONTACT_EXISTS: 'CONTACT_EXISTS',
+
+  // templates
+  TEMPLATE_NOT_EDITABLE: 'TEMPLATE_NOT_EDITABLE',
+  TEMPLATE_INVALID: 'TEMPLATE_INVALID',
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -91,6 +95,8 @@ export const errorHttpStatus: Record<ErrorCode, number> = {
   CONTACT_NOT_OPTED_IN: 409,
   INVALID_PHONE: 400,
   CONTACT_EXISTS: 409,
+  TEMPLATE_NOT_EDITABLE: 409,
+  TEMPLATE_INVALID: 400,
 };
 
 /** Typed application error carrying a stable code. */

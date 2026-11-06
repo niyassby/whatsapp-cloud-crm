@@ -17,6 +17,7 @@ import { contactKeys } from '@/lib/contacts';
 import { env } from '@/lib/env';
 import { applyConversationUpdate, inboxKeys, upsertMessage } from '@/lib/inbox';
 import { queryKeys, useMe } from '@/lib/queries';
+import { templateKeys } from '@/lib/templates';
 
 type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -92,6 +93,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       // Events may have been missed while offline: the server is the source of truth.
       void queryClient.invalidateQueries({ queryKey: inboxKeys.all });
       void queryClient.invalidateQueries({ queryKey: contactKeys.all });
+      void queryClient.invalidateQueries({ queryKey: templateKeys.all });
     });
     socket.on('disconnect', (reason) => {
       useRealtime.setState({ connected: false });
@@ -134,6 +136,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         void queryClient.invalidateQueries({ queryKey: ['contacts', 'count'] });
         void queryClient.invalidateQueries({ queryKey: contactKeys.tags });
       }
+    });
+    socket.on('template:updated', () => {
+      void queryClient.invalidateQueries({ queryKey: templateKeys.all });
+      // The inbox picker lists approved templates.
+      void queryClient.invalidateQueries({ queryKey: ['inbox', 'templates'] });
     });
     socket.on('typing', ({ conversationId, userId, name, isTyping }) => {
       setTyping(conversationId, { userId, name }, isTyping);

@@ -7,4 +7,5 @@ export * from './whatsapp';
 export * from './queues';
 export * from './inbox';
 export * from './contacts';
+export * from './templates';
 export * from './realtime';

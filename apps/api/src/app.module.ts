@@ -11,6 +11,7 @@ import { InfraModule } from './infra/infra.module';
 import { OrgsModule } from './orgs/orgs.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { TeamModule } from './team/team.module';
+import { TemplatesModule } from './templates/templates.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
@@ -32,6 +33,7 @@ export class AppModule {
         RealtimeModule,
         InboxModule,
         ContactsModule,
+        TemplatesModule,
       ],
       controllers: [HealthController],
       providers: [

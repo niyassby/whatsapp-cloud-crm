@@ -12,6 +12,7 @@ import {
   type OutboundJob,
   QueueName,
   type RealtimePublisher,
+  type TemplateSyncJob,
   type WebhookEventJob,
 } from '@wacrm/shared';
 import {
@@ -34,6 +35,7 @@ import { processMetaAccountJob } from './processors/meta-account';
 import { sendOutboundMessage } from './processors/outbound';
 import { markEventFailed, routeWebhookEvent } from './processors/webhook-events';
 import { processContactJob } from './processors/contact-jobs';
+import { syncTemplates, templateSyncTargets } from './processors/templates';
 
 const rootEnv = path.resolve(__dirname, '../../../.env');
 if (process.env.NODE_ENV !== 'production' && existsSync(rootEnv)) process.loadEnvFile(rootEnv);
@@ -66,6 +68,11 @@ const mediaQueue = new Queue<MediaDownloadJob>(QueueName.MEDIA_DOWNLOAD, {
   defaultJobOptions: DEFAULT_JOB_OPTIONS,
 });
 
+const templateSyncQueue = new Queue<TemplateSyncJob>(QueueName.TEMPLATE_SYNC, {
+  ...queueOpts,
+  defaultJobOptions: DEFAULT_JOB_OPTIONS,
+});
+
 const deps: WorkerDeps = {
   db,
   publisher,
@@ -93,6 +100,9 @@ const deps: WorkerDeps = {
   }),
   enqueueMediaDownload: async (job) => {
     await mediaQueue.add('download', job, { jobId: job.messageId });
+  },
+  enqueueTemplateSync: async (job) => {
+    await templateSyncQueue.add('sync', job);
   },
 };
 
@@ -190,10 +200,32 @@ contactJobsWorker.on('failed', (job, err) => {
   log.warn({ jobId: job?.id, err: err.message }, 'contact job attempt failed');
 });
 
+const templateSyncWorker = new Worker<TemplateSyncJob>(
+  QueueName.TEMPLATE_SYNC,
+  async (job) => {
+    const changed = await syncTemplates(deps, job.data);
+    log.debug({ wabaAccountId: job.data.wabaAccountId, changed }, 'templates synced');
+  },
+  { ...queueOpts, concurrency: 2 },
+);
+templateSyncWorker.on('failed', (job, err) => {
+  log.warn({ jobId: job?.id, err: err.message }, 'template sync attempt failed');
+});
+
 const maintenanceQueue = new Queue(QueueName.MAINTENANCE, queueOpts);
 const maintenanceWorker = new Worker(
   QueueName.MAINTENANCE,
   async (job) => {
+    if (job.name === 'template-reconcile') {
+      const targets = await templateSyncTargets(deps);
+      await Promise.all(
+        targets.map((t) =>
+          deps.enqueueTemplateSync({ orgId: t.org_id, wabaAccountId: t.waba_account_id }),
+        ),
+      );
+      log.info({ wabas: targets.length }, 'template reconciliation queued');
+      return;
+    }
     if (job.name === 'partitions') {
       const created = await ensureMessagePartitions(db);
       log.info({ created }, 'message partitions checked');
@@ -214,6 +246,13 @@ void maintenanceQueue
 void maintenanceQueue
   .upsertJobScheduler('message-partitions', { pattern: '0 2 * * *' }, { name: 'partitions' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule partitions'));
+void maintenanceQueue
+  .upsertJobScheduler(
+    'template-reconcile',
+    { pattern: '17 * * * *' },
+    { name: 'template-reconcile' },
+  )
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule reconciliation'));
 // Also at startup, so a worker that was down over a month boundary catches up immediately.
 ensureMessagePartitions(db).catch((err: unknown) =>
   log.error({ err: String(err) }, 'could not ensure message partitions'),
@@ -244,9 +283,11 @@ async function shutdown() {
     mediaWorker.close(),
     metaWorker.close(),
     contactJobsWorker.close(),
+    templateSyncWorker.close(),
     maintenanceWorker.close(),
     maintenanceQueue.close(),
     mediaQueue.close(),
+    templateSyncQueue.close(),
   ]);
   redis.disconnect();
   await db.$disconnect();

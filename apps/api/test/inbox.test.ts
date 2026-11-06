@@ -42,7 +42,7 @@ const TEMPLATES = [
     id: '3',
     name: 'with_image',
     language: 'en_US',
-    category: 'MARKETING',
+    category: 'UTILITY',
     status: 'APPROVED',
     components: [
       { type: 'HEADER', format: 'IMAGE' },
@@ -154,6 +154,36 @@ async function seedConversation(
 }
 
 const text = (body = 'Hello back') => ({ type: 'text', clientMessageId: randomUUID(), body });
+
+/** Opening the picker copies the account's templates from Meta on first use. */
+async function templateId(org: Org, conversationId: string, name: string) {
+  await org.client.get(`/inbox/conversations/${conversationId}/templates`);
+  const row = await withTenant(owner, { orgId: org.orgId }, async (tx) => {
+    const c = await tx.conversation.findUniqueOrThrow({
+      where: { id: conversationId },
+      select: { phone: { select: { wabaAccountId: true } } },
+    });
+    return tx.messageTemplate.findFirst({
+      where: { name, wabaAccountId: c.phone.wabaAccountId },
+      select: { id: true },
+    });
+  });
+  return row?.id ?? randomUUID();
+}
+
+async function sendTemplate(
+  org: Org,
+  conversationId: string,
+  name: string,
+  variables: Record<string, string> = {},
+) {
+  return org.client.post(`/inbox/conversations/${conversationId}/messages`, {
+    type: 'template',
+    clientMessageId: randomUUID(),
+    templateId: await templateId(org, conversationId, name),
+    variables,
+  });
+}
 
 function connect(token: string | undefined): Promise<Socket> {
   const socket = io(baseUrl, {
@@ -381,13 +411,7 @@ describe('24-hour window, enforced on the server', () => {
   it('allows an approved template after the window closes, rendering its text', async () => {
     const org = await signup();
     const conv = await seedConversation(org, { windowOpen: false });
-    const res = await org.client.post(`/inbox/conversations/${conv.id}/messages`, {
-      type: 'template',
-      clientMessageId: randomUUID(),
-      templateName: 'welcome',
-      language: 'en_US',
-      bodyParams: ['Asha', '#42'],
-    });
+    const res = await sendTemplate(org, conv.id, 'welcome', { 'body.1': 'Asha', 'body.2': '#42' });
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
       type: 'template',
@@ -397,20 +421,15 @@ describe('24-hour window, enforced on the server', () => {
   });
 
   it.each([
-    ['a template that is not approved', 'pending_one', []],
-    ['a template that does not exist', 'nope', []],
-    ['a template the inbox cannot fill in yet', 'with_image', []],
-    ['the wrong number of values', 'welcome', ['only one']],
-  ])('refuses %s', async (_, templateName, bodyParams) => {
+    ['a template that is not approved', 'pending_one', {}],
+    ['a template that does not exist', 'nope', {}],
+    ['a media template with no file yet', 'with_image', {}],
+    ['a missing value', 'welcome', { 'body.1': 'only one' }],
+    ['a blank value', 'welcome', { 'body.1': 'Asha', 'body.2': '   ' }],
+  ])('refuses %s', async (_, name, variables) => {
     const org = await signup();
     const conv = await seedConversation(org, { windowOpen: false });
-    const res = await org.client.post(`/inbox/conversations/${conv.id}/messages`, {
-      type: 'template',
-      clientMessageId: randomUUID(),
-      templateName,
-      language: 'en_US',
-      bodyParams,
-    });
+    const res = await sendTemplate(org, conv.id, name, variables as Record<string, string>);
     expect(res.status).toBe(400);
     expect(res.body.code).toBe(ErrorCode.TEMPLATE_NOT_SENDABLE);
   });
@@ -419,33 +438,44 @@ describe('24-hour window, enforced on the server', () => {
     const org = await signup();
     const conv = await seedConversation(org);
     const res = await org.client.get(`/inbox/conversations/${conv.id}/templates`);
-    expect(res.body).toEqual([
-      {
-        name: 'welcome',
-        language: 'en_US',
-        category: 'UTILITY',
-        body: 'Hi {{1}}, your order {{2}} shipped',
-        paramCount: 2,
-      },
-      {
-        name: 'promo',
-        language: 'en_US',
-        category: 'MARKETING',
-        body: 'Big sale this week',
-        paramCount: 0,
-      },
+    expect(res.body.map((t: { name: string }) => t.name)).toEqual([
+      'promo',
+      'welcome',
+      'with_image',
     ]);
+    const welcome = res.body.find((t: { name: string }) => t.name === 'welcome');
+    expect(welcome).toMatchObject({
+      language: 'en_US',
+      category: 'UTILITY',
+      sendIssue: null,
+      definition: { body: 'Hi {{1}}, your order {{2}} shipped' },
+      variables: [
+        { key: 'body.1', value: '' },
+        { key: 'body.2', value: '' },
+      ],
+    });
+    expect(res.body.find((t: { name: string }) => t.name === 'with_image').sendIssue).toContain(
+      'header file',
+    );
+  });
+
+  it('refuses a template from another account of the same workspace', async () => {
+    const org = await signup();
+    const first = await seedConversation(org);
+    const second = await seedConversation(org);
+    const id = await templateId(org, first.id, 'welcome');
+    const res = await org.client.post(`/inbox/conversations/${second.id}/messages`, {
+      type: 'template',
+      clientMessageId: randomUUID(),
+      templateId: id,
+      variables: { 'body.1': 'a', 'body.2': 'b' },
+    });
+    expect(res.status).toBe(400);
   });
 
   describe('marketing consent', () => {
     const sendPromo = (org: Org, conversationId: string) =>
-      org.client.post(`/inbox/conversations/${conversationId}/messages`, {
-        type: 'template',
-        clientMessageId: randomUUID(),
-        templateName: 'promo',
-        language: 'en_US',
-        bodyParams: [],
-      });
+      sendTemplate(org, conversationId, 'promo');
     const contactIdOf = async (org: Org, conversationId: string) =>
       (await org.client.get(`/inbox/conversations/${conversationId}`)).body.contact.id as string;
 
@@ -481,12 +511,9 @@ describe('24-hour window, enforced on the server', () => {
       await org.client.post(`/contacts/${await contactIdOf(org, conv.id)}/consent`, {
         status: 'opted_out',
       });
-      const utility = await org.client.post(`/inbox/conversations/${conv.id}/messages`, {
-        type: 'template',
-        clientMessageId: randomUUID(),
-        templateName: 'welcome',
-        language: 'en_US',
-        bodyParams: ['Asha', '#42'],
+      const utility = await sendTemplate(org, conv.id, 'welcome', {
+        'body.1': 'Asha',
+        'body.2': '#42',
       });
       expect(utility.status).toBe(201);
       const reply = await org.client.post(`/inbox/conversations/${conv.id}/messages`, {

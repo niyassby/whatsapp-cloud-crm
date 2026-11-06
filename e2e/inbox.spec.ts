@@ -133,7 +133,7 @@ test('outside the 24-hour window free text is blocked, but a template goes throu
 
   await owner.getByRole('button', { name: 'Send a template' }).click();
   await owner.getByRole('button', { name: /order_update/ }).click();
-  await owner.getByLabel('Value for {{1}}').fill('Olga');
+  await owner.getByLabel('Body {{1}}').fill('Olga');
   await owner.getByRole('button', { name: 'Send template' }).click();
   await expect(owner.getByRole('log')).toContainText('Hi Olga, your order is ready.');
   await expect(owner.getByRole('log').getByRole('img', { name: 'Read' })).toBeVisible();

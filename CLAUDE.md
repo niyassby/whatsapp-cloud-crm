@@ -139,6 +139,19 @@ Setup steps for a real number: `infra/whatsapp-setup.md`.
 - Web: `/contacts` (virtualized table, filters, bulk bar, jobs panel), `/contacts/[id]`, `/contacts/segments`, Settings > Contacts.
 - Tests: `apps/worker/test/contacts.test.ts` (import rules, 50k import, keywords, send-time block), `apps/api/test/contacts.test.ts`, `packages/db/test/contacts-tables.test.ts` (isolation, append-only), `contacts-filter.test.ts` (every rule type), `e2e/contacts.spec.ts`.
 
+## Templates (Phase 2.2)
+
+- `message_templates`: one row per WABA, name and language. Meta is the authority. Status and category are strings, since Meta adds values. `definition` is our own `TemplateDefinition` (`packages/shared/src/templates.ts`), with `toMetaComponents` and `fromMetaComponents` converting to and from Meta's shape, and `templateIssues` holding Meta's documented rules. The builder, API and worker share all of it.
+- Editing: a draft changes locally. A submitted template changes at Meta first, and nothing is saved unless Meta accepts it, so the local copy never differs from what Meta reviewed. Name and language are fixed once submitted. Meta accepts edits when approved, rejected or paused; an approved template keeps its category. Changing only `variable_mapping` stays local and needs no review. Compare stored JSON with `sameJsonValue`: Postgres reorders jsonb keys.
+- Sending: the inbox reads the local copy (no Meta call per send) and sends by `templateId` plus `variables`. Keys are `header.<name>`, `body.<name>`, `button.<index>.<name>`, `button.<index>.code`. The API builds the components with `buildSendComponents` and stores them on the message; the worker only adds a media header. Values have whitespace collapsed, because Meta refuses line breaks in parameters. Link values are percent-encoded. The picker fills values from `variable_mapping` with `resolveVariable`, and agents can change them.
+- Media headers: `POST /templates/:id/header-media` stores the file (`header_media_key`). It is both the sample for review, uploaded through Meta's Resumable Upload API on each submit, and what customers receive. A send copies the key onto the message, and the worker uploads it to Meta once per message.
+- Status sync: `applyTemplateEvent` handles `message_template_status_update`, `template_category_update`, `message_template_quality_update` and `message_template_components_update`. `status_at` stops an older event moving a template backwards. An unknown template, or a change the payload does not fully describe, queues a sync. `applyTemplateSync` compares with Meta's full list: queue `template-sync`, hourly for every WABA from `template_sync_targets()`, after connecting a number, on first use of the picker, and from the Sync button. It keeps the local mapping and header file, and marks templates gone from Meta as `deleted`, with a 5-minute grace after submitting.
+- Delete: `gateway.deleteTemplate({ name, templateId })` uses `hsm_id`, because the name alone deletes every language. It goes through Graph directly, as does listing, since the SDK cannot ask for `rejected_reason` or `quality_score`.
+- Templates Meta holds that this app cannot represent (authentication, carousels, flows, location headers, other buttons) sync as `supported: false`: visible, not editable or sendable.
+- Permissions: `TEMPLATES_READ` (agents), `TEMPLATES_MANAGE` (owners and admins).
+- Web: `/templates`, `/templates/new`, `/templates/[id]` (`TemplateForm` with live `TemplatePreview`). Status updates arrive over `template:updated`.
+- Tests: `packages/shared/src/templates.test.ts`, `apps/api/test/templates.test.ts` (scripted Graph), `apps/worker/test/templates.test.ts`, `packages/db/test/templates-tables.test.ts`, `e2e/templates.spec.ts`. The fake Meta approves templates by webhook, and rejects names ending in `_rejected`.
+
 ## Troubleshooting
 
 - Dev page reloads forever, with the terminal repeating `Compiled in Xms` and the browser getting `HMR hash mismatch`: the Turbopack dev cache is stale, which `next build` beside a dev server can cause. Stop the dev server and delete `apps/web/.next/dev`.
@@ -216,7 +229,7 @@ The package is young and single-maintainer. Treat it as replaceable.
 Mark as phases complete.
 
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
-- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 to 2.6 to do). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
+- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 to 2.6 to do). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
 - [ ] Section 3: Automation, integrations, AI (3.1 to 3.7)
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
 
@@ -281,13 +294,19 @@ Add one line per decision: date, decision, reason.
 - 2026-11-05: Contacts and consent are never hard-deleted by the app, so a re-import cannot erase an opt-out. Honoring erasure requests is a separate feature (see Known gaps).
 - 2026-11-05: Opt-out keywords match whole messages only, to avoid opting people out on "stop by tomorrow". STOP does not trigger an automatic reply yet.
 - 2026-11-05: Bulk actions work on selected rows (up to 1000 at once), not "everything matching a filter". Filter-wide changes can come with campaigns if needed.
+- 2026-11-06: Sends use the local template copy, not a Meta call each time. Reason: faster, works for campaigns, and webhooks plus an hourly comparison keep it current.
+- 2026-11-06: No local drafts of a submitted template: an edit goes to Meta straight away, or is not saved. Reason: the stored text must always match what was approved, since it is what gets rendered and sent.
+- 2026-11-06: The builder offers Marketing and Utility only. Authentication templates need OTP buttons and are shown as unsupported.
+- 2026-11-06: Link buttons always use {{1}}, even in templates with named variables. Meta's documentation of named link variables at creation is unclear, so check this on a real named template.
+- 2026-11-06: The header file stored on a template is what customers receive, with no per-send override yet.
 
 ## Known gaps / TODO
 
 - Section 1 gate still open: Embedded Signup through the Meta popup (needs `META_EMBEDDED_SIGNUP_CONFIG_ID`) and replay of a real event from Settings > WhatsApp.
 - Live payloads carry `contacts[].user_id`, `messages[].from_user_id` and `statuses[].recipient_user_id` (format `IN.…`), and `pricing` on statuses. The app ignores all of them and keys contacts on `wa_id`. Decide how to store the user id, and use `pricing` when billing arrives.
 - The first connected number has an empty `messaging_tier` and quality `UNKNOWN`. Check that they fill in, since campaign limits in Section 2 depend on them.
-- Template picker only sends body variables; templates with media headers, header variables or button variables are hidden until Section 2.
+- Phase 2.2 not verified against real Meta: a template approved by Meta and sent to a real phone (steps in `infra/whatsapp-setup.md`). The media sample upload is the riskiest part: Meta's guide mentions a user access token, and this uses the WABA's token.
+- Templates: no per-send header file, no location headers, no copying a template to another language or account. Old sample files stay in storage until the lifecycle rule below exists.
 - Sends on one conversation can reorder under concurrency or retries. No manual retry button on failed messages yet.
 - Inbound `system` and `request_welcome` messages are skipped. Opt-out keywords arrive in Section 2.
 - The FB JS SDK popup has never run against Meta; only its message parsing is tested. Inbound media, failed sends, template status and quality events have no live capture yet.

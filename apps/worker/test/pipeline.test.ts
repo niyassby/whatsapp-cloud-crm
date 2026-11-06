@@ -410,7 +410,11 @@ describe('outbound sending', () => {
     const job = await queuedMessage(s.orgId, s.phone.id, {
       type: 'template',
       body: 'Hi Asha',
-      content: { templateName: 'welcome', language: 'en_US', bodyParams: ['Asha'] },
+      content: {
+        templateName: 'welcome',
+        language: 'en_US',
+        components: [{ type: 'body', parameters: [{ type: 'text', text: 'Asha' }] }],
+      },
     });
     await sendOutboundMessage(s.deps, job, { finalAttempt: false });
     expect(s.fake.calls[0]!.args[1]).toEqual({

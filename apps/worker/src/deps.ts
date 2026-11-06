@@ -1,5 +1,5 @@
 import type { DbClient } from '@wacrm/db';
-import type { MediaDownloadJob, RealtimePublisher } from '@wacrm/shared';
+import type { MediaDownloadJob, RealtimePublisher, TemplateSyncJob } from '@wacrm/shared';
 import type { ObjectStorage } from '@wacrm/shared/server';
 import type { WhatsAppClientFactory } from '@wacrm/whatsapp';
 
@@ -10,6 +10,7 @@ export interface WorkerDeps {
   storage: ObjectStorage;
   whatsapp: WhatsAppClientFactory;
   enqueueMediaDownload: (job: MediaDownloadJob) => Promise<void>;
+  enqueueTemplateSync: (job: TemplateSyncJob) => Promise<void>;
 }
 
 /** Thrown inside a job so BullMQ retries it with backoff. */

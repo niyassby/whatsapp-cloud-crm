@@ -55,7 +55,10 @@ function MediaPreview({ message }: { message: MessageDto }) {
   const url = link.data?.url;
   if (!url) return <div className="h-32 w-48 animate-pulse rounded bg-black/10" />;
 
-  if (type === 'image' || type === 'sticker') {
+  // A template's media header is shown by what the file is, since its type is "template".
+  const kind = type === 'template' ? media?.mimeType?.split('/')[0] : type;
+
+  if (kind === 'image' || kind === 'sticker') {
     return (
       <img
         src={url}
@@ -64,10 +67,10 @@ function MediaPreview({ message }: { message: MessageDto }) {
       />
     );
   }
-  if (type === 'video') {
+  if (kind === 'video') {
     return <video src={url} controls className="max-h-72 max-w-full rounded" />;
   }
-  if (type === 'audio') {
+  if (kind === 'audio') {
     return <audio src={url} controls className="max-w-full" />;
   }
   return (

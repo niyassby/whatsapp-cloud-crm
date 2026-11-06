@@ -39,10 +39,9 @@ export const sendMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('template'),
     clientMessageId,
-    templateName: z.string().min(1).max(512),
-    language: z.string().min(2).max(16),
-    /** Values for {{1}}, {{2}}, ... in the template body. */
-    bodyParams: z.array(z.string().trim().min(1).max(1024)).max(50).default([]),
+    templateId: z.uuid(),
+    /** Values by variable key, as listed by templateVariables. */
+    variables: z.record(z.string().max(100), z.string().max(1024)).default({}),
   }),
 ]);
 export type SendMessageInput = z.input<typeof sendMessageSchema>;
@@ -129,15 +128,6 @@ export interface CannedReplyDto {
   body: string;
 }
 
-export interface InboxTemplateDto {
-  name: string;
-  language: string;
-  category: string;
-  body: string;
-  /** Number of {{n}} values to fill in. */
-  paramCount: number;
-}
-
 export interface MediaUrlDto {
   url: string;
   expiresIn: number;
@@ -196,12 +186,4 @@ export function messagePreview(type: string, body: string | null): string {
     order: 'Order',
   };
   return labels[type] ?? 'Message';
-}
-
-/** Replace {{1}} style placeholders. Returns the placeholder count and the rendered text. */
-export function renderTemplateBody(body: string, params: readonly string[]) {
-  const indexes = [...body.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1]));
-  const paramCount = indexes.length ? Math.max(...indexes) : 0;
-  const text = body.replace(/\{\{(\d+)\}\}/g, (all, n: string) => params[Number(n) - 1] ?? all);
-  return { paramCount, text };
 }

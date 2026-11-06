@@ -5,6 +5,7 @@ import {
   type MetaAccountJob,
   type OutboundJob,
   QueueName,
+  type TemplateSyncJob,
   type WebhookEventJob,
 } from '@wacrm/shared';
 import { redisConnectionFromUrl } from '@wacrm/shared/server';
@@ -21,6 +22,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   readonly metaAccount: Queue<MetaAccountJob>;
   readonly outbound: Queue<OutboundJob>;
   readonly contactJobs: Queue<ContactJobQueueData>;
+  readonly templateSync: Queue<TemplateSyncJob>;
 
   constructor(@Inject(API_ENV) env: ApiEnv) {
     const opts = {
@@ -35,6 +37,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
     this.webhookEvents = new Queue(QueueName.WEBHOOK_EVENTS, opts);
     this.metaAccount = new Queue(QueueName.META_ACCOUNT, opts);
     this.outbound = new Queue(QueueName.OUTBOUND, opts);
+    this.templateSync = new Queue(QueueName.TEMPLATE_SYNC, opts);
     this.contactJobs = new Queue(QueueName.CONTACT_JOBS, {
       ...opts,
       defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, attempts: 3 },
@@ -47,7 +50,13 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.metaAccount.waitUntilReady(),
       this.outbound.waitUntilReady(),
       this.contactJobs.waitUntilReady(),
+      this.templateSync.waitUntilReady(),
     ]);
+  }
+
+  /** Compare a WABA's templates with Meta, for example after connecting a number. */
+  async enqueueTemplateSync(job: TemplateSyncJob): Promise<void> {
+    await this.templateSync.add('sync', job);
   }
 
   /** Job id = contact job id, so one import cannot be queued twice. */
@@ -80,6 +89,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.metaAccount.close(),
       this.outbound.close(),
       this.contactJobs.close(),
+      this.templateSync.close(),
     ]);
   }
 }

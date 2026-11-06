@@ -221,6 +221,103 @@ describe('templates', () => {
     expect(res.data?.nextCursor).toBe('CUR');
   });
 
+  it('asks for rejection reasons and quality, and reads them', async () => {
+    graph.replies.push({
+      body: {
+        data: [
+          {
+            id: '1',
+            name: 'welcome',
+            language: 'en_US',
+            category: 'MARKETING',
+            status: 'REJECTED',
+            rejected_reason: 'PROMOTIONAL',
+            quality_score: { score: 'GREEN', date: 1758754645 },
+            parameter_format: 'NAMED',
+          },
+        ],
+      },
+    });
+    const res = await gateway.listTemplates();
+    expect(graph.calls[0]!.query.fields).toContain('rejected_reason');
+    expect(graph.calls[0]!.query.fields).toContain('quality_score');
+    expect(res.data?.items[0]).toMatchObject({
+      rejectedReason: 'PROMOTIONAL',
+      qualityScore: 'GREEN',
+      parameterFormat: 'NAMED',
+      components: [],
+    });
+  });
+
+  it('treats a cursor with no next page as the end, as Meta sends on the last page', async () => {
+    graph.replies.push({ body: { data: [], paging: { cursors: { after: 'CUR' } } } });
+    const res = await gateway.listTemplates();
+    expect(res.data?.nextCursor).toBeUndefined();
+  });
+
+  it('deletes only one language, by naming the template id', async () => {
+    graph.replies.push({ body: { success: true } });
+    const res = await gateway.deleteTemplate({ name: 'welcome', templateId: '55' });
+    expect(graph.calls[0]).toMatchObject({
+      method: 'DELETE',
+      path: `/${VERSION}/${WABA_ID}/message_templates`,
+    });
+    expect(graph.calls[0]!.query).toMatchObject({ name: 'welcome', hsm_id: '55' });
+    expect(res.data).toEqual({ success: true });
+  });
+
+  it('edits at the template id, with the format Meta expects', async () => {
+    graph.replies.push({ body: { success: true } });
+    await gateway.updateTemplate('55', {
+      components: [{ type: 'BODY', text: 'Hi' }],
+      parameterFormat: 'named',
+    });
+    expect(graph.calls[0]).toMatchObject({ method: 'POST', path: `/${VERSION}/55` });
+    expect(graph.calls[0]!.body).toEqual({
+      components: [{ type: 'BODY', text: 'Hi' }],
+      parameter_format: 'named',
+    });
+  });
+
+  it("sends button and media header parameters in Meta's shape", async () => {
+    graph.replies.push({
+      body: { messages: [{ id: 'wamid.T' }], contacts: [{ wa_id: '91' }] },
+    });
+    await gateway.sendTemplate('91', {
+      name: 'promo',
+      language: 'en_US',
+      components: [
+        {
+          type: 'header',
+          parameters: [{ type: 'image', extra: { image: { id: 'media-1' } } }],
+        },
+        { type: 'body', parameters: [{ type: 'text', text: 'Asha', parameterName: 'first_name' }] },
+        { type: 'button', subType: 'url', index: 1, parameters: [{ type: 'text', text: 'abc' }] },
+        {
+          type: 'button',
+          subType: 'copy_code',
+          index: 2,
+          parameters: [{ type: 'coupon_code', extra: { coupon_code: 'SAVE10' } }],
+        },
+      ],
+    });
+    const sent = graph.calls[0]!.body as { template: { components: unknown } };
+    expect(sent.template.components).toEqual([
+      { type: 'header', parameters: [{ type: 'image', image: { id: 'media-1' } }] },
+      {
+        type: 'body',
+        parameters: [{ type: 'text', text: 'Asha', parameter_name: 'first_name' }],
+      },
+      { type: 'button', sub_type: 'url', index: 1, parameters: [{ type: 'text', text: 'abc' }] },
+      {
+        type: 'button',
+        sub_type: 'copy_code',
+        index: 2,
+        parameters: [{ type: 'coupon_code', coupon_code: 'SAVE10' }],
+      },
+    ]);
+  });
+
   it('creates under the WABA', async () => {
     graph.replies.push({ body: { id: '9', status: 'PENDING', category: 'UTILITY' } });
     const res = await gateway.createTemplate({

@@ -12,7 +12,14 @@ export const QueueName = {
   MAINTENANCE: 'maintenance',
   /** Contact imports and exports. Their own queue, so a big file cannot delay the inbox. */
   CONTACT_JOBS: 'contact-jobs',
+  /** Compare a WABA's templates with Meta. */
+  TEMPLATE_SYNC: 'template-sync',
 } as const;
+
+export interface TemplateSyncJob {
+  orgId: string;
+  wabaAccountId: string;
+}
 
 export interface ContactJobQueueData {
   orgId: string;

@@ -6,7 +6,13 @@ import {
   isMarketingCategory,
   WhatsAppErrorCode,
 } from '@wacrm/shared';
-import type { GatewayResult, MediaKind, SentMessage, WhatsAppGateway } from '@wacrm/whatsapp';
+import type {
+  GatewayResult,
+  MediaKind,
+  SentMessage,
+  TemplateComponentInput,
+  WhatsAppGateway,
+} from '@wacrm/whatsapp';
 import { RetryableJobError, type WorkerDeps } from '../deps';
 import { callbackData } from './inbound';
 
@@ -15,8 +21,10 @@ export type OutboundOutcome = 'sent' | 'failed' | 'skipped';
 interface TemplateContent {
   templateName: string;
   language: string;
-  bodyParams: string[];
+  components: TemplateComponentInput[];
   category?: string;
+  /** Set for media headers. The file itself is on the message row. */
+  headerKind?: 'image' | 'video' | 'document';
 }
 
 export interface OutboundOptions {
@@ -121,28 +129,9 @@ export async function sendOutboundMessage(
     if (message.type === 'text') {
       return gateway.sendText(contact.waId, { body: message.body ?? '' }, sendOpts);
     }
-    if (message.type === 'template') {
-      const t = message.content as unknown as TemplateContent;
-      return gateway.sendTemplate(
-        contact.waId,
-        {
-          name: t.templateName,
-          language: t.language,
-          components: t.bodyParams.length
-            ? [
-                {
-                  type: 'body',
-                  parameters: t.bodyParams.map((text) => ({ type: 'text' as const, text })),
-                },
-              ]
-            : undefined,
-        },
-        sendOpts,
-      );
-    }
-    // Media: upload once. A retry reuses the saved Meta id.
-    let mediaId = message.mediaMetaId;
-    if (!mediaId) {
+    // Upload once. A retry reuses the saved Meta id.
+    const uploadOnce = async (): Promise<GatewayResult<{ mediaId: string }>> => {
+      if (message.mediaMetaId) return { data: { mediaId: message.mediaMetaId }, error: null };
       if (!message.mediaKey) throw new Error('Media message has no stored file');
       const bytes = await deps.storage.get(message.mediaKey);
       const uploaded = await gateway.uploadMedia({
@@ -151,11 +140,48 @@ export async function sendOutboundMessage(
         filename: message.mediaFilename ?? undefined,
       });
       if (uploaded.error) return uploaded;
-      mediaId = uploaded.data.mediaId;
       await withTenant(deps.db, { orgId }, (tx) =>
-        tx.message.update({ where, data: { mediaMetaId: mediaId } }),
+        tx.message.update({ where, data: { mediaMetaId: uploaded.data.mediaId } }),
+      );
+      return uploaded;
+    };
+
+    if (message.type === 'template') {
+      const t = message.content as unknown as TemplateContent;
+      const components = [...t.components];
+      if (t.headerKind) {
+        const media = await uploadOnce();
+        if (media.error) return media;
+        components.unshift({
+          type: 'header',
+          parameters: [
+            {
+              type: t.headerKind,
+              extra: {
+                [t.headerKind]: {
+                  id: media.data.mediaId,
+                  ...(t.headerKind === 'document' && message.mediaFilename
+                    ? { filename: message.mediaFilename }
+                    : {}),
+                },
+              },
+            },
+          ],
+        });
+      }
+      return gateway.sendTemplate(
+        contact.waId,
+        {
+          name: t.templateName,
+          language: t.language,
+          components: components.length ? components : undefined,
+        },
+        sendOpts,
       );
     }
+    const uploaded = await uploadOnce();
+    if (uploaded.error) return uploaded;
+    const { mediaId } = uploaded.data;
     return gateway.sendMedia(
       contact.waId,
       {

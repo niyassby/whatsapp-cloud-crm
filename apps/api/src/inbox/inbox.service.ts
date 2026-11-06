@@ -10,8 +10,10 @@ import {
 } from '@wacrm/db';
 import {
   AppError,
+  buildSendComponents,
   type CannedReplyDto,
   canReceiveMarketing,
+  cleanVariableValue,
   type ConversationDto,
   type CreateCannedReplyInput,
   createLabelSchema,
@@ -19,6 +21,7 @@ import {
   type CursorQuery,
   ErrorCode,
   hasPermission,
+  headerMediaKind,
   type InboxTemplateDto,
   isMarketingCategory,
   type LabelDto,
@@ -28,19 +31,22 @@ import {
   type MessageDto,
   messagePreview,
   Permission,
-  renderTemplateBody,
+  renderedText,
+  renderTemplate,
   type Role,
   type SendMessageParsed,
   type SendNoteInput,
+  templateDefinitionSchema,
+  templateVariables,
   type UpdateConversationInput,
 } from '@wacrm/shared';
 import { mediaKey, type ObjectStorage } from '@wacrm/shared/server';
-import { type MessageTemplate, WhatsAppClientFactory } from '@wacrm/whatsapp';
 import { OBJECT_STORAGE } from '../infra/infra.tokens';
 import { QueuesService } from '../infra/queues.service';
 import { decodeCursor, encodeCursor } from '../orgs/cursor';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { TenantPrismaService } from '../tenancy/tenant-prisma.service';
+import { contactForTemplate, TemplatesService } from '../templates/templates.service';
 
 export interface InboxActor {
   userId: string;
@@ -59,29 +65,6 @@ interface OutboundDraft {
   media?: { key: string; mime: string; size: number; filename: string | null };
 }
 
-/** What can be sent from the picker today: body variables only. */
-function toInboxTemplate(t: MessageTemplate): InboxTemplateDto | null {
-  const parts = t.components as {
-    type?: string;
-    format?: string;
-    text?: string;
-    buttons?: unknown;
-  }[];
-  const body = parts.find((c) => c.type === 'BODY')?.text;
-  if (!body || /\{\{\s*[^\d\s}]/.test(body)) return null;
-  const header = parts.find((c) => c.type === 'HEADER');
-  if (header && (header.format !== 'TEXT' || header.text?.includes('{{'))) return null;
-  const buttons = parts.find((c) => c.type === 'BUTTONS');
-  if (JSON.stringify(buttons?.buttons ?? []).includes('{{')) return null;
-  return {
-    name: t.name,
-    language: t.language,
-    category: t.category,
-    body,
-    paramCount: renderTemplateBody(body, []).paramCount,
-  };
-}
-
 @Injectable()
 export class InboxService {
   private readonly logger = new Logger(InboxService.name);
@@ -90,7 +73,7 @@ export class InboxService {
     private readonly db: TenantPrismaService,
     private readonly queues: QueuesService,
     private readonly realtime: RealtimeGateway,
-    private readonly whatsapp: WhatsAppClientFactory,
+    private readonly templates: TemplatesService,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
   ) {}
 
@@ -266,8 +249,10 @@ export class InboxService {
         where: { id },
         select: {
           windowExpiresAt: true,
-          phone: { select: { phoneNumberId: true, status: true } },
-          contact: { select: { optInStatus: true } },
+          phone: { select: { phoneNumberId: true, status: true, wabaAccountId: true } },
+          contact: {
+            select: { optInStatus: true, name: true, waId: true, email: true, customFields: true },
+          },
         },
       }),
     );
@@ -303,7 +288,24 @@ export class InboxService {
     }
 
     const { phone, contact } = await this.loadForSend(conversationId, false);
-    const template = await this.findTemplate(actor, phone.phoneNumberId, input);
+    const template = await this.db.run((tx) =>
+      tx.messageTemplate.findFirst({
+        where: { id: input.templateId, wabaAccountId: phone.wabaAccountId },
+      }),
+    );
+    if (!template) {
+      throw new AppError(
+        ErrorCode.TEMPLATE_NOT_SENDABLE,
+        'This template is not available on this WhatsApp number',
+      );
+    }
+    const definition = templateDefinitionSchema.safeParse(template.definition);
+    if (template.status !== 'approved' || !template.supported || !definition.success) {
+      throw new AppError(
+        ErrorCode.TEMPLATE_NOT_SENDABLE,
+        'This template is not approved, or cannot be sent from the inbox',
+      );
+    }
     if (isMarketingCategory(template.category) && !canReceiveMarketing(contact.optInStatus)) {
       throw new AppError(
         ErrorCode.CONTACT_NOT_OPTED_IN,
@@ -312,24 +314,54 @@ export class InboxService {
           : 'Marketing templates need recorded opt-in. Record this contact’s consent first.',
       );
     }
-    const { paramCount, text } = renderTemplateBody(template.body, input.bodyParams);
-    if (paramCount !== input.bodyParams.length) {
+    const def = definition.data;
+    const values: Record<string, string> = {};
+    for (const v of templateVariables(def)) {
+      const value = cleanVariableValue(input.variables[v.key] ?? '');
+      if (!value) {
+        throw new AppError(ErrorCode.TEMPLATE_NOT_SENDABLE, `Fill in ${v.label}`, {
+          variable: v.key,
+        });
+      }
+      values[v.key] = value;
+    }
+    const mediaHeader = def.header && def.header.format !== 'TEXT' ? def.header : null;
+    if (mediaHeader && !template.headerMediaKey) {
       throw new AppError(
         ErrorCode.TEMPLATE_NOT_SENDABLE,
-        `This template needs ${paramCount} value(s)`,
+        'Upload a header file on the template page first',
+      );
+    }
+    const rendered = renderTemplate(def, values);
+    if (rendered.header && rendered.header.length > 60) {
+      throw new AppError(
+        ErrorCode.TEMPLATE_NOT_SENDABLE,
+        'The header is over 60 characters with this value',
       );
     }
     return this.createOutbound(actor, conversationId, {
       clientMessageId: input.clientMessageId,
       type: 'template',
-      body: text,
+      body: renderedText(rendered),
       content: {
-        templateName: input.templateName,
-        language: input.language,
-        bodyParams: input.bodyParams,
-        // Lets the worker re-check consent at send time.
+        templateId: template.id,
+        templateName: template.name,
+        language: template.language,
+        components: buildSendComponents(def, values),
+        // Lets the worker re-check consent at send time, even if Meta re-categorizes meanwhile.
         category: template.category,
-      },
+        ...(mediaHeader ? { headerKind: headerMediaKind(mediaHeader.format) } : {}),
+      } as unknown as Prisma.InputJsonValue,
+      ...(mediaHeader && template.headerMediaKey
+        ? {
+            media: {
+              key: template.headerMediaKey,
+              mime: template.headerMediaMime ?? 'application/octet-stream',
+              size: 0,
+              filename: template.headerMediaName,
+            },
+          }
+        : {}),
     });
   }
 
@@ -542,44 +574,13 @@ export class InboxService {
 
   // ------------------------------------------------------------------ templates
 
-  private gatewayFailure(message: string): AppError {
-    return new AppError(ErrorCode.WHATSAPP_META_ERROR, message);
-  }
-
   async listTemplates(actor: InboxActor, conversationId: string): Promise<InboxTemplateDto[]> {
-    const { phone } = await this.loadForSend(conversationId, false);
-    const gateway = await this.whatsapp.get({
-      orgId: actor.orgId,
-      phoneNumberId: phone.phoneNumberId,
-    });
-    const res = await gateway.listTemplates({ status: 'APPROVED', limit: 100 });
-    if (res.error) throw this.gatewayFailure(res.error.message);
-    return res.data.items
-      .filter((t) => t.status === 'APPROVED')
-      .map(toInboxTemplate)
-      .filter((t): t is InboxTemplateDto => t !== null);
-  }
-
-  private async findTemplate(
-    actor: InboxActor,
-    phoneNumberId: string,
-    input: { templateName: string; language: string },
-  ): Promise<InboxTemplateDto> {
-    const gateway = await this.whatsapp.get({ orgId: actor.orgId, phoneNumberId });
-    const res = await gateway.listTemplates({ name: input.templateName, limit: 100 });
-    if (res.error) throw this.gatewayFailure(res.error.message);
-    const match = res.data.items.find(
-      (t) =>
-        t.name === input.templateName && t.language === input.language && t.status === 'APPROVED',
+    const { phone, contact } = await this.loadForSend(conversationId, false);
+    return this.templates.forConversation(
+      actor.orgId,
+      phone.wabaAccountId,
+      contactForTemplate(contact),
     );
-    const template = match ? toInboxTemplate(match) : null;
-    if (!template) {
-      throw new AppError(
-        ErrorCode.TEMPLATE_NOT_SENDABLE,
-        'This template is not approved, or cannot be sent from the inbox yet',
-      );
-    }
-    return template;
   }
 
   // ------------------------------------------------------------------ labels and canned replies

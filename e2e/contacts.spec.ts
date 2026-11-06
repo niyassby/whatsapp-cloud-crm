@@ -141,15 +141,20 @@ test('the server refuses marketing without consent', async () => {
       return conversationId;
     })
     .toBeTruthy();
+  const picker = await (
+    await fetch(`${API_URL}/inbox/conversations/${conversationId}/templates`, {
+      headers: { authorization: `Bearer ${ws.token}` },
+    })
+  ).json();
+  const promo = picker.find((t: { name: string }) => t.name === 'e2e_promo');
   const res = await fetch(`${API_URL}/inbox/conversations/${conversationId}/messages`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.token}` },
     body: JSON.stringify({
       type: 'template',
       clientMessageId: crypto.randomUUID(),
-      templateName: 'e2e_promo',
-      language: 'en_US',
-      bodyParams: [],
+      templateId: promo.id,
+      variables: {},
     }),
   });
   expect(res.status).toBe(409);

@@ -25,6 +25,10 @@ export function normalizePhone(raw: string, defaultCountry?: string): string | n
   return null;
 }
 
+/** A template's header file: the sample shown to Meta, and what customers receive. */
+export const templateHeaderKey = (orgId: string, templateId: string) =>
+  `orgs/${orgId}/templates/${templateId}/header`;
+
 /** Storage key for an import upload, an export file or an error report. */
 export const contactJobKey = (orgId: string, jobId: string, name: 'source' | 'result') =>
   `orgs/${orgId}/contact-jobs/${jobId}/${name}.csv`;
