@@ -61,6 +61,10 @@ export const ErrorCode = {
   INSUFFICIENT_BALANCE: 'INSUFFICIENT_BALANCE',
   /** No price is set for this send, so it is refused rather than given away. */
   RATE_NOT_CONFIGURED: 'RATE_NOT_CONFIGURED',
+
+  // campaigns
+  CAMPAIGN_NOT_EDITABLE: 'CAMPAIGN_NOT_EDITABLE',
+  CAMPAIGN_INVALID: 'CAMPAIGN_INVALID',
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -104,6 +108,8 @@ export const errorHttpStatus: Record<ErrorCode, number> = {
   TEMPLATE_INVALID: 400,
   INSUFFICIENT_BALANCE: 402,
   RATE_NOT_CONFIGURED: 409,
+  CAMPAIGN_NOT_EDITABLE: 409,
+  CAMPAIGN_INVALID: 400,
 };
 
 /** Typed application error carrying a stable code. */

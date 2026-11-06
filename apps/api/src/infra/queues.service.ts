@@ -1,5 +1,6 @@
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import {
+  type CampaignJob,
   type ContactJobQueueData,
   DEFAULT_JOB_OPTIONS,
   type MetaAccountJob,
@@ -23,6 +24,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   readonly outbound: Queue<OutboundJob>;
   readonly contactJobs: Queue<ContactJobQueueData>;
   readonly templateSync: Queue<TemplateSyncJob>;
+  readonly campaigns: Queue<CampaignJob>;
 
   constructor(@Inject(API_ENV) env: ApiEnv) {
     const opts = {
@@ -38,6 +40,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
     this.metaAccount = new Queue(QueueName.META_ACCOUNT, opts);
     this.outbound = new Queue(QueueName.OUTBOUND, opts);
     this.templateSync = new Queue(QueueName.TEMPLATE_SYNC, opts);
+    this.campaigns = new Queue(QueueName.CAMPAIGNS, opts);
     this.contactJobs = new Queue(QueueName.CONTACT_JOBS, {
       ...opts,
       defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, attempts: 3 },
@@ -51,12 +54,17 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.outbound.waitUntilReady(),
       this.contactJobs.waitUntilReady(),
       this.templateSync.waitUntilReady(),
+      this.campaigns.waitUntilReady(),
     ]);
   }
 
   /** Compare a WABA's templates with Meta, for example after connecting a number. */
   async enqueueTemplateSync(job: TemplateSyncJob): Promise<void> {
     await this.templateSync.add('sync', job);
+  }
+
+  async enqueueCampaignJob(job: CampaignJob): Promise<void> {
+    await this.campaigns.add(job.kind, job);
   }
 
   /** Job id = contact job id, so one import cannot be queued twice. */
@@ -90,6 +98,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.outbound.close(),
       this.contactJobs.close(),
       this.templateSync.close(),
+      this.campaigns.close(),
     ]);
   }
 }

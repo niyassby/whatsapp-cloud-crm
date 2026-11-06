@@ -170,6 +170,26 @@ Setup steps for a real number: `infra/whatsapp-setup.md`.
 - Web: `/wallet`. Updates arrive over `wallet:updated`.
 - Tests: `packages/db/test/wallet.test.ts` (the acceptance test, 200 parallel debits with funds for 50. Removing the row lock makes it fail, which was checked), `apps/api/test/wallet.test.ts` (the same over HTTP), `apps/worker/test/wallet.test.ts` (refunds), `e2e/wallet.spec.ts`.
 
+## Campaigns and dashboard (Phase 2.4)
+
+- Tables: `campaigns`, `campaign_recipients` (one per contact, no DELETE grant), `messaging_tier_limits` (config, read-only to the app), `drip_sequences`, `drip_steps`, `drip_enrollments` (no DELETE grant). Rules and DTOs in `packages/shared/src/campaigns.ts`, database helpers in `packages/db/src/campaigns.ts`, the engine in `apps/worker/src/processors/campaigns.ts` and `drips.ts`.
+- Queue: `campaigns`, with its own worker (concurrency 4), separate from the inbox queues. Jobs are `prepare`, `dispatch` and `drip`. A campaign is a chain of short `dispatch` jobs, one per batch, so a pause or cancel takes effect by the next batch. `campaign-tick` runs every 30 seconds: `campaign_tick_targets` finds scheduled campaigns that are due, and running ones with no progress for 2 minutes (a lost job chain), and `drip_due_targets` finds due drips. Both are definer functions returning only ids.
+- Life of a campaign: `draft` -> `scheduled` -> `preparing` (recipients written in batches, skip reasons recorded, funds held) -> `running` -> `completed`. Also `paused`, `cancelled` and `failed`. Launch copies a segment's filter onto the campaign (`filterSnapshot`), so editing the segment later changes nothing. CSV files are read at prepare, and new numbers become contacts with no consent.
+- Who is skipped: `broadcastSkipReason`. Opted-out contacts get no broadcast at all, even utility. Marketing also needs recorded consent. It runs again when each batch is prepared, so a STOP after the list was built still counts. A missing variable value is a skip too.
+- Claims: `claimRecipients` uses `WITH picked AS MATERIALIZED (... LIMIT n FOR UPDATE SKIP LOCKED)`. Keep the CTE: with a plain `WHERE id IN (SELECT ... LIMIT n)` Postgres re-ran the subquery and claimed 120 rows with a limit of 50, which breaks throttling. A test pins this.
+- Money: `holdCampaignFunds` holds what unsent recipients could cost, replacing any earlier hold in one transaction, before anything sends. Too little pauses with `insufficient_funds` and sends nothing. Each batch creates its messages and charges in one transaction, then sends through the same `sendOutboundMessage` as the inbox, so refunds and the send-time consent check are shared. Finish and cancel release what is left. Costs in reports are read from the ledger (`campaignCostMicros`), and counts by grouping recipients, so there are no stored counters to drift.
+- Throttling: `acquireCampaignSlots` shares the inbox's per-second Redis counter, with a lower limit (`CAMPAIGN_MPS_PER_NUMBER`), so replies always find room. The daily limit is `dailyRemaining`, from the number's tier in `messaging_tier_limits`; an unknown tier gets 250. At the limit the campaign keeps `running`, sets `waiting_until`, and retries in 15 minutes.
+- Auto-pause, checked before every batch: quality `RED` or `LOW` (`phone_number_quality_update`: `FLAGGED` -> RED, `UNFLAGGED` -> GREEN), failure rate above `CAMPAIGN_MAX_FAILURE_RATE` after at least 50 attempts, template no longer approved, number disconnected. Resume holds funds again and refuses, with the reason, if the wallet still cannot cover it.
+- Retries and crashes: retryable errors put the recipient back to `pending` with a growing delay, 3 attempts at most, keeping the same message and charge. A recipient stuck in `sending` for 5 minutes is reclaimed, and the existing at-most-once rule fails it rather than sending blind, with a refund.
+- Inbox: threads a broadcast creates are `closed`, so it does not flood the team. A reply reopens them as usual.
+- Statuses and replies: `applyStatus` calls `applyRecipientStatus` (forward only), `applyInbound` calls `applyContactReply` (credits the latest broadcast within 72 hours and exits drips set to stop on a reply) and `exitDripsOnOptOut`. All in the same transaction as the message, so replays change nothing.
+- Drips: ordered steps with a delay in minutes. Exit on reply, on a tag, on opt-out (always), or when marketing has no consent. An enrollment moves to the next step in the transaction that creates its message, so two runs cannot send a step twice. Too little money or a paused template waits an hour rather than losing the step. Steps cannot change once anyone is enrolled. A step with no mapping uses its template's.
+- Dashboard: `GET /analytics/dashboard?days=`, computed on request from `messages` with `created_at` bounded so only partitions in range are read. Days follow the organization's time zone. Response time is the median from a customer's message to the next message from a person; broadcasts have no sender, so they do not count.
+- Live updates: `campaign:updated` fires per batch, status and credited reply. The web refetches at most once a second per campaign, and refreshes the recipient list on its own timer.
+- Permissions: `CAMPAIGNS_MANAGE` and `ANALYTICS_READ` (owners and admins).
+- Web: `/campaigns`, `/campaigns/new` (saves a draft), `/campaigns/[id]` (review and launch as a draft, then the live report), `/campaigns/drips`, `/dashboard`. The volume chart is hand-written SVG in `components/dashboard/volume-chart.tsx`, with colors checked by the dataviz validator in both modes.
+- Tests: `apps/worker/test/campaigns.test.ts` (includes the 10k acceptance test), `apps/api/test/campaigns.test.ts`, `packages/db/test/campaigns-tables.test.ts`, `packages/shared/src/campaigns.test.ts`, `e2e/campaigns.spec.ts`.
+
 ## Troubleshooting
 
 - Dev page reloads forever, with the terminal repeating `Compiled in Xms` and the browser getting `HMR hash mismatch`: the Turbopack dev cache is stale, which `next build` beside a dev server can cause. Stop the dev server and delete `apps/web/.next/dev`.
@@ -193,6 +213,7 @@ Validate with Zod at startup. Never commit real secrets. Keep `.env.example` cur
 - `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT` (address browsers use for signed links), `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
 - `OUTBOUND_MPS_PER_NUMBER` (80). The worker also needs `ENCRYPTION_KEY` and `META_GRAPH_API_VERSION`
 - `WALLET_DEFAULT_CURRENCY` (INR), `WALLET_LOW_BALANCE_DEFAULT` (100)
+- `CAMPAIGN_MPS_PER_NUMBER` (40, below `OUTBOUND_MPS_PER_NUMBER` on purpose), `CAMPAIGN_MAX_FAILURE_RATE` (0.2). Worker only
 - `RAZORPAY_*`, `STRIPE_*` for platform billing
 - `SENTRY_DSN`
 
@@ -248,7 +269,7 @@ The package is young and single-maintainer. Treat it as replaceable.
 Mark as phases complete.
 
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
-- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 to 2.6 to do). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
+- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 campaigns and dashboard DONE; 2.5 and 2.6 to do). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
 - [ ] Section 3: Automation, integrations, AI (3.1 to 3.7)
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
 
@@ -323,7 +344,14 @@ Add one line per decision: date, decision, reason.
 - 2026-11-06: A send interrupted by a crash is refunded, although Meta may have delivered it. Reason: when unknown, the customer should not pay. Costs the platform at most that message.
 - 2026-11-06: A chargeable send with no rate is refused, not sent for free. Reason: silently free sends lose real money.
 - 2026-11-06: One wallet currency per org, set at creation from `WALLET_DEFAULT_CURRENCY` (INR). Rate cards must exist in it.
-- 2026-11-06: A hot wallet serializes on its row lock. Inbox sends are low volume. Check this under campaign load in 2.4.
+- 2026-11-06: A hot wallet serializes on its row lock. Checked under campaign load in 2.4: a batch charges in one short transaction, and inbox round trips during the 10k test measured median 81 ms, p95 706 ms, worst 2.9 s, with both in one test process.
+- 2026-11-06: Broadcasts are stricter than one-to-one sends: an opted-out contact gets no broadcast at all, even utility. Reason: someone who said STOP should not hear from a mass send.
+- 2026-11-06: Threads created by a broadcast start closed. Reason: 10,000 new open threads would bury the team's real conversations. A reply opens them.
+- 2026-11-06: A chain of short jobs rather than one long campaign job. Reason: pause and cancel take effect by the next batch, deploys are cheap, and BullMQ locks stay simple.
+- 2026-11-06: No stored counters on campaigns. Counts are grouped from recipients, cost comes from the ledger. Reason: nothing can drift, at the cost of a query per report.
+- 2026-11-06: A reply is credited to the contact's latest broadcast within 72 hours. Reason: simple and explainable. This is attribution, not proof the broadcast caused it.
+- 2026-11-06: Unknown messaging tier means 250 a day, the limit Meta starts numbers on. Reason: failing safe protects the number, and the first real connection showed an empty tier.
+- 2026-11-06: Automatic pauses appear in the app only, with no email yet.
 
 ## Known gaps / TODO
 
@@ -333,7 +361,7 @@ Add one line per decision: date, decision, reason.
 - Phase 2.2 not verified against real Meta: a template approved by Meta and sent to a real phone (steps in `infra/whatsapp-setup.md`). The media sample upload is the riskiest part: Meta's guide mentions a user access token, and this uses the WABA's token.
 - Templates: no per-send header file, no location headers, no copying a template to another language or account. Old sample files stay in storage until the lifecycle rule below exists.
 - Sends on one conversation can reorder under concurrency or retries. No manual retry button on failed messages yet.
-- Inbound `system` and `request_welcome` messages are skipped. Opt-out keywords arrive in Section 2.
+- Inbound `system` and `request_welcome` messages are skipped.
 - The FB JS SDK popup has never run against Meta; only its message parsing is tested. Inbound media, failed sends, template status and quality events have no live capture yet.
 - Data deletion only matches connections with a stored `meta_user_id`; manual connects have none, and FB.login may not report one with `response_type: code`. Check on the first real signup.
 - No mobile navigation: the main sidebar is hidden below `md` with no replacement.
@@ -345,6 +373,9 @@ Add one line per decision: date, decision, reason.
 - E2E import and export tests skip in CI, which has no S3 service.
 - Settings > WhatsApp shows the raw event type; friendlier labels can wait for the inbox.
 
+- Campaigns: variables come from the template's mapping or CSV columns, with no per-campaign mapping screen yet (the API accepts one). Tier limits in `messaging_tier_limits` come from Meta's published tiers and need checking against current limits. A real campaign has not run against Meta.
+- Campaign throughput measured about 23 messages a second in the 10k test on the dev machine, under the 40 limit: each send takes several transactions. Fine for now, but a large number on a high tier would want this tuned.
+- Worker dispatch sends a batch concurrently, so messages within one batch can go out of order. Harmless for a broadcast, since each goes to a different person.
 - Real rate cards are not loaded. `sample-rate-cards.csv` is not Meta's pricing. Before charging anyone: build a CSV from Meta's current rate card with your margin, and run `pnpm rates:import`. Check how Meta's market groups map to countries.
 - Meta bills by its own rules, such as volume tiers, which flat per-country rates do not model. Reconcile against Meta's invoices.
 - No platform-admin screen for rate cards or manual credits: CLI only until Section 4.

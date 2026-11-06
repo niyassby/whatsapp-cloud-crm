@@ -18,6 +18,7 @@ import { env } from '@/lib/env';
 import { applyConversationUpdate, inboxKeys, upsertMessage } from '@/lib/inbox';
 import { queryKeys, useMe } from '@/lib/queries';
 import { templateKeys } from '@/lib/templates';
+import { campaignKeys } from '@/lib/campaigns';
 import { walletKeys } from '@/lib/wallet';
 
 type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -76,6 +77,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
     // Batches the re-sort of the list when many events arrive together.
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const campaignRefreshes = new Map<string, ReturnType<typeof setTimeout>>();
     const refreshLists = () => {
       clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
@@ -139,6 +141,19 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         void queryClient.invalidateQueries({ queryKey: contactKeys.tags });
       }
     });
+    // A big campaign fires this for every batch and every delivery receipt, so refetch at most
+    // once a second per campaign. The recipient list refreshes on its own timer.
+    socket.on('campaign:updated', ({ campaignId }) => {
+      if (campaignRefreshes.has(campaignId)) return;
+      campaignRefreshes.set(
+        campaignId,
+        setTimeout(() => {
+          campaignRefreshes.delete(campaignId);
+          void queryClient.invalidateQueries({ queryKey: campaignKeys.report(campaignId) });
+          void queryClient.invalidateQueries({ queryKey: campaignKeys.lists });
+        }, 1000),
+      );
+    });
     socket.on('wallet:updated', () => {
       void queryClient.invalidateQueries({ queryKey: walletKeys.all });
     });
@@ -178,6 +193,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     return () => {
       clearInterval(sweeper);
       clearTimeout(refreshTimer);
+      campaignRefreshes.forEach((timer) => clearTimeout(timer));
       socket.disconnect();
       useRealtime.setState({ socket: null, connected: false, online: {}, typing: {} });
     };

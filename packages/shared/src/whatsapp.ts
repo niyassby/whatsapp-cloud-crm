@@ -83,6 +83,8 @@ export type WebhookEventStatus = 'received' | 'routed' | 'processed' | 'ignored'
 export interface PhoneNumberDto {
   id: string;
   wabaId: string;
+  /** Our id for the account, which is what templates point at. */
+  wabaAccountId: string;
   wabaName: string | null;
   phoneNumberId: string;
   displayPhoneNumber: string | null;

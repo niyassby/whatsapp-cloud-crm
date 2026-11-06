@@ -514,11 +514,13 @@ function toDto(r: {
   credentialSource: PhoneNumberDto['credentialSource'];
   lastSyncedAt: Date | null;
   createdAt: Date;
+  wabaAccountId: string;
   wabaAccount: { wabaId: string; name: string | null };
 }): PhoneNumberDto {
   return {
     id: r.id,
     wabaId: r.wabaAccount.wabaId,
+    wabaAccountId: r.wabaAccountId,
     wabaName: r.wabaAccount.name,
     phoneNumberId: r.phoneNumberId,
     displayPhoneNumber: r.displayPhoneNumber,

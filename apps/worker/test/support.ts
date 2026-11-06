@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createPrismaClient, type DbClient, withTenant } from '@wacrm/db';
 import { testDbUrls } from '@wacrm/db/testing';
 import type {
+  CampaignJob,
   MediaDownloadJob,
   RealtimePublisher,
   TemplateSyncJob,
@@ -89,6 +90,7 @@ export function buildDeps(client: DbClient) {
   const storage = new MemoryStorage();
   const media: MediaDownloadJob[] = [];
   const syncs: TemplateSyncJob[] = [];
+  const campaignJobs: { job: CampaignJob; delayMs?: number }[] = [];
   const fake = fakeGateway();
   const deps: WorkerDeps = {
     db: client,
@@ -105,8 +107,13 @@ export function buildDeps(client: DbClient) {
     enqueueTemplateSync: async (job) => {
       syncs.push(job);
     },
+    enqueueCampaignJob: async (job, delayMs) => {
+      campaignJobs.push({ job, delayMs });
+    },
+    acquireCampaignSlots: async (_phoneNumberId, wanted) => wanted,
+    defaultCurrency: 'INR',
   };
-  return { deps, publisher, storage, media, syncs, fake };
+  return { deps, publisher, storage, media, syncs, campaignJobs, fake };
 }
 
 export async function createOrg(client: DbClient) {

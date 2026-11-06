@@ -28,6 +28,7 @@ export interface ServerToClientEvents {
   'contact-job:updated': (e: { job: ContactJobDto }) => void;
   'template:updated': (e: { templateId: string | null }) => void;
   'wallet:updated': () => void;
+  'campaign:updated': (e: { campaignId: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -44,6 +45,7 @@ export interface TenantEventMap {
   /** Null when many may have changed, after a sync. */
   'template:updated': { templateId: string | null };
   'wallet:updated': Record<string, never>;
+  'campaign:updated': { campaignId: string };
 }
 
 /** Publish to everyone in an org. API: Socket.IO server. Worker: Redis emitter. */

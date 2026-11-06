@@ -29,7 +29,13 @@ const TEMPLATES = [
     language: 'en_US',
     category: 'UTILITY',
     status: 'APPROVED',
-    components: [{ type: 'BODY', text: 'Hi {{1}}, your order is ready.' }],
+    components: [
+      {
+        type: 'BODY',
+        text: 'Hi {{1}}, your order is ready.',
+        example: { body_text: [['Asha']] },
+      },
+    ],
   },
   {
     id: '2',

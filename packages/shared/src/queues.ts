@@ -14,7 +14,14 @@ export const QueueName = {
   CONTACT_JOBS: 'contact-jobs',
   /** Compare a WABA's templates with Meta. */
   TEMPLATE_SYNC: 'template-sync',
+  /** Campaigns and drips. Separate from OUTBOUND, so a big send cannot delay the inbox. */
+  CAMPAIGNS: 'campaigns',
 } as const;
+
+export type CampaignJob =
+  | { kind: 'prepare'; orgId: string; campaignId: string }
+  | { kind: 'dispatch'; orgId: string; campaignId: string }
+  | { kind: 'drip'; orgId: string; sequenceId: string };
 
 export interface TemplateSyncJob {
   orgId: string;

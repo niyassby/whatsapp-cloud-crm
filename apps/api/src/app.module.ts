@@ -1,6 +1,7 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { AuthModule } from './auth/auth.module';
+import { CampaignsModule } from './campaigns/campaigns.module';
 import { AppErrorFilter } from './common/app-error.filter';
 import { ContactsModule } from './contacts/contacts.module';
 import { DbModule } from './db/db.module';
@@ -36,6 +37,7 @@ export class AppModule {
         ContactsModule,
         TemplatesModule,
         WalletModule,
+        CampaignsModule,
       ],
       controllers: [HealthController],
       providers: [

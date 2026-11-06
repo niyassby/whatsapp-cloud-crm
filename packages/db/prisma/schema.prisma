@@ -136,6 +136,41 @@ enum WalletReservationStatus {
   expired
 }
 
+enum CampaignStatus {
+  draft
+  scheduled
+  preparing
+  running
+  paused
+  completed
+  cancelled
+  failed
+}
+
+enum CampaignRecipientStatus {
+  pending
+  sending
+  sent
+  delivered
+  read
+  replied
+  failed
+  skipped
+  cancelled
+}
+
+enum DripSequenceStatus {
+  draft
+  active
+  paused
+}
+
+enum DripEnrollmentStatus {
+  active
+  completed
+  exited
+}
+
 enum AuthTokenType {
   email_verification
   password_reset
@@ -189,6 +224,8 @@ model Organization {
   contactJobs   ContactJob[]
   templates     MessageTemplate[]
   wallet        Wallet?
+  campaigns     Campaign[]
+  dripSequences DripSequence[]
   walletEntries WalletLedger[]
   walletHolds   WalletReservation[]
 
@@ -232,6 +269,8 @@ model User {
   contactJobs           ContactJob[]
   templatesCreated      MessageTemplate[]
   walletEntries         WalletLedger[]
+  campaignsCreated      Campaign[]
+  dripSequencesCreated  DripSequence[]
 
   @@map("users")
 }
@@ -416,9 +455,12 @@ model PhoneNumber {
   createdAt              DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization  Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  wabaAccount   WabaAccount    @relation(fields: [wabaAccountId], references: [id], onDelete: Cascade)
-  conversations Conversation[]
+  organization       Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  wabaAccount        WabaAccount         @relation(fields: [wabaAccountId], references: [id], onDelete: Cascade)
+  conversations      Conversation[]
+  campaigns          Campaign[]
+  dripSequences      DripSequence[]
+  campaignRecipients CampaignRecipient[]
 
   @@unique([orgId, phoneNumberId])
   @@index([wabaAccountId])
@@ -487,13 +529,15 @@ model Contact {
   createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization  Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  conversations Conversation[]
-  mergedInto    Contact?              @relation("ContactMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
-  duplicates    Contact[]             @relation("ContactMerge")
-  tags          ContactTag[]
-  notes         ContactNote[]
-  consentEvents ContactConsentEvent[]
+  organization       Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversations      Conversation[]
+  campaignRecipients CampaignRecipient[]
+  dripEnrollments    DripEnrollment[]
+  mergedInto         Contact?              @relation("ContactMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  duplicates         Contact[]             @relation("ContactMerge")
+  tags               ContactTag[]
+  notes              ContactNote[]
+  consentEvents      ContactConsentEvent[]
 
   @@unique([orgId, waId])
   @@index([orgId, createdAt(sort: Desc), id(sort: Desc)])
@@ -792,6 +836,8 @@ model MessageTemplate {
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   wabaAccount  WabaAccount  @relation(fields: [wabaAccountId], references: [id], onDelete: Cascade)
   createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  campaigns    Campaign[]
+  dripSteps    DripStep[]
 
   @@unique([orgId, wabaAccountId, name, language])
   @@index([orgId, metaTemplateId])
@@ -900,4 +946,158 @@ model RateCard {
   @@unique([country, category, currency, validFrom])
   @@index([currency, category, country, validFrom(sort: Desc)])
   @@map("rate_cards")
+}
+
+/// A broadcast of one template. Totals come from counting recipients and the ledger when asked,
+/// so they cannot drift from what happened.
+model Campaign {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  orgId           String         @map("org_id") @db.Uuid
+  name            String
+  status          CampaignStatus @default(draft)
+  phoneId         String         @map("phone_id") @db.Uuid
+  templateId      String         @map("template_id") @db.Uuid
+  /// { type: 'segment', filter, segmentId? } or { type: 'csv', key, filename, phoneColumn, ... }
+  audience        Json
+  /// Variable key -> source. Starts from the template's mapping.
+  variableMapping Json           @default("{}") @map("variable_mapping")
+  /// In UTC. The timezone it was chosen in is kept for display.
+  scheduledAt     DateTime?      @map("scheduled_at") @db.Timestamptz(3)
+  timezone        String?
+  startedAt       DateTime?      @map("started_at") @db.Timestamptz(3)
+  finishedAt      DateTime?      @map("finished_at") @db.Timestamptz(3)
+  /// Why it is paused or failed, as a stable code, with words for people beside it.
+  pauseCode       String?        @map("pause_code")
+  pauseReason     String?        @map("pause_reason")
+  reservationId   String?        @map("reservation_id") @db.Uuid
+  estimateMicros  BigInt         @default(0) @map("estimate_micros")
+  /// Rows in a CSV audience that could not be used.
+  invalidRows     Int            @default(0) @map("invalid_rows")
+  /// Waiting for the number's daily limit, not stuck.
+  waitingUntil    DateTime?      @map("waiting_until") @db.Timestamptz(3)
+  createdById     String?        @map("created_by_id") @db.Uuid
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  phone        PhoneNumber         @relation(fields: [phoneId], references: [id], onDelete: Cascade)
+  template     MessageTemplate     @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  createdBy    User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  recipients   CampaignRecipient[]
+
+  @@index([orgId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([status, scheduledAt])
+  @@map("campaigns")
+}
+
+model CampaignRecipient {
+  id               String                  @id @default(uuid(7)) @db.Uuid
+  orgId            String                  @map("org_id") @db.Uuid
+  campaignId       String                  @map("campaign_id") @db.Uuid
+  contactId        String                  @map("contact_id") @db.Uuid
+  /// Kept here so the number's daily limit can be counted without a join.
+  phoneId          String                  @map("phone_id") @db.Uuid
+  status           CampaignRecipientStatus @default(pending)
+  /// no_consent, opted_out, missing_variable, merged
+  skipReason       String?                 @map("skip_reason")
+  /// Resolved values, by variable key.
+  variables        Json                    @default("{}")
+  estimateMicros   BigInt                  @default(0) @map("estimate_micros")
+  attempts         Int                     @default(0)
+  nextAttemptAt    DateTime?               @map("next_attempt_at") @db.Timestamptz(3)
+  messageId        String?                 @map("message_id") @db.Uuid
+  messageCreatedAt DateTime?               @map("message_created_at") @db.Timestamptz(3)
+  errorCode        String?                 @map("error_code")
+  errorMessage     String?                 @map("error_message")
+  sentAt           DateTime?               @map("sent_at") @db.Timestamptz(3)
+  repliedAt        DateTime?               @map("replied_at") @db.Timestamptz(3)
+  createdAt        DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  campaign Campaign    @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact  Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  phone    PhoneNumber @relation(fields: [phoneId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, contactId])
+  @@index([campaignId, status, id])
+  @@index([messageId])
+  @@index([phoneId, sentAt])
+  @@index([contactId, sentAt])
+  @@index([orgId])
+  @@map("campaign_recipients")
+}
+
+/// Meta's daily limit for each tier. Config, because Meta changes these.
+model MessagingTierLimit {
+  tier            String @id
+  /// Unique customers in a rolling 24 hours. Null means no limit.
+  dailyRecipients Int?   @map("daily_recipients")
+
+  @@map("messaging_tier_limits")
+}
+
+model DripSequence {
+  id          String             @id @default(uuid(7)) @db.Uuid
+  orgId       String             @map("org_id") @db.Uuid
+  name        String
+  status      DripSequenceStatus @default(draft)
+  phoneId     String             @map("phone_id") @db.Uuid
+  /// Stop when the contact replies. Opting out always stops it.
+  exitOnReply Boolean            @default(true) @map("exit_on_reply")
+  /// Stop when the contact has this tag.
+  exitTagId   String?            @map("exit_tag_id") @db.Uuid
+  createdById String?            @map("created_by_id") @db.Uuid
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  phone        PhoneNumber      @relation(fields: [phoneId], references: [id], onDelete: Cascade)
+  createdBy    User?            @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  steps        DripStep[]
+  enrollments  DripEnrollment[]
+
+  @@index([orgId, createdAt(sort: Desc), id(sort: Desc)])
+  @@map("drip_sequences")
+}
+
+model DripStep {
+  id              String @id @default(uuid(7)) @db.Uuid
+  orgId           String @map("org_id") @db.Uuid
+  sequenceId      String @map("sequence_id") @db.Uuid
+  position        Int
+  /// After the previous step, or after enrolling for the first step.
+  delayMinutes    Int    @map("delay_minutes")
+  templateId      String @map("template_id") @db.Uuid
+  variableMapping Json   @default("{}") @map("variable_mapping")
+
+  sequence DripSequence    @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  template MessageTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+
+  @@unique([sequenceId, position])
+  @@index([orgId])
+  @@map("drip_steps")
+}
+
+model DripEnrollment {
+  id         String               @id @default(uuid(7)) @db.Uuid
+  orgId      String               @map("org_id") @db.Uuid
+  sequenceId String               @map("sequence_id") @db.Uuid
+  contactId  String               @map("contact_id") @db.Uuid
+  status     DripEnrollmentStatus @default(active)
+  /// Position of the next step to send.
+  nextStep   Int                  @default(0) @map("next_step")
+  nextRunAt  DateTime?            @map("next_run_at") @db.Timestamptz(3)
+  exitReason String?              @map("exit_reason")
+  /// A reply after this time stops the sequence.
+  enrolledAt DateTime             @default(now()) @map("enrolled_at") @db.Timestamptz(3)
+  updatedAt  DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  sequence DripSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  contact  Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([sequenceId, contactId])
+  @@index([status, nextRunAt])
+  @@index([contactId, status])
+  @@index([orgId])
+  @@map("drip_enrollments")
 }

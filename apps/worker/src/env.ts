@@ -32,6 +32,14 @@ export const workerEnvSchema = z.object({
   META_GRAPH_BASE_URL: z.url().optional(),
   /** Cloud API default throughput per number. Config, since Meta raises it for some numbers. */
   OUTBOUND_MPS_PER_NUMBER: z.coerce.number().int().positive().default(80),
+  /** Lower than the line above, so inbox replies always find room on a busy number. */
+  CAMPAIGN_MPS_PER_NUMBER: z.coerce.number().int().positive().default(40),
+  /** Failed out of attempted, above which a campaign pauses itself. */
+  CAMPAIGN_MAX_FAILURE_RATE: z.coerce.number().min(0).max(1).default(0.2),
+  WALLET_DEFAULT_CURRENCY: z
+    .string()
+    .regex(/^[A-Z]{3}$/)
+    .default('INR'),
   ...s3EnvShape,
   /** Raw webhook payloads are kept this long for replay. */
   WEBHOOK_RETENTION_DAYS: z.coerce.number().int().positive().default(30),

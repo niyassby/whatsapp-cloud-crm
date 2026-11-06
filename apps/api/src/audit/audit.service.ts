@@ -36,6 +36,10 @@ export const AuditAction = {
   TEMPLATE_DELETED: 'template.deleted',
   WALLET_SETTINGS_CHANGED: 'wallet.settings_changed',
   WALLET_EXPORTED: 'wallet.exported',
+  CAMPAIGN_LAUNCHED: 'campaign.launched',
+  CAMPAIGN_PAUSED: 'campaign.paused',
+  CAMPAIGN_RESUMED: 'campaign.resumed',
+  CAMPAIGN_CANCELLED: 'campaign.cancelled',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 

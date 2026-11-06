@@ -60,13 +60,23 @@ async function applyAccountEvent(tx: TenantTx, orgId: string, event: EventRow): 
   if (event.field === 'phone_number_quality_update' && event.waba_id) {
     const limit = typeof value.current_limit === 'string' ? value.current_limit : null;
     const number = digits(value.display_phone_number as string | undefined);
-    if (!limit || !number) return;
+    if (!number) return;
+    // Meta reports a quality drop as FLAGGED, and its recovery as UNFLAGGED.
+    const quality =
+      value.event === 'FLAGGED' ? 'RED' : value.event === 'UNFLAGGED' ? 'GREEN' : undefined;
+    if (!limit && !quality) return;
     const phones = await tx.phoneNumber.findMany({
       where: { wabaAccount: { wabaId: event.waba_id }, status: { not: 'disconnected' } },
       select: { id: true, displayPhoneNumber: true },
     });
     for (const p of phones.filter((x) => digits(x.displayPhoneNumber) === number)) {
-      await tx.phoneNumber.update({ where: { id: p.id }, data: { messagingTier: limit } });
+      await tx.phoneNumber.update({
+        where: { id: p.id },
+        data: {
+          ...(limit ? { messagingTier: limit } : {}),
+          ...(quality ? { qualityRating: quality } : {}),
+        },
+      });
     }
     return;
   }

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createPrismaClient, withTenant } from '@wacrm/db';
 import {
   buildHealth,
+  type CampaignJob,
   type ContactJobQueueData,
   DEFAULT_JOB_OPTIONS,
   type MediaDownloadJob,
@@ -35,6 +36,8 @@ import { processMetaAccountJob } from './processors/meta-account';
 import { sendOutboundMessage } from './processors/outbound';
 import { markEventFailed, routeWebhookEvent } from './processors/webhook-events';
 import { processContactJob } from './processors/contact-jobs';
+import { campaignTickTargets, runCampaignJob } from './processors/campaigns';
+import { dripTargets } from './processors/drips';
 import { syncTemplates, templateSyncTargets } from './processors/templates';
 
 const rootEnv = path.resolve(__dirname, '../../../.env');
@@ -73,6 +76,11 @@ const templateSyncQueue = new Queue<TemplateSyncJob>(QueueName.TEMPLATE_SYNC, {
   defaultJobOptions: DEFAULT_JOB_OPTIONS,
 });
 
+const campaignQueue = new Queue<CampaignJob>(QueueName.CAMPAIGNS, {
+  ...queueOpts,
+  defaultJobOptions: DEFAULT_JOB_OPTIONS,
+});
+
 const deps: WorkerDeps = {
   db,
   publisher,
@@ -104,6 +112,22 @@ const deps: WorkerDeps = {
   enqueueTemplateSync: async (job) => {
     await templateSyncQueue.add('sync', job);
   },
+  enqueueCampaignJob: async (job, delay) => {
+    await campaignQueue.add(job.kind, job, delay ? { delay } : undefined);
+  },
+  acquireCampaignSlots: async (phoneNumberId, wanted) => {
+    const second = Math.floor(Date.now() / 1000);
+    const key = `${env.QUEUE_PREFIX}:rate:send:${phoneNumberId}:${second}`;
+    const result = await redis.multi().incrby(key, wanted).expire(key, 5).exec();
+    const count = result?.[0]?.[1];
+    if (typeof count !== 'number') return 0;
+    const over = Math.max(0, count - env.CAMPAIGN_MPS_PER_NUMBER);
+    const allowed = Math.max(0, wanted - over);
+    // Give back what was not used, so it stays available to the inbox.
+    if (allowed < wanted) await redis.decrby(key, wanted - allowed);
+    return allowed;
+  },
+  defaultCurrency: env.WALLET_DEFAULT_CURRENCY,
 };
 
 const isFinalAttempt = (job: { attemptsMade: number; opts: { attempts?: number } }) =>
@@ -212,10 +236,46 @@ templateSyncWorker.on('failed', (job, err) => {
   log.warn({ jobId: job?.id, err: err.message }, 'template sync attempt failed');
 });
 
+// Its own queue and workers: a large campaign cannot hold up webhooks or inbox sends.
+const campaignWorker = new Worker<CampaignJob>(
+  QueueName.CAMPAIGNS,
+  (job) =>
+    runCampaignJob(
+      deps,
+      {
+        mpsPerNumber: env.CAMPAIGN_MPS_PER_NUMBER,
+        maxFailureRate: env.CAMPAIGN_MAX_FAILURE_RATE,
+      },
+      job.data,
+    ),
+  { ...queueOpts, concurrency: 4, lockDuration: 120_000 },
+);
+campaignWorker.on('failed', (job, err) => {
+  log.warn({ jobId: job?.id, err: err.message }, 'campaign job attempt failed');
+});
+
 const maintenanceQueue = new Queue(QueueName.MAINTENANCE, queueOpts);
 const maintenanceWorker = new Worker(
   QueueName.MAINTENANCE,
   async (job) => {
+    if (job.name === 'campaign-tick') {
+      // Starts scheduled campaigns and drips, and recovers any that lost their job chain.
+      const targets = await campaignTickTargets(deps);
+      const drips = await dripTargets(deps);
+      await Promise.all([
+        ...targets.map((t) =>
+          deps.enqueueCampaignJob({
+            kind: t.kind as 'prepare' | 'dispatch',
+            orgId: t.org_id,
+            campaignId: t.campaign_id,
+          }),
+        ),
+        ...drips.map((d) =>
+          deps.enqueueCampaignJob({ kind: 'drip', orgId: d.org_id, sequenceId: d.sequence_id }),
+        ),
+      ]);
+      return;
+    }
     if (job.name === 'template-reconcile') {
       const targets = await templateSyncTargets(deps);
       await Promise.all(
@@ -246,6 +306,9 @@ void maintenanceQueue
 void maintenanceQueue
   .upsertJobScheduler('message-partitions', { pattern: '0 2 * * *' }, { name: 'partitions' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule partitions'));
+void maintenanceQueue
+  .upsertJobScheduler('campaign-tick', { every: 30_000 }, { name: 'campaign-tick' })
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule campaign tick'));
 void maintenanceQueue
   .upsertJobScheduler(
     'template-reconcile',
@@ -284,6 +347,8 @@ async function shutdown() {
     metaWorker.close(),
     contactJobsWorker.close(),
     templateSyncWorker.close(),
+    campaignWorker.close(),
+    campaignQueue.close(),
     maintenanceWorker.close(),
     maintenanceQueue.close(),
     mediaQueue.close(),

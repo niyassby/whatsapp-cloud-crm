@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
+  applyContactReply,
+  applyRecipientStatus,
   conversationInclude,
   conversationToDto,
+  exitDripsOnOptOut,
   messageInclude,
   messageToDto,
   type Prisma,
@@ -146,6 +149,8 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
       },
     });
 
+    const reply = await applyContactReply(tx, contact.id, sentAt);
+
     let optedOut = false;
     if (CAN_OPT_OUT.has(data.type)) {
       const org = await tx.organization.findUniqueOrThrow({
@@ -160,6 +165,7 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
           source: 'keyword',
           proof: `Message ${ev.id}: ${data.body?.slice(0, 200)}`,
         });
+        await exitDripsOnOptOut(tx, contact.id);
       }
     }
 
@@ -220,10 +226,19 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
       },
       include: messageInclude,
     });
-    return { conversation, message, contactId: contact.id, optedOut };
+    return {
+      conversation,
+      message,
+      contactId: contact.id,
+      optedOut,
+      campaignId: reply.campaignId,
+    };
   });
   if (!saved) return;
 
+  if (saved.campaignId) {
+    deps.publisher.emit(orgId, 'campaign:updated', { campaignId: saved.campaignId });
+  }
   if (saved.optedOut) deps.publisher.emit(orgId, 'contact:updated', { contactId: saved.contactId });
   deps.publisher.emit(orgId, 'message:new', { message: messageToDto(saved.message) });
   deps.publisher.emit(orgId, 'conversation:updated', {
@@ -269,6 +284,7 @@ async function applyStatus(deps: WorkerDeps, orgId: string, ev: StatusEvent): Pr
   const at = new Date(Number(ev.timestamp) * 1000);
 
   let refunded = false;
+  let campaignId: string | null = null;
   const updated = await withTenant(deps.db, { orgId }, async (tx) => {
     let target = parseCallback(ev.bizOpaqueCallbackData);
     if (!target) {
@@ -321,10 +337,22 @@ async function applyStatus(deps: WorkerDeps, orgId: string, ev: StatusEvent): Pr
         ...(status === 'read' ? { readAt: at } : {}),
       };
     }
-    return tx.message.update({ where, data, include: messageInclude });
+    const row = await tx.message.update({ where, data, include: messageInclude });
+    if (row.type === 'template') {
+      campaignId = await applyRecipientStatus(
+        tx,
+        target.messageId,
+        status,
+        status === 'failed'
+          ? { code: row.errorCode ?? 'UNKNOWN', message: row.errorMessage ?? 'Delivery failed' }
+          : undefined,
+      );
+    }
+    return row;
   });
   if (updated) deps.publisher.emit(orgId, 'message:updated', { message: messageToDto(updated) });
   if (refunded) deps.publisher.emit(orgId, 'wallet:updated', {});
+  if (campaignId) deps.publisher.emit(orgId, 'campaign:updated', { campaignId });
 }
 
 /** Handle a `messages` webhook change. Each message commits on its own, so retries are cheap. */

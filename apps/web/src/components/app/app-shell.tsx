@@ -1,7 +1,16 @@
 'use client';
 
 import { Permission } from '@wacrm/shared';
-import { FileText, Inbox, MessageCircle, Settings, Users, Wallet } from 'lucide-react';
+import {
+  ChartLine,
+  FileText,
+  Inbox,
+  Megaphone,
+  MessageCircle,
+  Settings,
+  Users,
+  Wallet,
+} from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
@@ -21,9 +30,21 @@ const NAV: {
   soon?: boolean;
   permission?: Permission;
 }[] = [
+  {
+    href: '/dashboard',
+    label: 'Dashboard',
+    icon: ChartLine,
+    permission: Permission.ANALYTICS_READ,
+  },
   { href: '/inbox', label: 'Inbox', icon: Inbox },
   { href: '/contacts', label: 'Contacts', icon: Users },
   { href: '/templates', label: 'Templates', icon: FileText },
+  {
+    href: '/campaigns',
+    label: 'Campaigns',
+    icon: Megaphone,
+    permission: Permission.CAMPAIGNS_MANAGE,
+  },
   { href: '/wallet', label: 'Wallet', icon: Wallet, permission: Permission.WALLET_READ },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
