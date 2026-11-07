@@ -16,6 +16,7 @@ import {
   QueueName,
   type RealtimePublisher,
   type TemplateSyncJob,
+  type WebhookDeliveryJob,
   type WebhookEventJob,
 } from '@wacrm/shared';
 import {
@@ -42,11 +43,20 @@ import { processBillingEvent } from './processors/billing';
 import { campaignTickTargets, runCampaignJob } from './processors/campaigns';
 import { dripTargets } from './processors/drips';
 import { syncTemplates, templateSyncTargets } from './processors/templates';
+import {
+  createWebhookPoster,
+  deliverWebhook,
+  dueWebhookDeliveries,
+  purgeWebhookDeliveries,
+} from './processors/webhook-deliveries';
 
 const rootEnv = path.resolve(__dirname, '../../../.env');
 if (process.env.NODE_ENV !== 'production' && existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 
 const env = loadWorkerEnv();
+if (env.NODE_ENV === 'production' && env.WEBHOOK_ALLOW_PRIVATE_URLS) {
+  throw new Error('WEBHOOK_ALLOW_PRIVATE_URLS must not be set in production');
+}
 const log = pino({ level: env.LOG_LEVEL, name: 'worker' });
 const db = createPrismaClient({
   connectionString: env.DATABASE_URL,
@@ -77,6 +87,12 @@ const mediaQueue = new Queue<MediaDownloadJob>(QueueName.MEDIA_DOWNLOAD, {
 const templateSyncQueue = new Queue<TemplateSyncJob>(QueueName.TEMPLATE_SYNC, {
   ...queueOpts,
   defaultJobOptions: DEFAULT_JOB_OPTIONS,
+});
+
+const webhookDeliveryQueue = new Queue<WebhookDeliveryJob>(QueueName.WEBHOOK_DELIVERIES, {
+  ...queueOpts,
+  // One try per job. Retries are on the delivery row, which the schedule picks up.
+  defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, attempts: 1 },
 });
 
 const campaignQueue = new Queue<CampaignJob>(QueueName.CAMPAIGNS, {
@@ -131,6 +147,8 @@ const deps: WorkerDeps = {
     return allowed;
   },
   payments: createPaymentProviders(env),
+  secrets,
+  postWebhook: createWebhookPoster({ allowPrivate: env.WEBHOOK_ALLOW_PRIVATE_URLS }),
   defaultCurrency: env.WALLET_DEFAULT_CURRENCY,
 };
 
@@ -267,10 +285,34 @@ billingWorker.on('failed', (job, err) => {
   log.error({ jobId: job?.id, err: err.message }, 'billing event attempt failed');
 });
 
+// Its own queue: a customer's slow endpoint cannot hold up anything else.
+const webhookDeliveryWorker = new Worker<WebhookDeliveryJob>(
+  QueueName.WEBHOOK_DELIVERIES,
+  (job) => deliverWebhook(deps, job.data),
+  { ...queueOpts, concurrency: 10 },
+);
+webhookDeliveryWorker.on('failed', (job, err) => {
+  log.warn({ jobId: job?.id, err: err.message }, 'webhook delivery job failed');
+});
+
 const maintenanceQueue = new Queue(QueueName.MAINTENANCE, queueOpts);
 const maintenanceWorker = new Worker(
   QueueName.MAINTENANCE,
   async (job) => {
+    if (job.name === 'webhook-dispatch') {
+      const due = await dueWebhookDeliveries(deps);
+      await Promise.all(
+        due.map((d) =>
+          webhookDeliveryQueue.add(
+            'deliver',
+            { orgId: d.org_id, deliveryId: d.id },
+            // Unique per attempt, and the same while one waits, so this cannot queue it twice.
+            { jobId: `${d.id}-${d.next_attempt_at.getTime()}` },
+          ),
+        ),
+      );
+      return;
+    }
     if (job.name === 'campaign-tick') {
       // Starts scheduled campaigns and drips, and recovers any that lost their job chain.
       const targets = await campaignTickTargets(deps);
@@ -304,6 +346,7 @@ const maintenanceWorker = new Worker(
       log.info({ created }, 'message partitions checked');
       return;
     }
+    await purgeWebhookDeliveries(deps, env.WEBHOOK_RETENTION_DAYS);
     const purged = await purgeWebhookEvents(db, env.WEBHOOK_RETENTION_DAYS);
     log.info({ purged, retentionDays: env.WEBHOOK_RETENTION_DAYS }, 'webhook retention ran');
   },
@@ -319,6 +362,9 @@ void maintenanceQueue
 void maintenanceQueue
   .upsertJobScheduler('message-partitions', { pattern: '0 2 * * *' }, { name: 'partitions' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule partitions'));
+void maintenanceQueue
+  .upsertJobScheduler('webhook-dispatch', { every: 5_000 }, { name: 'webhook-dispatch' })
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule webhooks'));
 void maintenanceQueue
   .upsertJobScheduler('campaign-tick', { every: 30_000 }, { name: 'campaign-tick' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule campaign tick'));
@@ -362,6 +408,8 @@ async function shutdown() {
     templateSyncWorker.close(),
     campaignWorker.close(),
     billingWorker.close(),
+    webhookDeliveryWorker.close(),
+    webhookDeliveryQueue.close(),
     campaignQueue.close(),
     maintenanceWorker.close(),
     maintenanceQueue.close(),

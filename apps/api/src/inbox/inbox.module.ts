@@ -9,5 +9,6 @@ import { InboxService } from './inbox.service';
   imports: [WhatsAppModule, TemplatesModule, WalletModule],
   controllers: [InboxController],
   providers: [InboxService],
+  exports: [InboxService],
 })
 export class InboxModule {}

@@ -10,5 +10,6 @@ import { DripsService } from './drips.service';
   imports: [WhatsAppModule, WalletModule],
   controllers: [CampaignsController, DripsController, AnalyticsController],
   providers: [CampaignsService, DripsService, AnalyticsService],
+  exports: [CampaignsService],
 })
 export class CampaignsModule {}

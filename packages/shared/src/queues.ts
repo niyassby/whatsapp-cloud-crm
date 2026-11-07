@@ -17,7 +17,13 @@ export const QueueName = {
   /** Campaigns and drips. Separate from OUTBOUND, so a big send cannot delay the inbox. */
   CAMPAIGNS: 'campaigns',
   BILLING_EVENTS: 'billing-events',
+  WEBHOOK_DELIVERIES: 'webhook-deliveries',
 } as const;
+
+export interface WebhookDeliveryJob {
+  orgId: string;
+  deliveryId: string;
+}
 
 export interface BillingEventJob {
   eventId: string;

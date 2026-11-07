@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createPrismaClient, type DbClient, withTenant } from '@wacrm/db';
 import { testDbUrls } from '@wacrm/db/testing';
 import type {
@@ -8,7 +8,7 @@ import type {
   TemplateSyncJob,
   TenantEventMap,
 } from '@wacrm/shared';
-import { MemoryStorage } from '@wacrm/shared/server';
+import { MemoryStorage, SecretBox } from '@wacrm/shared/server';
 import { WhatsAppClientFactory, type WhatsAppError, type WhatsAppGateway } from '@wacrm/whatsapp';
 import type { WorkerDeps } from '../src/deps';
 
@@ -91,6 +91,8 @@ export function buildDeps(client: DbClient) {
   const media: MediaDownloadJob[] = [];
   const syncs: TemplateSyncJob[] = [];
   const campaignJobs: { job: CampaignJob; delayMs?: number }[] = [];
+  const webhooks: { url: string; headers: Record<string, string>; body: string }[] = [];
+  let webhookResponse: () => { status: number; body: string } = () => ({ status: 200, body: 'ok' });
   const fake = fakeGateway();
   const deps: WorkerDeps = {
     db: client,
@@ -112,9 +114,26 @@ export function buildDeps(client: DbClient) {
     },
     acquireCampaignSlots: async (_phoneNumberId, wanted) => wanted,
     payments: {},
+    secrets: new SecretBox(randomBytes(32).toString('base64')),
+    postWebhook: async (url, headers, body) => {
+      webhooks.push({ url, headers, body });
+      return webhookResponse();
+    },
     defaultCurrency: 'INR',
   };
-  return { deps, publisher, storage, media, syncs, campaignJobs, fake };
+  return {
+    deps,
+    publisher,
+    storage,
+    media,
+    syncs,
+    campaignJobs,
+    fake,
+    webhooks,
+    respondToWebhooks: (fn: () => { status: number; body: string }) => {
+      webhookResponse = fn;
+    },
+  };
 }
 
 export async function createOrg(client: DbClient) {

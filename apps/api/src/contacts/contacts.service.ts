@@ -10,6 +10,7 @@ import {
   setContactConsent,
   type TenantTx,
   assertWithinLimit,
+  emitWebhookEvent,
 } from '@wacrm/db';
 import {
   AppError,
@@ -36,6 +37,7 @@ import {
   type SetConsentInput,
   type TagDto,
   type UpdateContactInput,
+  toPublicContact,
 } from '@wacrm/shared';
 import { normalizePhone } from '@wacrm/shared/server';
 import type { z } from 'zod';
@@ -277,7 +279,14 @@ export class ContactsService {
           skipDuplicates: true,
         });
       }
-      return this.loadLive(tx, contact.id);
+      const created = await this.loadLive(tx, contact.id);
+      await emitWebhookEvent(
+        tx,
+        actor.orgId,
+        'contact.created',
+        toPublicContact(contactToDto(created)) as Prisma.InputJsonValue,
+      );
+      return created;
     });
     return contactToDto(row);
   }

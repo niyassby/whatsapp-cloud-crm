@@ -6,11 +6,13 @@ import { CampaignsModule } from './campaigns/campaigns.module';
 import { AppErrorFilter } from './common/app-error.filter';
 import { ContactsModule } from './contacts/contacts.module';
 import { DbModule } from './db/db.module';
+import { DeveloperModule } from './developer/developer.module';
 import { API_ENV, type ApiEnv, loadApiEnv } from './env';
 import { HealthController } from './health.controller';
 import { InboxModule } from './inbox/inbox.module';
 import { InfraModule } from './infra/infra.module';
 import { OrgsModule } from './orgs/orgs.module';
+import { PublicApiModule } from './public-api/public-api.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { TeamModule } from './team/team.module';
 import { TemplatesModule } from './templates/templates.module';
@@ -40,6 +42,8 @@ export class AppModule {
         WalletModule,
         CampaignsModule,
         BillingModule,
+        PublicApiModule,
+        DeveloperModule,
       ],
       controllers: [HealthController],
       providers: [

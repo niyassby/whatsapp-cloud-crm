@@ -23,6 +23,7 @@ const TAG_BYTES = 16;
 export const totpAad = (userId: string) => `users:${userId}:totp`;
 export const phoneTokenAad = (id: string) => `phone_numbers:${id}:token`;
 export const phonePinAad = (id: string) => `phone_numbers:${id}:pin`;
+export const webhookSecretAad = (id: string) => `webhook_endpoints:${id}:secret`;
 
 export class DecryptionError extends Error {
   readonly code = 'DECRYPTION_FAILED';

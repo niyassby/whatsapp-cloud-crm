@@ -56,6 +56,8 @@ export interface InboxActor {
   userId: string;
   orgId: string;
   role: Role;
+  /** Sent by software through the API: no sender, so it does not count as a person replying. */
+  automated?: boolean;
 }
 
 const MEDIA_URL_TTL_SECONDS = 300;
@@ -475,7 +477,7 @@ export class InboxService {
             status: 'queued',
             body: draft.body,
             content: draft.content,
-            senderUserId: actor.userId,
+            senderUserId: actor.automated ? null : actor.userId,
             ...(draft.media
               ? {
                   mediaKey: draft.media.key,
@@ -490,7 +492,12 @@ export class InboxService {
         });
         const conversation = await tx.conversation.update({
           where: { id: conversationId },
-          data: { lastMessageAt: createdAt, lastMessagePreview: preview, status: 'open' },
+          data: {
+            lastMessageAt: createdAt,
+            lastMessagePreview: preview,
+            // A person replying opens the thread. Software sending in bulk must not fill the inbox.
+            ...(actor.automated ? {} : { status: 'open' as const }),
+          },
           include: conversationInclude,
         });
         return { message, conversation, charged };

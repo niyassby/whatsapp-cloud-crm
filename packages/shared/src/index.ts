@@ -11,4 +11,5 @@ export * from './templates';
 export * from './wallet';
 export * from './campaigns';
 export * from './billing';
+export * from './public-api';
 export * from './realtime';

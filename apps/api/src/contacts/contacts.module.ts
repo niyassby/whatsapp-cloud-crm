@@ -20,5 +20,6 @@ import { ContactsService } from './contacts.service';
     ContactJobsController,
   ],
   providers: [ContactsService, ContactJobsService],
+  exports: [ContactsService],
 })
 export class ContactsModule {}

@@ -14,6 +14,8 @@ export interface AuthContext {
   /** Role in `orgId`, loaded fresh from the membership row on every request. */
   role?: Role;
   partnerId?: string;
+  /** Set when an API key made this request rather than a person's session. */
+  apiKeyId?: string;
 }
 
 declare module 'fastify' {

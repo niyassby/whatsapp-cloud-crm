@@ -267,8 +267,9 @@ describe('function hygiene', () => {
       SELECT p.proname, r.rolname AS owner, p.prosecdef AS secdef, p.proconfig AS config
       FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
       WHERE p.proname LIKE 'webhook\_%' OR p.proname LIKE 'data\_deletion\_%'
-         OR p.proname LIKE 'secrets\_list\_%' OR p.proname = 'meta_connections_by_user'`;
-    expect(rows.length).toBe(11);
+         OR p.proname LIKE 'secrets\_list\_%' OR p.proname = 'meta_connections_by_user'
+         OR p.proname LIKE 'billing\_%' OR p.proname IN ('api_key_lookup', 'next_invoice_number')`;
+    expect(rows.length).toBe(20);
     for (const r of rows) {
       expect([r.proname, r.owner, r.secdef]).toEqual([r.proname, 'app_definer', true]);
       expect(r.config).toEqual(['search_path=public, pg_temp']);
@@ -279,7 +280,8 @@ describe('function hygiene', () => {
     const rows = await owner.$queryRaw<{ src: string }[]>`
       SELECT pg_get_function_result(p.oid) AS src FROM pg_proc p
       WHERE p.proname LIKE 'webhook\_%' OR p.proname LIKE 'data\_deletion\_%'
-         OR p.proname LIKE 'secrets\_list\_%' OR p.proname = 'meta_connections_by_user'`;
+         OR p.proname LIKE 'secrets\_list\_%' OR p.proname = 'meta_connections_by_user'
+         OR p.proname LIKE 'billing\_%' OR p.proname IN ('api_key_lookup', 'next_invoice_number')`;
     for (const r of rows) expect(r.src).not.toMatch(/token|pin|secret/i);
   });
 

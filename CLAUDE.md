@@ -210,6 +210,26 @@ Setup steps for a real number: `infra/whatsapp-setup.md`.
 - Web: `/settings/billing` (current plan, usage, plan picker, billing details, invoices), Add funds on `/wallet`, `TrialBanner` in the shell. Updates arrive over `billing:updated`.
 - Tests: `packages/billing/test/providers.test.ts`, `apps/worker/test/billing.test.ts` (the exactly-once acceptance tests), `apps/api/test/billing.test.ts`, `packages/db/test/billing-tables.test.ts`, `packages/shared/src/billing.test.ts`, `e2e/billing.spec.ts` with `e2e/support/fake-payments.mjs`, a fake Stripe that sends every signed webhook twice.
 
+## Public API and outgoing webhooks (Phase 2.6)
+
+How to use it, for customers: `infra/public-api.md`. Reference: `GET /v1/docs`, `GET /v1/openapi.json`.
+
+- API keys: `api_keys`, format `wak_<16 hex prefix>_<secret>`. Stored as the same keyed hash as other tokens, shown once. Looked up through `api_key_lookup(prefix)` since no org is known yet, then the hash is compared in constant time. Revoking and expiry apply at once, because the key is read on every request. Every failure is the same 401.
+- `AccessGuard` handles `@ApiKeyRoute(scope)` first. Those routes take only a key, and everything else takes only a session, so a key can never manage keys, reach the dashboard API or be used by a browser session. Scopes are `API_SCOPES` in `packages/shared/src/public-api.ts`. The plan needs the `public_api` feature.
+- A key acts for whoever created it, for attribution (`request.auth.userId`, with `apiKeyId` set). Access is decided by its scopes, not that person's role. It stops if that user row goes away.
+- Rate limit: `API_RATE_LIMIT_PER_MINUTE` per key, fixed window in Redis, reported in `X-RateLimit-*`, with `Retry-After` on 429. `last_used_at` is written at most once a minute.
+- `/v1` controllers are in `apps/api/src/public-api`, thin over the same services as the dashboard, so window, consent, wallet, queue and plan rules are the same. Responses are their own shapes (`publicContactSchema`, `toPublicContact` and so on), so an internal DTO change cannot break an integration. Add fields there deliberately.
+- `POST /v1/messages` finds or creates the contact and thread from a phone number. `actor.automated` means no `senderUserId` (not counted as a person replying) and the thread status is left alone (bulk API sends must not fill the inbox). `idempotencyKey` hashes to the inbox's client message id.
+- OpenAPI: `@nestjs/swagger` over the `PublicApiModule` only, with schemas from the same Zod objects that validate requests (`Documented` in `public-api/openapi.ts`). Add `Documented` to every new /v1 route.
+- Webhook events: `emitWebhookEvent(tx, ...)` writes one `webhook_deliveries` row per subscribed endpoint, in the transaction of the change itself, so an event cannot be lost or reported for something that rolled back. A workspace with no endpoints pays one indexed read. Events are `WEBHOOK_EVENTS`: new ones go there, with an emit at the change.
+- Delivery: `webhook-dispatch` runs every 5 seconds, reads due rows through `webhook_due_deliveries`, and queues them on `webhook-deliveries` (concurrency 10, its own queue). `deliverWebhook` takes a 2-minute lease by moving `next_attempt_at`, which also stops two jobs sending one delivery, and covers a crash. Retries are on the row, not BullMQ: 8 retries from 30 seconds to 24 hours, about two days in all, then `failed`. Delivery is at least once, and the event id is the same across retries and replays.
+- Signing: `X-Wacrm-Signature: t=<seconds>,v1=<HMAC-SHA256 of "<t>.<body>">`. The secret is `SecretBox` ciphertext (`webhookSecretAad`), shown once, included in `pnpm secrets:reencrypt`. Rotating takes effect at once.
+- SSRF: customers choose these URLs, so `webhookUrlProblem` refuses non-https, internal names and private IP literals when saving, and `createWebhookPoster` checks every resolved address in the socket's own `lookup`, so a name cannot pass a check and then resolve somewhere internal. Redirects are not followed, 10-second timeout, 1 KB of the answer kept. `WEBHOOK_ALLOW_PRIVATE_URLS` is for local tests and refused in production.
+- Replay makes a new row with `replay_of_id` and the same event id, so the log keeps what happened. The log is not deleted by the app; `webhook_deliveries_purge` runs daily with `WEBHOOK_RETENTION_DAYS` and skips pending rows.
+- Permissions: `API_KEYS_MANAGE` (owners and admins) for keys and endpoints. Both are audited.
+- Web: `/settings/api-keys`, `/settings/webhooks` (the delivery log polls while open).
+- Tests: `apps/api/test/public-api.test.ts`, `apps/worker/test/webhooks.test.ts` (includes the real HTTP client against a local server), `packages/db/test/developer-tables.test.ts`, `packages/shared/src/server/webhook-signing.test.ts`, `e2e/public-api.spec.ts` (the acceptance flow, with its own receiver).
+
 ## Troubleshooting
 
 - Dev page reloads forever, with the terminal repeating `Compiled in Xms` and the browser getting `HMR hash mismatch`: the Turbopack dev cache is stale, which `next build` beside a dev server can cause. Stop the dev server and delete `apps/web/.next/dev`.
@@ -233,6 +253,7 @@ Validate with Zod at startup. Never commit real secrets. Keep `.env.example` cur
 - `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT` (address browsers use for signed links), `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
 - `OUTBOUND_MPS_PER_NUMBER` (80). The worker also needs `ENCRYPTION_KEY` and `META_GRAPH_API_VERSION`
 - `WALLET_DEFAULT_CURRENCY` (INR), `WALLET_LOW_BALANCE_DEFAULT` (100)
+- `API_RATE_LIMIT_PER_MINUTE` (600, per key). `WEBHOOK_ALLOW_PRIVATE_URLS` (local tests only, refused in production; API and worker)
 - `CAMPAIGN_MPS_PER_NUMBER` (40, below `OUTBOUND_MPS_PER_NUMBER` on purpose), `CAMPAIGN_MAX_FAILURE_RATE` (0.2). Worker only
 - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`: API and worker both need them, and a provider exists only with all its values. `STRIPE_API_BASE`, `RAZORPAY_API_BASE` for local fakes only (refused in production)
 - `BILLING_SELLER_NAME` (defaults to `APP_NAME`), `BILLING_SELLER_ADDRESS`, `BILLING_SELLER_TAX_ID`: printed on invoices
@@ -290,7 +311,7 @@ The package is young and single-maintainer. Treat it as replaceable.
 Mark as phases complete.
 
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
-- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 campaigns and dashboard DONE; 2.5 billing code DONE, real sandbox payments not verified; 2.6 to do). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
+- [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 campaigns and dashboard DONE; 2.5 billing code DONE, real sandbox payments not verified; 2.6 public API and webhooks DONE. Gate NOT passed until real sandbox payments are run: wallet concurrency, webhook idempotency, campaign load and OpenAPI all pass). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
 - [ ] Section 3: Automation, integrations, AI (3.1 to 3.7)
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
 
@@ -380,6 +401,13 @@ Add one line per decision: date, decision, reason.
 - 2026-11-06: Missing subscription row means no limits. Reason: signup and the migration create one, and a bookkeeping gap must not stop a business. The billing page creates one if it finds none.
 - 2026-11-06: A plan drop keeps everything and only stops adding more. Reason: deleting or disabling a customer's data because a card failed is the wrong failure.
 - 2026-11-06: Free replies and the inbox keep working on every plan, including Free.
+- 2026-11-07: `invoice_counter` is modelled in Prisma. It was hand-made in 2.5, and the next migration would have dropped it, resetting invoice numbers. Any hand-made table in `public` must be in the schema.
+- 2026-11-07: Webhook events are a transactional outbox polled every 5 seconds, not queued directly. Reason: an event is committed with its change, so a Redis outage or crash cannot lose one, and no code path has to enqueue after commit. Costs up to 5 seconds of latency.
+- 2026-11-07: Webhook retries are on the delivery row, not BullMQ. Reason: they show in the log, survive a Redis loss, and do not hold delayed jobs for days.
+- 2026-11-07: Webhook and API responses use their own public shapes, not internal DTOs. Reason: a versioned API is a promise.
+- 2026-11-07: Keys and endpoints are managed only from the dashboard. Reason: a leaked key must not be able to mint more keys or redirect events.
+- 2026-11-07: A key acts for its creator for attribution, but access comes only from scopes. Reason: services and audit expect a user, and tying access to a person's role would change a key's power when their role changes.
+- 2026-11-07: Internal notes never leave through the API or webhooks.
 
 ## Known gaps / TODO
 
@@ -410,6 +438,9 @@ Add one line per decision: date, decision, reason.
 - No trial-ending email, only the banner. No proration preview before switching plans. Razorpay subscriptions authorized by UPI or e-mandate cannot change plan, and the provider's refusal is shown as is.
 - Invoice PDFs use a built-in font: non-Latin names (Hindi, for example) will not render. Embed a font before relying on them.
 - Invoice wording and fields need a check with an accountant for GST compliance (HSN or SAC code, place of supply, CGST and SGST split).
+- Public API: no media send, no `GET` for one message, and no filter for messages since a date. Imports do not emit `contact.created` per row, to avoid flooding endpoints. Only template status changes from webhooks emit `template.status_changed`, not those found by the hourly comparison.
+- Webhooks: no automatic switch-off for an endpoint that keeps failing. A slow endpoint can use up the 10 delivery slots and delay other workspaces' webhooks, since there is no per-endpoint limit yet. No per-plan API rate limit: the same limit for everyone.
+- `@nestjs/swagger` pulls in `swagger-ui-dist`, whose `@scarf/scarf` postinstall sends install analytics. Set `SCARF_ANALYTICS=false` in CI and deploy builds if that is unwanted.
 - Real rate cards are not loaded. `sample-rate-cards.csv` is not Meta's pricing. Before charging anyone: build a CSV from Meta's current rate card with your margin, and run `pnpm rates:import`. Check how Meta's market groups map to countries.
 - Meta bills by its own rules, such as volume tiers, which flat per-country rates do not model. Reconcile against Meta's invoices.
 - No platform-admin screen for rate cards or manual credits: CLI only until Section 4.

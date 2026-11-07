@@ -11,8 +11,9 @@ import {
   refundDebit,
   setContactConsent,
   withTenant,
+  emitWebhookEvent,
 } from '@wacrm/db';
-import { isOptOutMessage, messageDebitKey, messagePreview } from '@wacrm/shared';
+import { isOptOutMessage, messageDebitKey, messagePreview, toPublicMessage } from '@wacrm/shared';
 import { mapError, parseWebhookEvents, type WebhookEvent } from '@wacrm/whatsapp';
 import type { WorkerDeps } from '../deps';
 
@@ -124,6 +125,7 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
     });
     if (!phone) return null;
 
+    const known = await tx.contact.count({ where: { orgId, waId: ev.sender } });
     const row = await tx.contact.upsert({
       where: { orgId_waId: { orgId, waId: ev.sender } },
       create: { orgId, waId: ev.sender, name: ev.profileName, lastActivityAt: sentAt },
@@ -149,6 +151,14 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
       },
     });
 
+    if (known === 0) {
+      await emitWebhookEvent(tx, orgId, 'contact.created', {
+        id: contact.id,
+        waId: ev.sender,
+        name: ev.profileName ?? null,
+      });
+    }
+
     const reply = await applyContactReply(tx, contact.id, sentAt);
 
     let optedOut = false;
@@ -166,6 +176,12 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
           proof: `Message ${ev.id}: ${data.body?.slice(0, 200)}`,
         });
         await exitDripsOnOptOut(tx, contact.id);
+        if (optedOut) {
+          await emitWebhookEvent(tx, orgId, 'contact.opted_out', {
+            id: contact.id,
+            waId: ev.sender,
+          });
+        }
       }
     }
 
@@ -225,6 +241,11 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
           : {}),
       },
       include: messageInclude,
+    });
+    await emitWebhookEvent(tx, orgId, 'message.received', {
+      message: toPublicMessage(messageToDto(message)),
+      contact: { id: contact.id, waId: ev.sender, name: current.name ?? ev.profileName ?? null },
+      phoneNumberId: phone.id,
     });
     return {
       conversation,
@@ -338,6 +359,9 @@ async function applyStatus(deps: WorkerDeps, orgId: string, ev: StatusEvent): Pr
       };
     }
     const row = await tx.message.update({ where, data, include: messageInclude });
+    await emitWebhookEvent(tx, orgId, 'message.status', {
+      message: toPublicMessage(messageToDto(row)),
+    });
     if (row.type === 'template') {
       campaignId = await applyRecipientStatus(
         tx,

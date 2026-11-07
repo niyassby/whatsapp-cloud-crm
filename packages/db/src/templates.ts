@@ -7,6 +7,7 @@ import {
   type VariableSource,
 } from '@wacrm/shared';
 import type { Prisma } from './generated/prisma/client';
+import { emitWebhookEvent } from './webhooks';
 import type { TenantTx } from './tenant';
 
 type TemplateRow = Prisma.MessageTemplateGetPayload<object>;
@@ -234,6 +235,16 @@ export async function applyTemplateEvent(
           : {}),
       },
     });
+    if (status !== template.status) {
+      await emitWebhookEvent(tx, template.orgId, 'template.status_changed', {
+        id: template.id,
+        name: template.name,
+        language: template.language,
+        status,
+        previousStatus: template.status,
+        reason: status === 'rejected' ? reason : null,
+      });
+    }
     return { kind: 'applied', templateId: template.id };
   }
 

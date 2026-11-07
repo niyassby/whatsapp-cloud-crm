@@ -12,6 +12,7 @@ import {
   type Prisma,
   releaseCampaignFunds,
   type TenantTx,
+  emitWebhookEvent,
 } from '@wacrm/db';
 import {
   AppError,
@@ -563,6 +564,12 @@ export class CampaignsService {
         targetType: 'campaign',
         targetId: id,
         meta: actor.meta,
+      });
+      await emitWebhookEvent(tx, actor.orgId, 'campaign.paused', {
+        id,
+        name: current.name,
+        code: 'manual',
+        reason: 'Paused by a team member.',
       });
       return tx.campaign.update({
         where: { id },

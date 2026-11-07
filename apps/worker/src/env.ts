@@ -36,6 +36,11 @@ export const workerEnvSchema = z.object({
   CAMPAIGN_MPS_PER_NUMBER: z.coerce.number().int().positive().default(40),
   /** Failed out of attempted, above which a campaign pauses itself. */
   CAMPAIGN_MAX_FAILURE_RATE: z.coerce.number().min(0).max(1).default(0.2),
+  /** Local testing only: lets webhooks reach private addresses. Refused in production. */
+  WEBHOOK_ALLOW_PRIVATE_URLS: z
+    .enum(['true', 'false', '1', '0'])
+    .transform((v) => v === 'true' || v === '1')
+    .default(false),
   /** The worker asks providers for current subscription state. Same values as the API. */
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),

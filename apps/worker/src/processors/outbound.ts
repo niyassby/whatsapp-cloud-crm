@@ -1,4 +1,4 @@
-import { messageInclude, messageToDto, refundDebit, withTenant } from '@wacrm/db';
+import { messageInclude, messageToDto, refundDebit, withTenant, emitWebhookEvent } from '@wacrm/db';
 import type { OutboundJob } from '@wacrm/shared';
 import {
   canReceiveMarketing,
@@ -6,6 +6,7 @@ import {
   isMarketingCategory,
   messageDebitKey,
   WhatsAppErrorCode,
+  toPublicMessage,
 } from '@wacrm/shared';
 import type {
   GatewayResult,
@@ -48,13 +49,13 @@ export async function sendOutboundMessage(
 
   const fail = async (code: string, message: string): Promise<OutboundOutcome> => {
     // Together: a failed message and its refund are one change.
-    const { row, refund } = await withTenant(deps.db, { orgId }, async (tx) => ({
-      refund: await refundDebit(tx, {
+    const { row, refund } = await withTenant(deps.db, { orgId }, async (tx) => {
+      const refund = await refundDebit(tx, {
         orgId,
         debitKey: messageDebitKey(messageId),
         description: message.slice(0, 200),
-      }),
-      row: await tx.message.update({
+      });
+      const row = await tx.message.update({
         where,
         data: {
           status: 'failed',
@@ -63,8 +64,12 @@ export async function sendOutboundMessage(
           failedAt: new Date(),
         },
         include: messageInclude,
-      }),
-    }));
+      });
+      await emitWebhookEvent(tx, orgId, 'message.status', {
+        message: toPublicMessage(messageToDto(row)),
+      });
+      return { row, refund };
+    });
     deps.publisher.emit(orgId, 'message:updated', { message: messageToDto(row) });
     if (refund.applied) deps.publisher.emit(orgId, 'wallet:updated', {});
     return 'failed';
@@ -231,7 +236,7 @@ export async function sendOutboundMessage(
     });
     const current = await tx.message.findUniqueOrThrow({ where, select: { status: true } });
     // A status webhook may already have moved this past `sent`. Do not move it back.
-    return tx.message.update({
+    const row = await tx.message.update({
       where,
       data: {
         waMessageId: res.data.messageId,
@@ -239,6 +244,12 @@ export async function sendOutboundMessage(
       },
       include: messageInclude,
     });
+    if (current.status === 'sending') {
+      await emitWebhookEvent(tx, orgId, 'message.status', {
+        message: toPublicMessage(messageToDto(row)),
+      });
+    }
+    return row;
   });
   deps.publisher.emit(orgId, 'message:updated', { message: messageToDto(updated) });
   return 'sent';

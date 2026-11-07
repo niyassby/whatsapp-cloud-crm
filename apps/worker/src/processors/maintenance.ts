@@ -1,5 +1,11 @@
 import { type DbClient, withDbContext, withTenant } from '@wacrm/db';
-import { phonePinAad, phoneTokenAad, type SecretBox, totpAad } from '@wacrm/shared/server';
+import {
+  phonePinAad,
+  phoneTokenAad,
+  type SecretBox,
+  totpAad,
+  webhookSecretAad,
+} from '@wacrm/shared/server';
 
 /** Delete raw webhook payloads past retention. Returns how many rows went. */
 export async function purgeWebhookEvents(
@@ -42,11 +48,12 @@ export async function ensureMessagePartitions(db: DbClient, now = new Date()): P
 export async function reencryptSecrets(
   db: DbClient,
   box: SecretBox,
-): Promise<{ phoneNumbers: number; users: number; failed: string[] }> {
+): Promise<{ phoneNumbers: number; users: number; webhookEndpoints: number; failed: string[] }> {
   const refresh = (value: string | null, aad: string) =>
     value && box.needsReencrypt(value) ? box.encrypt(box.decrypt(value, aad), aad) : null;
   let phoneNumbers = 0;
   let users = 0;
+  let webhookEndpoints = 0;
   const failed: string[] = [];
 
   const phones = await db.$queryRaw<{ id: string; org_id: string }[]>`
@@ -86,5 +93,20 @@ export async function reencryptSecrets(
     });
     await run.catch(() => failed.push(`users:${userId}`));
   }
-  return { phoneNumbers, users, failed };
+  const endpoints = await db.$queryRaw<{ id: string; org_id: string }[]>`
+    SELECT * FROM secrets_list_webhook_endpoints()`;
+  for (const { id, org_id: orgId } of endpoints) {
+    const run = withTenant(db, { orgId }, async (tx) => {
+      const row = await tx.webhookEndpoint.findUniqueOrThrow({
+        where: { id },
+        select: { secretEnc: true },
+      });
+      const secretEnc = refresh(row.secretEnc, webhookSecretAad(id));
+      if (!secretEnc) return;
+      await tx.webhookEndpoint.update({ where: { id }, data: { secretEnc } });
+      webhookEndpoints++;
+    });
+    await run.catch(() => failed.push(`webhook_endpoints:${id}`));
+  }
+  return { phoneNumbers, users, webhookEndpoints, failed };
 }

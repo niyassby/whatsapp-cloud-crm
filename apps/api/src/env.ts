@@ -60,6 +60,11 @@ export const apiEnvSchema = z.object({
   /** Point Graph calls at a local fake for end-to-end checks. Refused in production. */
   META_GRAPH_BASE_URL: z.url().optional(),
 
+  /** Requests per minute for each API key. */
+  API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(600),
+  /** Local testing only: lets webhooks reach private addresses. Refused in production. */
+  WEBHOOK_ALLOW_PRIVATE_URLS: booleanString.default(false),
+
   /** A provider is only active when all of its values are set. Local fakes use the *_API_BASE. */
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
@@ -104,6 +109,9 @@ export const loadApiEnv = (source?: Record<string, string | undefined>): ApiEnv 
     ].filter(Boolean);
     if (env.META_GRAPH_BASE_URL) {
       throw new Error('META_GRAPH_BASE_URL must not be set in production');
+    }
+    if (env.WEBHOOK_ALLOW_PRIVATE_URLS) {
+      throw new Error('WEBHOOK_ALLOW_PRIVATE_URLS must not be set in production');
     }
     if (env.STRIPE_API_BASE || env.RAZORPAY_API_BASE) {
       throw new Error('STRIPE_API_BASE and RAZORPAY_API_BASE must not be set in production');

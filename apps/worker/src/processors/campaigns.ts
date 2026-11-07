@@ -15,11 +15,14 @@ import {
   roomLeft,
   type TenantTx,
   withTenant,
+  emitWebhookEvent,
+  campaignCostMicros,
 } from '@wacrm/db';
 import {
   AppError,
   broadcastSkipReason,
   buildSendComponents,
+  toPublicCampaignCounts,
   type CampaignCsvOptions,
   type CampaignJob,
   type ContactForTemplate,
@@ -428,12 +431,16 @@ export async function pause(
   code: PauseCode,
   reason: string,
 ): Promise<void> {
-  const res = await withTenant(deps.db, { orgId }, (tx) =>
-    tx.campaign.updateMany({
+  const res = await withTenant(deps.db, { orgId }, async (tx) => {
+    const paused = await tx.campaign.updateMany({
       where: { id: campaignId, status: { in: ['running', 'preparing'] } },
       data: { status: 'paused', pauseCode: code, pauseReason: reason, waitingUntil: null },
-    }),
-  );
+    });
+    if (paused.count > 0) {
+      await emitWebhookEvent(tx, orgId, 'campaign.paused', { id: campaignId, code, reason });
+    }
+    return paused;
+  });
   if (res.count > 0) deps.publisher.emit(orgId, 'campaign:updated', { campaignId });
 }
 
@@ -880,10 +887,17 @@ async function sendOne(deps: WorkerDeps, orgId: string, m: PreparedMessage): Pro
 async function finishCampaign(deps: WorkerDeps, orgId: string, campaignId: string): Promise<void> {
   await withTenant(deps.db, { orgId }, async (tx) => {
     await releaseCampaignFunds(tx, orgId, campaignId);
-    await tx.campaign.updateMany({
+    const finished = await tx.campaign.updateMany({
       where: { id: campaignId, status: 'running' },
       data: { status: 'completed', finishedAt: new Date(), waitingUntil: null },
     });
+    if (finished.count > 0) {
+      await emitWebhookEvent(tx, orgId, 'campaign.completed', {
+        id: campaignId,
+        counts: toPublicCampaignCounts(await campaignCounts(tx, campaignId)),
+        costMicros: await campaignCostMicros(tx, campaignId),
+      });
+    }
   });
   deps.publisher.emit(orgId, 'campaign:updated', { campaignId });
   deps.publisher.emit(orgId, 'wallet:updated', {});

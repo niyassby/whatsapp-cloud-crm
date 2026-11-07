@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { AuditService } from '../audit/audit.service';
 import { AccessGuard } from './access.guard';
+import { ApiKeyAuthService } from './api-key-auth.service';
 import { PlanFeatureGuard } from './plan-feature.guard';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -16,6 +17,7 @@ import { TokenService } from './token.service';
   controllers: [AuthController],
   providers: [
     TokenService,
+    ApiKeyAuthService,
     AuthenticatorService,
     PasswordService,
     AuthService,

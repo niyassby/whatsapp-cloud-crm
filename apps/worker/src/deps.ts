@@ -6,8 +6,9 @@ import type {
   RealtimePublisher,
   TemplateSyncJob,
 } from '@wacrm/shared';
-import type { ObjectStorage } from '@wacrm/shared/server';
+import type { ObjectStorage, SecretBox } from '@wacrm/shared/server';
 import type { WhatsAppClientFactory } from '@wacrm/whatsapp';
+import type { WebhookPoster } from './processors/webhook-deliveries';
 
 /** What the processors need. Injected, so tests run them without Redis or Meta. */
 export interface WorkerDeps {
@@ -24,6 +25,8 @@ export interface WorkerDeps {
    */
   acquireCampaignSlots: (phoneNumberId: string, wanted: number) => Promise<number>;
   payments: PaymentProviders;
+  secrets: SecretBox;
+  postWebhook: WebhookPoster;
   /** For a workspace whose first paid send comes from a drip. */
   defaultCurrency: string;
 }

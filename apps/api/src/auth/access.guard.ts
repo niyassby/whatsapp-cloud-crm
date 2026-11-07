@@ -1,9 +1,10 @@
 import { type CanActivate, type ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AppError, ErrorCode, hasPermission, type Permission } from '@wacrm/shared';
-import type { FastifyRequest } from 'fastify';
+import { type ApiScope, AppError, ErrorCode, hasPermission, type Permission } from '@wacrm/shared';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { SKIP_TENANT_KEY } from '../tenancy/skip-tenant.decorator';
-import { PERMISSIONS_KEY, PUBLIC_KEY, type PublicOptions } from './decorators';
+import { ApiKeyAuthService } from './api-key-auth.service';
+import { API_KEY_SCOPE_KEY, PERMISSIONS_KEY, PUBLIC_KEY, type PublicOptions } from './decorators';
 import { AuthenticatorService } from './authenticator.service';
 
 /**
@@ -19,12 +20,33 @@ export class AccessGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly authenticator: AuthenticatorService,
+    private readonly apiKeys: ApiKeyAuthService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     if (context.getType() !== 'http') return true;
     const targets = [context.getHandler(), context.getClass()];
     const req = context.switchToHttp().getRequest<FastifyRequest>();
+
+    const scope = this.reflector.getAllAndOverride<ApiScope | undefined>(
+      API_KEY_SCOPE_KEY,
+      targets,
+    );
+    if (scope) {
+      const reply = context.switchToHttp().getResponse<FastifyReply>();
+      try {
+        const { auth, rate } = await this.apiKeys.authenticate(extractBearer(req), scope);
+        req.auth = auth;
+        void reply.header('x-ratelimit-limit', rate.limit);
+        void reply.header('x-ratelimit-remaining', rate.remaining);
+        return true;
+      } catch (err) {
+        if (err instanceof AppError && err.code === ErrorCode.RATE_LIMITED) {
+          void reply.header('retry-after', 60);
+        }
+        throw err;
+      }
+    }
 
     const publicOptions = this.reflector.getAllAndOverride<PublicOptions | undefined>(
       PUBLIC_KEY,
