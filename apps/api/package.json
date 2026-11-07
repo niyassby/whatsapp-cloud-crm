@@ -13,10 +13,12 @@
   "dependencies": {
     "@fastify/cookie": "11.1.5",
     "@fastify/multipart": "^10.1.7",
+    "@fastify/static": "^10.1.10",
     "@nestjs/common": "^12.3.2",
     "@nestjs/core": "^12.3.2",
     "@nestjs/platform-fastify": "^12.3.2",
     "@nestjs/platform-socket.io": "12.3.2",
+    "@nestjs/swagger": "^12.1.1",
     "@nestjs/websockets": "12.3.2",
     "@node-rs/argon2": "^2.2.2",
     "@socket.io/redis-adapter": "^8.3.0",
