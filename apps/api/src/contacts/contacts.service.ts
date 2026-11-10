@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   contactInclude,
   contactListWhere,
@@ -43,6 +43,7 @@ import { normalizePhone } from '@wacrm/shared/server';
 import type { z } from 'zod';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import type { RequestMeta } from '../common/request-meta';
+import { QueuesService } from '../infra/queues.service';
 import { decodeCursor, encodeCursor } from '../orgs/cursor';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { TenantPrismaService } from '../tenancy/tenant-prisma.service';
@@ -75,11 +76,28 @@ const later = (a: Date | null, b: Date | null) => (a && b ? (a > b ? a : b) : (a
 
 @Injectable()
 export class ContactsService {
+  private readonly logger = new Logger(ContactsService.name);
+
   constructor(
     private readonly db: TenantPrismaService,
     private readonly audit: AuditService,
     private readonly realtime: RealtimeGateway,
+    private readonly queues: QueuesService,
   ) {}
+
+  /**
+   * Tags newly on a contact can start flows. Queued after the change commits; a Redis outage
+   * loses the trigger, not the tag, and is logged.
+   */
+  private tagsAdded(orgId: string, added: { contactId: string; tagId: string }[]): void {
+    for (const { contactId, tagId } of added) {
+      this.queues
+        .enqueueFlowJob({ kind: 'event', orgId, event: { type: 'tag_added', contactId, tagId } })
+        .catch((err: unknown) =>
+          this.logger.error(`could not queue a tag trigger: ${String(err)}`),
+        );
+    }
+  }
 
   // ------------------------------------------------------------------ list and read
 
@@ -233,6 +251,7 @@ export class ContactsService {
         'Enter a valid phone number, with its country code',
       );
     }
+    let createdId = '';
     const row = await this.db.run(async (tx) => {
       const fields = this.applyFields({}, await this.validateFields(tx, input.customFields ?? {}));
       if (input.tagIds?.length) await this.assertTags(tx, input.tagIds);
@@ -280,6 +299,7 @@ export class ContactsService {
         });
       }
       const created = await this.loadLive(tx, contact.id);
+      createdId = contact.id;
       await emitWebhookEvent(
         tx,
         actor.orgId,
@@ -288,6 +308,10 @@ export class ContactsService {
       );
       return created;
     });
+    this.tagsAdded(
+      actor.orgId,
+      [...new Set(input.tagIds ?? [])].map((tagId) => ({ contactId: createdId, tagId })),
+    );
     return contactToDto(row);
   }
 
@@ -326,9 +350,16 @@ export class ContactsService {
   }
 
   async setTags(actor: ContactActor, id: string, tagIds: string[]): Promise<ContactDto> {
+    let added: string[] = [];
     const row = await this.db.run(async (tx) => {
       await this.loadLive(tx, id);
       await this.assertTags(tx, tagIds);
+      const before = await tx.contactTag.findMany({
+        where: { contactId: id },
+        select: { tagId: true },
+      });
+      const had = new Set(before.map((t) => t.tagId));
+      added = [...new Set(tagIds)].filter((t) => !had.has(t));
       await tx.contactTag.deleteMany({ where: { contactId: id } });
       await tx.contactTag.createMany({
         data: [...new Set(tagIds)].map((tagId) => ({
@@ -339,6 +370,10 @@ export class ContactsService {
       });
       return this.loadLive(tx, id);
     });
+    this.tagsAdded(
+      actor.orgId,
+      added.map((tagId) => ({ contactId: id, tagId })),
+    );
     return contactToDto(row);
   }
 
@@ -485,6 +520,7 @@ export class ContactsService {
   async bulk(actor: ContactActor, input: BulkContactsInput): Promise<{ affected: number }> {
     const { action } = input;
     const ids = [...new Set(input.ids)];
+    let tagged: string[] = [];
     const affected = await this.db.run(
       async (tx) => {
         const live = await tx.contact.findMany({
@@ -495,6 +531,12 @@ export class ContactsService {
         let count: number;
         if (action.type === 'add_tag') {
           await this.assertTags(tx, [action.tagId]);
+          const had = await tx.contactTag.findMany({
+            where: { tagId: action.tagId, contactId: { in: liveIds } },
+            select: { contactId: true },
+          });
+          const hadIds = new Set(had.map((h) => h.contactId));
+          tagged = liveIds.filter((c) => !hadIds.has(c));
           const res = await tx.contactTag.createMany({
             data: liveIds.map((contactId) => ({
               orgId: actor.orgId,
@@ -543,6 +585,13 @@ export class ContactsService {
       },
       { timeout: 30_000 },
     );
+    if (input.action.type === 'add_tag') {
+      const tagId = input.action.tagId;
+      this.tagsAdded(
+        actor.orgId,
+        tagged.map((contactId) => ({ contactId, tagId })),
+      );
+    }
     return { affected };
   }
 

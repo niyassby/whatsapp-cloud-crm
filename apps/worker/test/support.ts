@@ -4,6 +4,7 @@ import { testDbUrls } from '@wacrm/db/testing';
 import type {
   AutomationJob,
   CampaignJob,
+  FlowJob,
   OutboundJob,
   MediaDownloadJob,
   RealtimePublisher,
@@ -64,6 +65,7 @@ export function fakeGateway(phoneNumberId = 'p') {
       return { data: { items: templates }, error: templateError };
     },
     sendMedia: send('sendMedia'),
+    sendInteractive: send('sendInteractive'),
     uploadMedia: async (input: unknown) => {
       calls.push({ method: 'uploadMedia', args: [input] });
       return { data: { mediaId: 'uploaded-media-1' }, error: null };
@@ -95,6 +97,7 @@ export function buildDeps(client: DbClient) {
   const campaignJobs: { job: CampaignJob; delayMs?: number }[] = [];
   const outbound: OutboundJob[] = [];
   const automation: AutomationJob[] = [];
+  const flowJobs: { job: FlowJob; delayMs?: number }[] = [];
   const webhooks: { url: string; headers: Record<string, string>; body: string }[] = [];
   let webhookResponse: () => { status: number; body: string } = () => ({ status: 200, body: 'ok' });
   const fake = fakeGateway();
@@ -124,6 +127,12 @@ export function buildDeps(client: DbClient) {
     enqueueAutomation: async (job) => {
       automation.push(job);
     },
+    enqueueFlowJob: async (job, delayMs) => {
+      flowJobs.push({ job, delayMs });
+    },
+    httpRequest: async () => {
+      throw new Error('No HTTP in this test');
+    },
     secrets: new SecretBox(randomBytes(32).toString('base64')),
     postWebhook: async (url, headers, body) => {
       webhooks.push({ url, headers, body });
@@ -142,6 +151,7 @@ export function buildDeps(client: DbClient) {
     webhooks,
     outbound,
     automation,
+    flowJobs,
     respondToWebhooks: (fn: () => { status: number; body: string }) => {
       webhookResponse = fn;
     },

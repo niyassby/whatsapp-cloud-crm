@@ -71,6 +71,7 @@ export const ErrorCode = {
   BILLING_PRICE_UNAVAILABLE: 'BILLING_PRICE_UNAVAILABLE',
   PAYMENT_PROVIDER_ERROR: 'PAYMENT_PROVIDER_ERROR',
   WEBHOOK_URL_INVALID: 'WEBHOOK_URL_INVALID',
+  FLOW_INVALID: 'FLOW_INVALID',
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -122,6 +123,7 @@ export const errorHttpStatus: Record<ErrorCode, number> = {
   BILLING_PRICE_UNAVAILABLE: 400,
   PAYMENT_PROVIDER_ERROR: 502,
   WEBHOOK_URL_INVALID: 400,
+  FLOW_INVALID: 400,
 };
 
 /** Typed application error carrying a stable code. */

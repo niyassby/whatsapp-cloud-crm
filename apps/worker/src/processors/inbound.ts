@@ -35,6 +35,23 @@ const SKIPPED = new Set(['system', 'request_welcome']);
 /** Message types the customer writes or taps. A photo captioned "stop" is not an opt-out. */
 const CAN_OPT_OUT = new Set(['text', 'button', 'interactive']);
 
+/**
+ * Adds what the message replies to (a quick-reply button names the template message it came from)
+ * and a click-to-WhatsApp ad referral. Flows trigger on both.
+ */
+function withReplyContext(
+  content: Prisma.InputJsonValue | undefined,
+  ev: InboundEvent,
+): Prisma.InputJsonValue | undefined {
+  const extra = {
+    ...(ev.context?.id ? { context: { id: ev.context.id } } : {}),
+    ...(ev.referral ? { referral: ev.referral } : {}),
+  };
+  if (Object.keys(extra).length === 0) return content;
+  const base = content && typeof content === 'object' && !Array.isArray(content) ? content : {};
+  return { ...base, ...extra } as Prisma.InputJsonValue;
+}
+
 function extract(ev: InboundEvent): Extracted {
   switch (ev.messageType) {
     case 'text':
@@ -74,13 +91,18 @@ function extract(ev: InboundEvent): Extracted {
       };
     }
     case 'button':
-      return { type: 'button', body: ev.button.text };
+      return {
+        type: 'button',
+        body: ev.button.text,
+        content: { payload: ev.button.payload ?? null },
+      };
     case 'interactive': {
       const reply = ev.reply;
       return {
         type: 'interactive',
         body: reply.kind === 'button_reply' || reply.kind === 'list_reply' ? reply.title : null,
-        content: ev.interactive as Prisma.InputJsonValue,
+        // reply carries the tapped button or row id, which flows branch on.
+        content: { ...(ev.interactive as object), reply: ev.reply } as Prisma.InputJsonValue,
       };
     }
     case 'reaction':
@@ -251,7 +273,7 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
           type: data.type,
           status: 'received',
           body: data.body,
-          content: data.content,
+          content: withReplyContext(data.content, ev),
           waMessageId: ev.id,
           ...(data.media
             ? {

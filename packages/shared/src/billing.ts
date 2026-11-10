@@ -5,13 +5,14 @@ export const PAYMENT_PROVIDERS = ['stripe', 'razorpay'] as const;
 export type PaymentProviderId = (typeof PAYMENT_PROVIDERS)[number];
 
 /** Keys a plan can switch on. New modules add theirs here, and `plans` rows list them. */
-export const PLAN_FEATURES = ['campaigns', 'drips', 'public_api'] as const;
+export const PLAN_FEATURES = ['campaigns', 'drips', 'public_api', 'flows'] as const;
 export type PlanFeature = (typeof PLAN_FEATURES)[number];
 
 export const PLAN_FEATURE_LABELS: Record<PlanFeature, string> = {
   campaigns: 'Broadcast campaigns',
   drips: 'Drip sequences',
   public_api: 'Public API and webhooks',
+  flows: 'Chatbot flows',
 };
 
 /** Where a workspace lands when a trial or subscription ends. */

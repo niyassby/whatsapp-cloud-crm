@@ -11,6 +11,7 @@ import {
 import type {
   GatewayResult,
   MediaKind,
+  SendInteractiveInput,
   SentMessage,
   TemplateComponentInput,
   WhatsAppGateway,
@@ -19,6 +20,19 @@ import { RetryableJobError, type WorkerDeps } from '../deps';
 import { callbackData } from './inbound';
 
 export type OutboundOutcome = 'sent' | 'failed' | 'skipped';
+
+/**
+ * Outbound messages still queued a minute after they were made, whose job was never queued
+ * because a process stopped between commit and enqueue. Across orgs; ids only.
+ */
+export function stuckOutboundMessages(
+  deps: Pick<WorkerDeps, 'db'>,
+  before = new Date(Date.now() - 60_000),
+  limit = 500,
+) {
+  return deps.db.$queryRaw<{ org_id: string; id: string; created_at: Date }[]>`
+    SELECT org_id, id, created_at FROM outbound_stuck_messages(${before}, ${limit}::int)`;
+}
 
 interface TemplateContent {
   templateName: string;
@@ -142,6 +156,13 @@ export async function sendOutboundMessage(
     const sendOpts = { callbackData: callbackData(messageId, message.createdAt) };
     if (message.type === 'text') {
       return gateway.sendText(contact.waId, { body: message.body ?? '' }, sendOpts);
+    }
+    if (message.type === 'interactive') {
+      // Buttons and lists from flows. The whole message is stored on the row.
+      const interactive = (message.content as { interactive?: SendInteractiveInput } | null)
+        ?.interactive;
+      if (!interactive) throw new Error('Interactive message has no content');
+      return gateway.sendInteractive(contact.waId, interactive, sendOpts);
     }
     // Upload once. A retry reuses the saved Meta id.
     const uploadOnce = async (): Promise<GatewayResult<{ mediaId: string }>> => {

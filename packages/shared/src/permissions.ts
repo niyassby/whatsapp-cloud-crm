@@ -34,6 +34,7 @@ export const Permission = {
   BILLING_READ: 'billing:read',
   /** Auto-replies, business hours, assignment rules, SLA, and team skills. */
   AUTOMATION_MANAGE: 'automation:manage',
+  FLOWS_MANAGE: 'flows:manage',
 } as const;
 export type Permission = (typeof Permission)[keyof typeof Permission];
 

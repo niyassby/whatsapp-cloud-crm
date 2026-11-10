@@ -13,4 +13,5 @@ export * from './campaigns';
 export * from './billing';
 export * from './public-api';
 export * from './automation';
+export * from './flows';
 export * from './realtime';

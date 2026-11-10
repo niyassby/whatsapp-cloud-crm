@@ -6,6 +6,7 @@ import { createPrismaClient, withTenant } from '@wacrm/db';
 import {
   buildHealth,
   type AutomationJob,
+  type FlowJob,
   type BillingEventJob,
   type CampaignJob,
   type ContactJobQueueData,
@@ -37,10 +38,12 @@ import { loadWorkerEnv } from './env';
 import { ensureMessagePartitions, purgeWebhookEvents } from './processors/maintenance';
 import { downloadInboundMedia } from './processors/media';
 import { processMetaAccountJob } from './processors/meta-account';
-import { sendOutboundMessage } from './processors/outbound';
+import { sendOutboundMessage, stuckOutboundMessages } from './processors/outbound';
 import { markEventFailed, routeWebhookEvent } from './processors/webhook-events';
 import { processContactJob } from './processors/contact-jobs';
 import { checkSla, runInboxAutomation, slaDueConversations } from './processors/automation';
+import { flowDueRuns, processFlowJob } from './processors/flows';
+import { createSafeHttp } from './safe-http';
 import { processBillingEvent } from './processors/billing';
 import { campaignTickTargets, runCampaignJob } from './processors/campaigns';
 import { dripTargets } from './processors/drips';
@@ -96,6 +99,10 @@ const outboundQueue = new Queue<OutboundJob>(QueueName.OUTBOUND, {
   defaultJobOptions: DEFAULT_JOB_OPTIONS,
 });
 const automationQueue = new Queue<AutomationJob>(QueueName.AUTOMATION, {
+  ...queueOpts,
+  defaultJobOptions: DEFAULT_JOB_OPTIONS,
+});
+const flowQueue = new Queue<FlowJob>(QueueName.FLOWS, {
   ...queueOpts,
   defaultJobOptions: DEFAULT_JOB_OPTIONS,
 });
@@ -166,7 +173,15 @@ const deps: WorkerDeps = {
     await automationQueue.add('run', job, { jobId: `auto-${job.messageId}` });
   },
   secrets,
+  enqueueFlowJob: async (job, delayMs) => {
+    // Advances carry no id: BullMQ keeps finished jobs for an hour, and a second advance of a run
+    // is harmless (each step re-checks the run under its lock). A wake is keyed by its due time.
+    const jobId =
+      job.kind === 'wake' && delayMs ? `flow-wake-${job.runId}-${Date.now() + delayMs}` : undefined;
+    await flowQueue.add(job.kind, job, { jobId, delay: delayMs });
+  },
   postWebhook: createWebhookPoster({ allowPrivate: env.WEBHOOK_ALLOW_PRIVATE_URLS }),
+  httpRequest: createSafeHttp({ allowPrivate: env.WEBHOOK_ALLOW_PRIVATE_URLS }),
   defaultCurrency: env.WALLET_DEFAULT_CURRENCY,
 };
 
@@ -313,6 +328,15 @@ automationWorker.on('failed', (job, err) => {
   log.warn({ jobId: job?.id, err: err.message }, 'automation job attempt failed');
 });
 
+// Flow runs: one step at a time per run, under a row lock, so concurrency only spreads runs out.
+const flowWorker = new Worker<FlowJob>(QueueName.FLOWS, (job) => processFlowJob(deps, job.data), {
+  ...queueOpts,
+  concurrency: 10,
+});
+flowWorker.on('failed', (job, err) => {
+  log.warn({ jobId: job?.id, err: err.message }, 'flow job attempt failed');
+});
+
 // Its own queue: a customer's slow endpoint cannot hold up anything else.
 const webhookDeliveryWorker = new Worker<WebhookDeliveryJob>(
   QueueName.WEBHOOK_DELIVERIES,
@@ -334,6 +358,31 @@ const maintenanceWorker = new Worker(
           log.warn({ err: String(err), conversationId: d.id }, 'SLA check failed'),
         );
       }
+      return;
+    }
+    if (job.name === 'outbound-sweep') {
+      // The job id is the message id, so a message whose job exists is not queued twice.
+      for (const m of await stuckOutboundMessages(deps)) {
+        await deps.enqueueOutbound({
+          orgId: m.org_id,
+          messageId: m.id,
+          createdAt: m.created_at.toISOString(),
+        });
+      }
+      return;
+    }
+    if (job.name === 'flow-tick') {
+      // Delays and waits that are due, and runs a crash left behind. Wake jobs normally beat this.
+      const due = await flowDueRuns(deps);
+      await Promise.all(
+        due.map((d) =>
+          flowQueue.add(
+            'wake',
+            { kind: 'wake', orgId: d.org_id, runId: d.id },
+            { jobId: `flow-tick-${d.id}`, removeOnComplete: true, removeOnFail: true },
+          ),
+        ),
+      );
       return;
     }
     if (job.name === 'webhook-dispatch') {
@@ -403,6 +452,12 @@ void maintenanceQueue
   .upsertJobScheduler('sla-check', { every: 60_000 }, { name: 'sla-check' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule SLA checks'));
 void maintenanceQueue
+  .upsertJobScheduler('flow-tick', { every: 15_000 }, { name: 'flow-tick' })
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule the flow tick'));
+void maintenanceQueue
+  .upsertJobScheduler('outbound-sweep', { every: 60_000 }, { name: 'outbound-sweep' })
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule the sweep'));
+void maintenanceQueue
   .upsertJobScheduler('webhook-dispatch', { every: 5_000 }, { name: 'webhook-dispatch' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule webhooks'));
 void maintenanceQueue
@@ -450,6 +505,8 @@ async function shutdown() {
     billingWorker.close(),
     webhookDeliveryWorker.close(),
     automationWorker.close(),
+    flowWorker.close(),
+    flowQueue.close(),
     automationQueue.close(),
     outboundQueue.close(),
     webhookDeliveryQueue.close(),

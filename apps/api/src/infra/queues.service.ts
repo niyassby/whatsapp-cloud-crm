@@ -1,6 +1,7 @@
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import {
   type BillingEventJob,
+  type FlowJob,
   type CampaignJob,
   type ContactJobQueueData,
   DEFAULT_JOB_OPTIONS,
@@ -27,6 +28,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   readonly templateSync: Queue<TemplateSyncJob>;
   readonly campaigns: Queue<CampaignJob>;
   readonly billingEvents: Queue<BillingEventJob>;
+  readonly flows: Queue<FlowJob>;
 
   constructor(@Inject(API_ENV) env: ApiEnv) {
     const opts = {
@@ -44,6 +46,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
     this.templateSync = new Queue(QueueName.TEMPLATE_SYNC, opts);
     this.campaigns = new Queue(QueueName.CAMPAIGNS, opts);
     this.billingEvents = new Queue(QueueName.BILLING_EVENTS, opts);
+    this.flows = new Queue(QueueName.FLOWS, opts);
     this.contactJobs = new Queue(QueueName.CONTACT_JOBS, {
       ...opts,
       defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, attempts: 3 },
@@ -59,6 +62,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.templateSync.waitUntilReady(),
       this.campaigns.waitUntilReady(),
       this.billingEvents.waitUntilReady(),
+      this.flows.waitUntilReady(),
     ]);
   }
 
@@ -70,6 +74,11 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   /** Job id = event id: a redelivery cannot queue the same event twice. */
   async enqueueBillingEvent(eventId: string): Promise<void> {
     await this.billingEvents.add('process', { eventId }, { jobId: eventId });
+  }
+
+  /** Events that start flows: a tag added, a flow started by hand. */
+  async enqueueFlowJob(job: FlowJob): Promise<void> {
+    await this.flows.add(job.kind, job);
   }
 
   async enqueueCampaignJob(job: CampaignJob): Promise<void> {

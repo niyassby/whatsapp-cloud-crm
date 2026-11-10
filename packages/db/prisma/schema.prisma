@@ -247,6 +247,10 @@ model Organization {
   autoReplyRules     AutoReplyRule[]
   assignmentRules    AssignmentRule[]
   notifications      Notification[]
+  flows              Flow[]
+  flowVersions       FlowVersion[]
+  flowRuns           FlowRun[]
+  flowRunSteps       FlowRunStep[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -559,6 +563,7 @@ model Contact {
   conversations      Conversation[]
   campaignRecipients CampaignRecipient[]
   dripEnrollments    DripEnrollment[]
+  flowRuns           FlowRun[]
   mergedInto         Contact?              @relation("ContactMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
   duplicates         Contact[]             @relation("ContactMerge")
   tags               ContactTag[]
@@ -721,6 +726,7 @@ model Conversation {
   assignee           User?               @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
   messages           Message[]
   labels             ConversationLabel[]
+  flowRuns           FlowRun[]
   /// The customer's first message that no person has answered yet. Null once someone replies.
   awaitingReplySince DateTime?           @map("awaiting_reply_since") @db.Timestamptz(3)
   /// When the SLA is next checked: the deadline, then the escalation time after a breach.
@@ -1468,4 +1474,112 @@ model Notification {
 
   @@index([orgId, userId, id(sort: Desc)])
   @@map("notifications")
+}
+
+/// A chatbot flow. `draft` is edited freely; runs use a published, immutable FlowVersion.
+model Flow {
+  id                 String    @id @default(uuid(7)) @db.Uuid
+  orgId              String    @map("org_id") @db.Uuid
+  name               String
+  /// Only active flows with a published version start runs.
+  active             Boolean   @default(false)
+  /// The published trigger, copied out of the definition so triggers can be found by type.
+  triggerType        String    @default("manual") @map("trigger_type")
+  trigger            Json      @default("{\"type\":\"manual\"}")
+  draft              Json
+  publishedVersionId String?   @unique @map("published_version_id") @db.Uuid
+  createdById        String?   @map("created_by_id") @db.Uuid
+  /// Removed flows keep their runs and history.
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org              Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  publishedVersion FlowVersion?  @relation("PublishedVersion", fields: [publishedVersionId], references: [id])
+  versions         FlowVersion[] @relation("FlowVersions")
+  runs             FlowRun[]
+
+  @@index([orgId, active, triggerType])
+  @@map("flows")
+}
+
+/// A published definition. Never changed: runs started on it keep running on it.
+model FlowVersion {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  orgId         String   @map("org_id") @db.Uuid
+  flowId        String   @map("flow_id") @db.Uuid
+  version       Int
+  definition    Json
+  publishedById String?  @map("published_by_id") @db.Uuid
+  publishedAt   DateTime @default(now()) @map("published_at") @db.Timestamptz(3)
+
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  flow        Flow         @relation("FlowVersions", fields: [flowId], references: [id], onDelete: Cascade)
+  publishedOf Flow?        @relation("PublishedVersion")
+  runs        FlowRun[]
+
+  @@unique([flowId, version])
+  @@index([orgId])
+  @@map("flow_versions")
+}
+
+/// One contact going through one flow version.
+model FlowRun {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  orgId          String    @map("org_id") @db.Uuid
+  flowId         String    @map("flow_id") @db.Uuid
+  versionId      String    @map("version_id") @db.Uuid
+  contactId      String    @map("contact_id") @db.Uuid
+  conversationId String?   @map("conversation_id") @db.Uuid
+  /// running, waiting, completed, failed or cancelled
+  status         String    @default("running")
+  currentNodeId  String?   @map("current_node_id")
+  variables      Json      @default("{}")
+  /// What started the run, readable as {{trigger.*}}.
+  trigger        Json      @default("{}")
+  /// The node waiting, and its retries: { nodeId, kind, attempts }.
+  awaiting       Json?
+  /// A reply or timeout handed to the waiting node: { kind: 'reply' | 'timeout', ... }.
+  input          Json?
+  /// When a delay or a wait for a reply ends.
+  wakeAt         DateTime? @map("wake_at") @db.Timestamptz(3)
+  steps          Int       @default(0)
+  stepsSinceWait Int       @default(0) @map("steps_since_wait")
+  endReason      String?   @map("end_reason")
+  error          String?
+  startedAt      DateTime  @default(now()) @map("started_at") @db.Timestamptz(3)
+  endedAt        DateTime? @map("ended_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org          Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  flow         Flow          @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  version      FlowVersion   @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  contact      Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  history      FlowRunStep[]
+
+  @@index([status, wakeAt])
+  @@index([orgId, flowId, id(sort: Desc)])
+  @@index([contactId, flowId])
+  @@map("flow_runs")
+}
+
+/// What each node did, for debugging. Append-only.
+model FlowRunStep {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  runId     String   @map("run_id") @db.Uuid
+  nodeId    String   @map("node_id")
+  nodeType  String   @map("node_type")
+  /// The exit taken, or waiting, failed, ended.
+  outcome   String
+  detail    Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  run FlowRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, id])
+  @@index([orgId])
+  @@map("flow_run_steps")
 }

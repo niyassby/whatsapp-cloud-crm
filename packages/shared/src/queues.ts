@@ -19,7 +19,28 @@ export const QueueName = {
   BILLING_EVENTS: 'billing-events',
   WEBHOOK_DELIVERIES: 'webhook-deliveries',
   AUTOMATION: 'automation',
+  /** Flow runs and the events that start them. */
+  FLOWS: 'flows',
 } as const;
+
+/** Something outside a message that can start flows. */
+export type FlowEvent =
+  | { type: 'tag_added'; contactId: string; tagId: string }
+  | {
+      type: 'integration_event';
+      connector: string;
+      event: string;
+      contactId: string;
+      data: Record<string, unknown>;
+    }
+  | { type: 'manual'; flowId: string; contactId: string };
+
+export type FlowJob =
+  /** Run a flow until it waits or ends. */
+  | { kind: 'advance'; orgId: string; runId: string }
+  /** A delay or a wait for a reply may be over. */
+  | { kind: 'wake'; orgId: string; runId: string }
+  | { kind: 'event'; orgId: string; event: FlowEvent };
 
 /** One inbound message to run the rules on. */
 export interface AutomationJob {

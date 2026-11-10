@@ -41,6 +41,7 @@ export const AuditAction = {
   BILLING_CANCEL_REQUESTED: 'billing.cancel_requested',
   WALLET_TOPUP_STARTED: 'wallet.topup_started',
   AUTOMATION_CHANGED: 'automation.changed',
+  FLOW_CHANGED: 'flow.changed',
   API_KEY_CREATED: 'api_key.created',
   API_KEY_REVOKED: 'api_key.revoked',
   WEBHOOK_ENDPOINT_CREATED: 'webhook_endpoint.created',

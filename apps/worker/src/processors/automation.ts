@@ -22,6 +22,7 @@ import {
   pickRoundRobin,
 } from '@wacrm/shared';
 import type { WorkerDeps } from '../deps';
+import { handleInboundForFlows } from './flows';
 
 /** Message types a customer types or taps. A photo's caption is not a command. */
 const MATCHABLE = new Set(['text', 'button', 'interactive']);
@@ -217,6 +218,21 @@ export async function runInboxAutomation(
       const settings = await tx.automationSettings.findUnique({ where: { orgId } });
       const text = MATCHABLE.has(message.type) ? message.body : null;
 
+      // ---- flows: a run waiting for this answer, or a trigger. A flow that takes the message
+      // also takes the conversation, so the rules below stay out of its way.
+      const flows = await handleInboundForFlows(tx, orgId, {
+        id: message.id,
+        type: message.type,
+        body: message.body,
+        content: message.content,
+        conversationId: conversation.id,
+        contactId: contact.id,
+        contactOptedOut: contact.optInStatus === 'opted_out',
+      });
+      if (flows.consumed) {
+        return { queued: [], updated: null, messages: [], notices: [], advance: flows.advance };
+      }
+
       // ---- replies
       const replies: { kind: AutomationKind; text: string; ruleId?: string }[] = [];
       // Someone who said STOP gets nothing automatic, not even an acknowledgement.
@@ -351,7 +367,7 @@ export async function runInboxAutomation(
             orderBy: { createdAt: 'asc' },
           })
         : [];
-      return { queued, updated, messages, notices };
+      return { queued, updated, messages, notices, advance: flows.advance };
     },
     { timeout: 20_000 },
   );
@@ -366,6 +382,7 @@ export async function runInboxAutomation(
   }
   for (const n of result.notices)
     deps.publisher.emit(orgId, 'notification:new', { userId: n.userId });
+  for (const runId of result.advance) await deps.enqueueFlowJob({ kind: 'advance', orgId, runId });
   // Through the outbound queue like every send, so the per-number limit and retries apply.
   for (const q of result.queued) {
     await deps.enqueueOutbound({

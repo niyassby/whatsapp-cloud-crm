@@ -313,10 +313,21 @@ describe('contacts and tags', () => {
   it('plan limits apply', async () => {
     const s = await workspace();
     const { key } = await s.makeKey();
-    const growth = await owner.plan.findUniqueOrThrow({ where: { code: 'growth' } });
-    await owner.plan.update({ where: { id: growth.id }, data: { contacts: 0 } });
+    // A plan of its own: changing a shared plan would hit other suites running at the same time.
+    const full = await owner.plan.create({
+      data: {
+        code: `full-${randomUUID()}`,
+        name: 'Full',
+        contacts: 0,
+        features: ['public_api'],
+        isPublic: false,
+      },
+    });
+    await owner.subscription.update({
+      where: { orgId: s.orgId },
+      data: { planId: full.id, status: 'active', trialEndsAt: null },
+    });
     const res = await call(key, 'POST', '/v1/contacts', { phone: '+919876543210' });
-    await owner.plan.update({ where: { id: growth.id }, data: { contacts: 25000 } });
     expect(res.status).toBe(402);
   });
 });

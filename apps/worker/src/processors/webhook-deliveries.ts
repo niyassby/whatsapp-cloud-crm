@@ -1,20 +1,12 @@
-import { lookup as dnsLookup } from 'node:dns';
-import http from 'node:http';
-import https from 'node:https';
-import type { LookupFunction } from 'node:net';
 import { withTenant } from '@wacrm/db';
 import {
   WEBHOOK_MAX_ATTEMPTS,
   WEBHOOK_RETRY_DELAYS_SECONDS,
   type WebhookDeliveryJob,
 } from '@wacrm/shared';
-import {
-  isPrivateAddress,
-  signWebhook,
-  WEBHOOK_SIGNATURE_HEADER,
-  webhookSecretAad,
-} from '@wacrm/shared/server';
+import { signWebhook, WEBHOOK_SIGNATURE_HEADER, webhookSecretAad } from '@wacrm/shared/server';
 import type { WorkerDeps } from '../deps';
+import { createSafeHttp } from '../safe-http';
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const RESPONSE_KEEP_BYTES = 1024;
@@ -32,64 +24,22 @@ export type WebhookPoster = (
 ) => Promise<WebhookResponse>;
 
 /**
- * POST to a customer's URL. The address is checked when connecting rather than beforehand, so a
- * name cannot pass a check and then resolve somewhere internal. Redirects are not followed, since
- * one could point anywhere. Only a little of the response is kept.
+ * POST to a customer's URL, through the same checks as every customer-chosen address: no internal
+ * addresses, no redirects, a 10-second timeout. Only a little of the response is kept.
  */
 export function createWebhookPoster(opts: { allowPrivate: boolean }): WebhookPoster {
-  const lookup: LookupFunction = (hostname, options, callback) => {
-    dnsLookup(hostname, { ...options, all: true }, (err, addresses) => {
-      if (err) return callback(err, '', 0);
-      const list = addresses as unknown as { address: string; family: number }[];
-      if (!opts.allowPrivate && list.some((a) => isPrivateAddress(a.address))) {
-        return callback(new Error('This address is not reachable from the internet'), '', 0);
-      }
-      if (options.all) return callback(null, list as never, 0);
-      const first = list[0];
-      return first
-        ? callback(null, first.address, first.family)
-        : callback(new Error('No address'), '', 0);
+  const request = createSafeHttp(opts);
+  return async (url, headers, body) => {
+    const res = await request({
+      method: 'POST',
+      url,
+      headers,
+      body,
+      maxBytes: RESPONSE_KEEP_BYTES,
+      timeoutMs: REQUEST_TIMEOUT_MS,
     });
+    return { status: res.status, body: res.body };
   };
-
-  return (rawUrl, headers, body) =>
-    new Promise((resolve, reject) => {
-      const url = new URL(rawUrl);
-      if (!opts.allowPrivate && isPrivateLiteral(url.hostname)) {
-        reject(new Error('This address is not reachable from the internet'));
-        return;
-      }
-      const client = url.protocol === 'https:' ? https : http;
-      const req = client.request(
-        url,
-        {
-          method: 'POST',
-          headers: { ...headers, 'content-length': Buffer.byteLength(body) },
-          timeout: REQUEST_TIMEOUT_MS,
-          lookup,
-        },
-        (res) => {
-          let kept = '';
-          res.setEncoding('utf8');
-          res.on('data', (chunk: string) => {
-            if (kept.length < RESPONSE_KEEP_BYTES) kept += chunk;
-          });
-          res.on('end', () =>
-            resolve({ status: res.statusCode ?? 0, body: kept.slice(0, RESPONSE_KEEP_BYTES) }),
-          );
-          res.on('error', reject);
-        },
-      );
-      req.on('timeout', () => req.destroy(new Error('Timed out after 10 seconds')));
-      req.on('error', reject);
-      req.end(body);
-    });
-}
-
-/** A hostname that is already an address never goes through `lookup`. */
-function isPrivateLiteral(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, '');
-  return /^[\d.]+$|:/.test(host) && isPrivateAddress(host);
 }
 
 /** Pending deliveries that are due, across every org. A definer function returning only ids. */

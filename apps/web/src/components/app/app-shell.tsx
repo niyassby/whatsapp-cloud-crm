@@ -10,6 +10,7 @@ import {
   Settings,
   Users,
   Wallet,
+  Workflow,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -47,6 +48,7 @@ const NAV: {
     icon: Megaphone,
     permission: Permission.CAMPAIGNS_MANAGE,
   },
+  { href: '/flows', label: 'Flows', icon: Workflow, permission: Permission.FLOWS_MANAGE },
   { href: '/wallet', label: 'Wallet', icon: Wallet, permission: Permission.WALLET_READ },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];

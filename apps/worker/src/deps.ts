@@ -3,6 +3,7 @@ import type { DbClient } from '@wacrm/db';
 import type {
   AutomationJob,
   CampaignJob,
+  FlowJob,
   OutboundJob,
   MediaDownloadJob,
   RealtimePublisher,
@@ -11,6 +12,7 @@ import type {
 import type { ObjectStorage, SecretBox } from '@wacrm/shared/server';
 import type { WhatsAppClientFactory } from '@wacrm/whatsapp';
 import type { WebhookPoster } from './processors/webhook-deliveries';
+import type { SafeHttp } from './safe-http';
 
 /** What the processors need. Injected, so tests run them without Redis or Meta. */
 export interface WorkerDeps {
@@ -23,6 +25,8 @@ export interface WorkerDeps {
   enqueueCampaignJob: (job: CampaignJob, delayMs?: number) => Promise<void>;
   enqueueOutbound: (job: OutboundJob) => Promise<void>;
   enqueueAutomation: (job: AutomationJob) => Promise<void>;
+  /** delayMs: run no earlier than this from now. */
+  enqueueFlowJob: (job: FlowJob, delayMs?: number) => Promise<void>;
   /**
    * Ask to send up to `wanted` messages on this number this second. Answers how many are allowed.
    * Shares its counter with the inbox's limit, so campaigns only use what the inbox leaves.
@@ -31,6 +35,8 @@ export interface WorkerDeps {
   payments: PaymentProviders;
   secrets: SecretBox;
   postWebhook: WebhookPoster;
+  /** Flow HTTP steps. Same address checks as webhooks. */
+  httpRequest: SafeHttp;
   /** For a workspace whose first paid send comes from a drip. */
   defaultCurrency: string;
 }
