@@ -2,7 +2,9 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createPrismaClient, type DbClient, withTenant } from '@wacrm/db';
 import { testDbUrls } from '@wacrm/db/testing';
 import type {
+  AutomationJob,
   CampaignJob,
+  OutboundJob,
   MediaDownloadJob,
   RealtimePublisher,
   TemplateSyncJob,
@@ -91,6 +93,8 @@ export function buildDeps(client: DbClient) {
   const media: MediaDownloadJob[] = [];
   const syncs: TemplateSyncJob[] = [];
   const campaignJobs: { job: CampaignJob; delayMs?: number }[] = [];
+  const outbound: OutboundJob[] = [];
+  const automation: AutomationJob[] = [];
   const webhooks: { url: string; headers: Record<string, string>; body: string }[] = [];
   let webhookResponse: () => { status: number; body: string } = () => ({ status: 200, body: 'ok' });
   const fake = fakeGateway();
@@ -114,6 +118,12 @@ export function buildDeps(client: DbClient) {
     },
     acquireCampaignSlots: async (_phoneNumberId, wanted) => wanted,
     payments: {},
+    enqueueOutbound: async (job) => {
+      outbound.push(job);
+    },
+    enqueueAutomation: async (job) => {
+      automation.push(job);
+    },
     secrets: new SecretBox(randomBytes(32).toString('base64')),
     postWebhook: async (url, headers, body) => {
       webhooks.push({ url, headers, body });
@@ -130,6 +140,8 @@ export function buildDeps(client: DbClient) {
     campaignJobs,
     fake,
     webhooks,
+    outbound,
+    automation,
     respondToWebhooks: (fn: () => { status: number; body: string }) => {
       webhookResponse = fn;
     },

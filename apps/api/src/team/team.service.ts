@@ -73,6 +73,8 @@ export class TeamService {
           userId: true,
           role: true,
           status: true,
+          available: true,
+          skills: true,
           createdAt: true,
           user: { select: { name: true, email: true } },
         },
@@ -85,6 +87,8 @@ export class TeamService {
       email: m.user.email,
       role: m.role,
       status: m.status,
+      available: m.available,
+      skills: m.skills,
       createdAt: m.createdAt.toISOString(),
     }));
   }

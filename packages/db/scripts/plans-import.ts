@@ -30,21 +30,24 @@ const db = createPrismaClient({ connectionString: directUrl });
 
 async function main() {
   for (const { prices, ...plan } of parsed.plans) {
-    await db.$transaction(async (tx) => {
-      const row = await tx.plan.upsert({
-        where: { code: plan.code },
-        create: plan,
-        update: plan,
-      });
-      await tx.planPrice.deleteMany({ where: { planId: row.id } });
-      for (const { amount, ...price } of prices) {
-        const micros = decimalToMicros(amount);
-        if (micros === null) throw new Error(`Bad amount for ${plan.code}: ${amount}`);
-        await tx.planPrice.create({
-          data: { ...price, planId: row.id, amountMicros: BigInt(micros) },
+    await db.$transaction(
+      async (tx) => {
+        const row = await tx.plan.upsert({
+          where: { code: plan.code },
+          create: plan,
+          update: plan,
         });
-      }
-    });
+        await tx.planPrice.deleteMany({ where: { planId: row.id } });
+        for (const { amount, ...price } of prices) {
+          const micros = decimalToMicros(amount);
+          if (micros === null) throw new Error(`Bad amount for ${plan.code}: ${amount}`);
+          await tx.planPrice.create({
+            data: { ...price, planId: row.id, amountMicros: BigInt(micros) },
+          });
+        }
+      },
+      { maxWait: 15_000, timeout: 30_000 },
+    );
     console.log(`${plan.code}: ${prices.length} prices`);
   }
 }

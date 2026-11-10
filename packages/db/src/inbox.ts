@@ -25,6 +25,8 @@ export function conversationToDto(c: ConversationWithRelations): ConversationDto
     lastMessagePreview: c.lastMessagePreview,
     unreadCount: c.unreadCount,
     windowExpiresAt: c.windowExpiresAt?.toISOString() ?? null,
+    awaitingReplySince: c.awaitingReplySince?.toISOString() ?? null,
+    slaBreached: c.slaStage > 0,
   };
 }
 

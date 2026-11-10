@@ -2,6 +2,7 @@
 
 import { useQueryClient } from '@tanstack/react-query';
 import {
+  type MeResponse,
   type ClientToServerEvents,
   type ContactJobDto,
   ErrorCode,
@@ -18,6 +19,7 @@ import { env } from '@/lib/env';
 import { applyConversationUpdate, inboxKeys, upsertMessage } from '@/lib/inbox';
 import { queryKeys, useMe } from '@/lib/queries';
 import { templateKeys } from '@/lib/templates';
+import { automationKeys } from '@/lib/automation';
 import { billingKeys } from '@/lib/billing';
 import { campaignKeys } from '@/lib/campaigns';
 import { walletKeys } from '@/lib/wallet';
@@ -60,6 +62,9 @@ function setTyping(conversationId: string, typist: Omit<Typist, 'until'>, isTypi
     };
   });
 }
+
+const useMeStoreUserId = (client: ReturnType<typeof useQueryClient>) =>
+  client.getQueryData<MeResponse>(queryKeys.me)?.user.id;
 
 /** One socket per signed-in workspace. Switching workspace connects to the new org's room. */
 export function RealtimeProvider({ children }: { children: ReactNode }) {
@@ -154,6 +159,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           void queryClient.invalidateQueries({ queryKey: campaignKeys.lists });
         }, 1000),
       );
+    });
+    // Sent to the whole org with only who it is for. Only that person fetches it.
+    socket.on('notification:new', ({ userId }) => {
+      if (userId === useMeStoreUserId(queryClient)) {
+        void queryClient.invalidateQueries({ queryKey: automationKeys.notifications });
+      }
     });
     socket.on('billing:updated', () => {
       void queryClient.invalidateQueries({ queryKey: billingKeys.all });

@@ -95,6 +95,22 @@ function extract(ev: InboundEvent): Extracted {
 }
 
 /**
+ * Creating next month's message partition takes a lock that can deadlock with an insert, and
+ * Postgres then cancels one side. The whole transaction rolled back, the wamid claim with it, so
+ * running it again is safe. A couple of quick tries saves a job retry with backoff.
+ */
+async function retryOnDeadlock<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if ((err as { code?: unknown }).code !== 'P2034' || i >= attempts) throw err;
+      await new Promise((r) => setTimeout(r, 50 * i));
+    }
+  }
+}
+
+/**
  * Save one inbound message. Safe to run again: the wamid is claimed first, so a Meta redelivery,
  * a job retry or a replay finds the claim and changes nothing (unread counts do not double).
  */
@@ -106,156 +122,173 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
   const messageId = randomUUID();
   const createdAt = new Date();
 
-  const saved = await withTenant(deps.db, { orgId }, async (tx) => {
-    const claim = await tx.messageRef.createMany({
-      data: {
-        orgId,
-        kind: 'wamid',
-        ref: ev.id,
-        messageId,
-        messageCreatedAt: createdAt,
-      },
-      skipDuplicates: true,
-    });
-    if (claim.count === 0) return null;
-
-    const phone = await tx.phoneNumber.findFirst({
-      where: { phoneNumberId: ev.phoneNumberId, status: { not: 'disconnected' } },
-      select: { id: true },
-    });
-    if (!phone) return null;
-
-    const known = await tx.contact.count({ where: { orgId, waId: ev.sender } });
-    const row = await tx.contact.upsert({
-      where: { orgId_waId: { orgId, waId: ev.sender } },
-      create: { orgId, waId: ev.sender, name: ev.profileName, lastActivityAt: sentAt },
-      update: {},
-      select: { id: true, mergedIntoId: true },
-    });
-    // A duplicate that was merged: its number now belongs to the primary contact.
-    const contact = { id: row.mergedIntoId ?? row.id };
-    const current = await tx.contact.findUniqueOrThrow({
-      where: { id: contact.id },
-      select: { name: true, lastActivityAt: true, deletedAt: true },
-    });
-    await tx.contact.update({
-      where: { id: contact.id },
-      data: {
-        // Writing in brings a deleted contact back, with its consent record intact.
-        deletedAt: null,
-        // A name someone entered or imported is not replaced by the WhatsApp profile name.
-        ...(!current.name && ev.profileName ? { name: ev.profileName } : {}),
-        ...(!current.lastActivityAt || current.lastActivityAt < sentAt
-          ? { lastActivityAt: sentAt }
-          : {}),
-      },
-    });
-
-    if (known === 0) {
-      await emitWebhookEvent(tx, orgId, 'contact.created', {
-        id: contact.id,
-        waId: ev.sender,
-        name: ev.profileName ?? null,
-      });
-    }
-
-    const reply = await applyContactReply(tx, contact.id, sentAt);
-
-    let optedOut = false;
-    if (CAN_OPT_OUT.has(data.type)) {
-      const org = await tx.organization.findUniqueOrThrow({
-        where: { id: orgId },
-        select: { optOutKeywords: true },
-      });
-      if (isOptOutMessage(data.body, org.optOutKeywords)) {
-        optedOut = await setContactConsent(tx, {
+  const saved = await retryOnDeadlock(() =>
+    withTenant(deps.db, { orgId }, async (tx) => {
+      const claim = await tx.messageRef.createMany({
+        data: {
           orgId,
-          contactId: contact.id,
-          status: 'opted_out',
-          source: 'keyword',
-          proof: `Message ${ev.id}: ${data.body?.slice(0, 200)}`,
+          kind: 'wamid',
+          ref: ev.id,
+          messageId,
+          messageCreatedAt: createdAt,
+        },
+        skipDuplicates: true,
+      });
+      if (claim.count === 0) {
+        const ref = await tx.messageRef.findUnique({
+          where: { orgId_kind_ref: { orgId, kind: 'wamid', ref: ev.id } },
         });
-        await exitDripsOnOptOut(tx, contact.id);
-        if (optedOut) {
-          await emitWebhookEvent(tx, orgId, 'contact.opted_out', {
-            id: contact.id,
-            waId: ev.sender,
+        return ref ? { duplicate: ref } : null;
+      }
+
+      const phone = await tx.phoneNumber.findFirst({
+        where: { phoneNumberId: ev.phoneNumberId, status: { not: 'disconnected' } },
+        select: { id: true },
+      });
+      if (!phone) return null;
+
+      const known = await tx.contact.count({ where: { orgId, waId: ev.sender } });
+      const row = await tx.contact.upsert({
+        where: { orgId_waId: { orgId, waId: ev.sender } },
+        create: { orgId, waId: ev.sender, name: ev.profileName, lastActivityAt: sentAt },
+        update: {},
+        select: { id: true, mergedIntoId: true },
+      });
+      // A duplicate that was merged: its number now belongs to the primary contact.
+      const contact = { id: row.mergedIntoId ?? row.id };
+      const current = await tx.contact.findUniqueOrThrow({
+        where: { id: contact.id },
+        select: { name: true, lastActivityAt: true, deletedAt: true },
+      });
+      await tx.contact.update({
+        where: { id: contact.id },
+        data: {
+          // Writing in brings a deleted contact back, with its consent record intact.
+          deletedAt: null,
+          // A name someone entered or imported is not replaced by the WhatsApp profile name.
+          ...(!current.name && ev.profileName ? { name: ev.profileName } : {}),
+          ...(!current.lastActivityAt || current.lastActivityAt < sentAt
+            ? { lastActivityAt: sentAt }
+            : {}),
+        },
+      });
+
+      if (known === 0) {
+        await emitWebhookEvent(tx, orgId, 'contact.created', {
+          id: contact.id,
+          waId: ev.sender,
+          name: ev.profileName ?? null,
+        });
+      }
+
+      const reply = await applyContactReply(tx, contact.id, sentAt);
+
+      let optedOut = false;
+      if (CAN_OPT_OUT.has(data.type)) {
+        const org = await tx.organization.findUniqueOrThrow({
+          where: { id: orgId },
+          select: { optOutKeywords: true },
+        });
+        if (isOptOutMessage(data.body, org.optOutKeywords)) {
+          optedOut = await setContactConsent(tx, {
+            orgId,
+            contactId: contact.id,
+            status: 'opted_out',
+            source: 'keyword',
+            proof: `Message ${ev.id}: ${data.body?.slice(0, 200)}`,
           });
+          await exitDripsOnOptOut(tx, contact.id);
+          if (optedOut) {
+            await emitWebhookEvent(tx, orgId, 'contact.opted_out', {
+              id: contact.id,
+              waId: ev.sender,
+            });
+          }
         }
       }
-    }
 
-    const key = { orgId_phoneId_contactId: { orgId, phoneId: phone.id, contactId: contact.id } };
-    const existing = await tx.conversation.findUnique({
-      where: key,
-      select: { windowExpiresAt: true, lastMessageAt: true },
-    });
-    const windowFromThis = new Date(sentAt.getTime() + WINDOW_MS);
-    // Deliveries can arrive out of order: never move the window or the preview backwards.
-    const windowExpiresAt =
-      existing?.windowExpiresAt && existing.windowExpiresAt > windowFromThis
-        ? existing.windowExpiresAt
-        : windowFromThis;
-    const isLatest = !existing?.lastMessageAt || existing.lastMessageAt <= sentAt;
+      const key = { orgId_phoneId_contactId: { orgId, phoneId: phone.id, contactId: contact.id } };
+      const existing = await tx.conversation.findUnique({
+        where: key,
+        select: { windowExpiresAt: true, lastMessageAt: true },
+      });
+      const windowFromThis = new Date(sentAt.getTime() + WINDOW_MS);
+      // Deliveries can arrive out of order: never move the window or the preview backwards.
+      const windowExpiresAt =
+        existing?.windowExpiresAt && existing.windowExpiresAt > windowFromThis
+          ? existing.windowExpiresAt
+          : windowFromThis;
+      const isLatest = !existing?.lastMessageAt || existing.lastMessageAt <= sentAt;
 
-    const conversation = await tx.conversation.upsert({
-      where: key,
-      create: {
-        orgId,
-        phoneId: phone.id,
+      const conversation = await tx.conversation.upsert({
+        where: key,
+        create: {
+          orgId,
+          phoneId: phone.id,
+          contactId: contact.id,
+          windowExpiresAt,
+          lastMessageAt: sentAt,
+          lastMessagePreview: preview,
+          unreadCount: 1,
+        },
+        update: {
+          // A customer writing back reopens the conversation.
+          status: 'open',
+          windowExpiresAt,
+          unreadCount: { increment: 1 },
+          ...(isLatest ? { lastMessageAt: sentAt, lastMessagePreview: preview } : {}),
+        },
+        include: conversationInclude,
+      });
+
+      const message = await tx.message.create({
+        data: {
+          id: messageId,
+          createdAt,
+          orgId,
+          conversationId: conversation.id,
+          direction: 'inbound',
+          type: data.type,
+          status: 'received',
+          body: data.body,
+          content: data.content,
+          waMessageId: ev.id,
+          ...(data.media
+            ? {
+                mediaMetaId: data.media.id,
+                mediaMime: data.media.mime,
+                mediaFilename: data.media.filename,
+                mediaStatus: 'pending' as const,
+              }
+            : {}),
+        },
+        include: messageInclude,
+      });
+      await emitWebhookEvent(tx, orgId, 'message.received', {
+        message: toPublicMessage(messageToDto(message)),
+        contact: { id: contact.id, waId: ev.sender, name: current.name ?? ev.profileName ?? null },
+        phoneNumberId: phone.id,
+      });
+      return {
+        conversation,
+        message,
         contactId: contact.id,
-        windowExpiresAt,
-        lastMessageAt: sentAt,
-        lastMessagePreview: preview,
-        unreadCount: 1,
-      },
-      update: {
-        // A customer writing back reopens the conversation.
-        status: 'open',
-        windowExpiresAt,
-        unreadCount: { increment: 1 },
-        ...(isLatest ? { lastMessageAt: sentAt, lastMessagePreview: preview } : {}),
-      },
-      include: conversationInclude,
-    });
-
-    const message = await tx.message.create({
-      data: {
-        id: messageId,
-        createdAt,
-        orgId,
-        conversationId: conversation.id,
-        direction: 'inbound',
-        type: data.type,
-        status: 'received',
-        body: data.body,
-        content: data.content,
-        waMessageId: ev.id,
-        ...(data.media
-          ? {
-              mediaMetaId: data.media.id,
-              mediaMime: data.media.mime,
-              mediaFilename: data.media.filename,
-              mediaStatus: 'pending' as const,
-            }
-          : {}),
-      },
-      include: messageInclude,
-    });
-    await emitWebhookEvent(tx, orgId, 'message.received', {
-      message: toPublicMessage(messageToDto(message)),
-      contact: { id: contact.id, waId: ev.sender, name: current.name ?? ev.profileName ?? null },
-      phoneNumberId: phone.id,
-    });
-    return {
-      conversation,
-      message,
-      contactId: contact.id,
-      optedOut,
-      campaignId: reply.campaignId,
-    };
-  });
+        optedOut,
+        campaignId: reply.campaignId,
+      };
+    }),
+  );
   if (!saved) return;
+  if ('duplicate' in saved && saved.duplicate) {
+    // Already saved. The rules may not have run if queueing failed last time; a second run is
+    // stopped by the claim inside it, so queueing again is safe.
+    await deps.enqueueAutomation({
+      orgId,
+      messageId: saved.duplicate.messageId,
+      createdAt: saved.duplicate.messageCreatedAt.toISOString(),
+    });
+    return;
+  }
 
   if (saved.campaignId) {
     deps.publisher.emit(orgId, 'campaign:updated', { campaignId: saved.campaignId });
@@ -265,6 +298,7 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
   deps.publisher.emit(orgId, 'conversation:updated', {
     conversation: conversationToDto(saved.conversation),
   });
+  await deps.enqueueAutomation({ orgId, messageId, createdAt: createdAt.toISOString() });
   if (data.media) {
     await deps.enqueueMediaDownload({
       orgId,

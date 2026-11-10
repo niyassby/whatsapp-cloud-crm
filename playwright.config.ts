@@ -15,7 +15,8 @@ export default defineConfig({
   webServer: {
     command: 'node e2e/support/start-stack.mjs',
     url: `${WEB_URL}/health`,
-    timeout: 300_000,
+    // Migrations, imports and a production build come first; the build alone has taken 10 minutes here.
+    timeout: 900_000,
     reuseExistingServer: false,
     stdout: 'pipe',
     gracefulShutdown: { signal: 'SIGTERM', timeout: 5000 },

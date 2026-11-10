@@ -1,7 +1,7 @@
 'use client';
 
 import { useQueryClient } from '@tanstack/react-query';
-import type { MeResponse } from '@wacrm/shared';
+import { type MeResponse, Permission } from '@wacrm/shared';
 import { LogOut, Settings, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -17,6 +18,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
+import { handleApiError } from '@/lib/forms';
+import { queryKeys, useCan, useMembers } from '@/lib/queries';
 
 export const initials = (name: string) =>
   name
@@ -29,6 +32,18 @@ export const initials = (name: string) =>
 export function UserMenu({ me }: { me: MeResponse }) {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const canReply = useCan(Permission.INBOX_REPLY);
+  const members = useMembers(Boolean(me.currentOrg) && canReply);
+  const mine = members.data?.find((m) => m.userId === me.user.id);
+
+  const setAvailable = async (available: boolean) => {
+    try {
+      await api('/automation/me/availability', { method: 'PATCH', body: { available } });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.members });
+    } catch (err) {
+      handleApiError(err);
+    }
+  };
 
   const logout = async () => {
     try {
@@ -55,6 +70,17 @@ export function UserMenu({ me }: { me: MeResponse }) {
           <div className="truncate text-xs font-normal text-muted-foreground">{me.user.email}</div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {mine && (
+          <>
+            <DropdownMenuCheckboxItem
+              checked={mine.available}
+              onCheckedChange={(v) => void setAvailable(Boolean(v))}
+            >
+              Available for new conversations
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuItem asChild>
           <Link href="/settings/security">
             <ShieldCheck className="size-4" aria-hidden /> Security

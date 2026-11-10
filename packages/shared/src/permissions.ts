@@ -32,6 +32,8 @@ export const Permission = {
   ANALYTICS_READ: 'analytics:read',
   /** See the plan, usage and invoices. Paying or changing anything needs BILLING_MANAGE. */
   BILLING_READ: 'billing:read',
+  /** Auto-replies, business hours, assignment rules, SLA, and team skills. */
+  AUTOMATION_MANAGE: 'automation:manage',
 } as const;
 export type Permission = (typeof Permission)[keyof typeof Permission];
 

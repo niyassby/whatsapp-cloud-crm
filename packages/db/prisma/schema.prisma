@@ -237,12 +237,16 @@ model Organization {
   billingCountry String?             @map("billing_country")
   taxId          String?             @map("tax_id")
 
-  subscription      Subscription?
-  walletTopups      WalletTopup[]
-  invoices          Invoice[]
-  billingEvents     BillingEvent[]
-  webhookEndpoints  WebhookEndpoint[]
-  webhookDeliveries WebhookDelivery[]
+  subscription       Subscription?
+  walletTopups       WalletTopup[]
+  invoices           Invoice[]
+  billingEvents      BillingEvent[]
+  webhookEndpoints   WebhookEndpoint[]
+  webhookDeliveries  WebhookDelivery[]
+  automationSettings AutomationSettings?
+  autoReplyRules     AutoReplyRule[]
+  assignmentRules    AssignmentRule[]
+  notifications      Notification[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -288,6 +292,7 @@ model User {
   dripSequencesCreated  DripSequence[]
   walletTopups          WalletTopup[]
   webhookEndpoints      WebhookEndpoint[]
+  notifications         Notification[]
 
   @@map("users")
 }
@@ -303,6 +308,10 @@ model Membership {
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Set by the agent. Unavailable agents are not given new conversations.
+  available    Boolean      @default(true)
+  /// Lower-case labels such as "hindi" or "billing", used by skill-based assignment.
+  skills       String[]     @default([])
 
   @@unique([orgId, userId])
   @@index([userId])
@@ -706,16 +715,23 @@ model Conversation {
   createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  phone        PhoneNumber         @relation(fields: [phoneId], references: [id], onDelete: Cascade)
-  contact      Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  assignee     User?               @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
-  messages     Message[]
-  labels       ConversationLabel[]
+  organization       Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  phone              PhoneNumber         @relation(fields: [phoneId], references: [id], onDelete: Cascade)
+  contact            Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignee           User?               @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  messages           Message[]
+  labels             ConversationLabel[]
+  /// The customer's first message that no person has answered yet. Null once someone replies.
+  awaitingReplySince DateTime?           @map("awaiting_reply_since") @db.Timestamptz(3)
+  /// When the SLA is next checked: the deadline, then the escalation time after a breach.
+  slaDueAt           DateTime?           @map("sla_due_at") @db.Timestamptz(3)
+  /// 0 within the SLA, 1 breached, 2 escalated.
+  slaStage           Int                 @default(0) @map("sla_stage")
 
   @@unique([orgId, phoneId, contactId])
   @@index([orgId, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([orgId, assigneeId])
+  @@index([slaDueAt])
   @@map("conversations")
 }
 
@@ -762,7 +778,7 @@ model Message {
 /// the client's idempotency key. Points at the message, including its partition key.
 model MessageRef {
   orgId            String   @map("org_id") @db.Uuid
-  /// 'wamid' or 'client'.
+  /// 'wamid', 'client', or 'automation' (the rules ran for this inbound message).
   kind             String
   ref              String
   messageId        String   @map("message_id") @db.Uuid
@@ -1362,4 +1378,94 @@ model InvoiceCounter {
   value BigInt  @default(0)
 
   @@map("invoice_counter")
+}
+
+/// One per workspace. Missing means everything is off.
+model AutomationSettings {
+  orgId                   String   @id @map("org_id") @db.Uuid
+  welcomeEnabled          Boolean  @default(false) @map("welcome_enabled")
+  welcomeMessage          String?  @map("welcome_message")
+  awayEnabled             Boolean  @default(false) @map("away_enabled")
+  awayMessage             String?  @map("away_message")
+  /// BusinessHours from packages/shared. Null means always open.
+  businessHours           Json?    @map("business_hours")
+  awayCooldownMinutes     Int      @default(720) @map("away_cooldown_minutes")
+  /// none, round_robin or load_based. Used when no assignment rule matches.
+  defaultAssignment       String   @default("none") @map("default_assignment")
+  /// Where the default round-robin left off.
+  lastAssignedUserId      String?  @map("last_assigned_user_id") @db.Uuid
+  slaEnabled              Boolean  @default(false) @map("sla_enabled")
+  slaFirstResponseMinutes Int      @default(60) @map("sla_first_response_minutes")
+  slaEscalateAfterMinutes Int?     @map("sla_escalate_after_minutes")
+  slaReassignOnEscalate   Boolean  @default(false) @map("sla_reassign_on_escalate")
+  updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@map("automation_settings")
+}
+
+model AutoReplyRule {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  name      String
+  active    Boolean  @default(true)
+  /// exact, contains or regex
+  matchType String   @map("match_type")
+  keywords  String[] @default([])
+  pattern   String?
+  reply     String
+  phoneId   String?  @map("phone_id") @db.Uuid
+  priority  Int      @default(100)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, priority])
+  @@map("auto_reply_rules")
+}
+
+model AssignmentRule {
+  id                 String   @id @default(uuid(7)) @db.Uuid
+  orgId              String   @map("org_id") @db.Uuid
+  name               String
+  active             Boolean  @default(true)
+  priority           Int      @default(100)
+  /// round_robin or load_based
+  strategy           String
+  tagIds             String[] @default([]) @map("tag_ids") @db.Uuid
+  phoneIds           String[] @default([]) @map("phone_ids") @db.Uuid
+  keywords           String[] @default([])
+  agentIds           String[] @default([]) @map("agent_ids") @db.Uuid
+  skill              String?
+  /// Where this rule's round-robin left off.
+  lastAssignedUserId String?  @map("last_assigned_user_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, priority])
+  @@map("assignment_rules")
+}
+
+/// For one person in one workspace. Only they can read it.
+model Notification {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  orgId          String    @map("org_id") @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  /// NOTIFICATION_KINDS in packages/shared
+  kind           String
+  title          String
+  body           String?
+  conversationId String?   @map("conversation_id") @db.Uuid
+  readAt         DateTime? @map("read_at") @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, userId, id(sort: Desc)])
+  @@map("notifications")
 }

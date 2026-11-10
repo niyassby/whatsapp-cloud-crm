@@ -114,6 +114,10 @@ export interface ConversationDto {
   unreadCount: number;
   /** Free-form replies are allowed until this moment; templates only afterwards. */
   windowExpiresAt: string | null;
+  /** The first customer message no person has answered yet. */
+  awaitingReplySince: string | null;
+  /** The SLA was missed. */
+  slaBreached: boolean;
 }
 
 export interface LabelDto {

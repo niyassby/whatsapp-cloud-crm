@@ -19,6 +19,7 @@ import { useMe } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 import { LowBalanceBanner } from './low-balance-banner';
 import { NoOrg } from './no-org';
+import { NotificationBell } from './notification-bell';
 import { OrgSwitcher } from './org-switcher';
 import { TrialBanner } from './trial-banner';
 import { UserMenu } from './user-menu';
@@ -98,7 +99,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center justify-between gap-4 border-b px-4">
           {me.data ? <OrgSwitcher me={me.data} /> : <Skeleton className="h-8 w-40" />}
-          {me.data ? <UserMenu me={me.data} /> : <Skeleton className="size-8 rounded-full" />}
+          <div className="flex items-center gap-1">
+            {me.data?.currentOrg && <NotificationBell />}
+            {me.data ? <UserMenu me={me.data} /> : <Skeleton className="size-8 rounded-full" />}
+          </div>
         </header>
         {me.data && !me.data.user.emailVerified && <VerifyEmailBanner email={me.data.user.email} />}
         <TrialBanner />

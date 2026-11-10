@@ -51,9 +51,10 @@ export function useOrg(enabled = true) {
   });
 }
 
-export function useMembers() {
+export function useMembers(enabled = true) {
   return useQuery({
     queryKey: queryKeys.members,
+    enabled,
     queryFn: () => api<MemberDto[]>('/team/members'),
   });
 }

@@ -143,6 +143,9 @@ export interface MemberDto {
   email: string;
   role: Role;
   status: 'active' | 'invited' | 'disabled';
+  /** Takes new conversations. */
+  available: boolean;
+  skills: string[];
   createdAt: string;
 }
 

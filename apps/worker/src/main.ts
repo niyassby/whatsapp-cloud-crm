@@ -5,6 +5,7 @@ import { createPaymentProviders } from '@wacrm/billing';
 import { createPrismaClient, withTenant } from '@wacrm/db';
 import {
   buildHealth,
+  type AutomationJob,
   type BillingEventJob,
   type CampaignJob,
   type ContactJobQueueData,
@@ -39,6 +40,7 @@ import { processMetaAccountJob } from './processors/meta-account';
 import { sendOutboundMessage } from './processors/outbound';
 import { markEventFailed, routeWebhookEvent } from './processors/webhook-events';
 import { processContactJob } from './processors/contact-jobs';
+import { checkSla, runInboxAutomation, slaDueConversations } from './processors/automation';
 import { processBillingEvent } from './processors/billing';
 import { campaignTickTargets, runCampaignJob } from './processors/campaigns';
 import { dripTargets } from './processors/drips';
@@ -85,6 +87,15 @@ const mediaQueue = new Queue<MediaDownloadJob>(QueueName.MEDIA_DOWNLOAD, {
 });
 
 const templateSyncQueue = new Queue<TemplateSyncJob>(QueueName.TEMPLATE_SYNC, {
+  ...queueOpts,
+  defaultJobOptions: DEFAULT_JOB_OPTIONS,
+});
+
+const outboundQueue = new Queue<OutboundJob>(QueueName.OUTBOUND, {
+  ...queueOpts,
+  defaultJobOptions: DEFAULT_JOB_OPTIONS,
+});
+const automationQueue = new Queue<AutomationJob>(QueueName.AUTOMATION, {
   ...queueOpts,
   defaultJobOptions: DEFAULT_JOB_OPTIONS,
 });
@@ -147,6 +158,13 @@ const deps: WorkerDeps = {
     return allowed;
   },
   payments: createPaymentProviders(env),
+  enqueueOutbound: async (job) => {
+    await outboundQueue.add('send', job, { jobId: job.messageId });
+  },
+  enqueueAutomation: async (job) => {
+    // Keyed by message: a redelivered webhook queues it again, and the claim inside stops a rerun.
+    await automationQueue.add('run', job, { jobId: `auto-${job.messageId}` });
+  },
   secrets,
   postWebhook: createWebhookPoster({ allowPrivate: env.WEBHOOK_ALLOW_PRIVATE_URLS }),
   defaultCurrency: env.WALLET_DEFAULT_CURRENCY,
@@ -285,6 +303,16 @@ billingWorker.on('failed', (job, err) => {
   log.error({ jobId: job?.id, err: err.message }, 'billing event attempt failed');
 });
 
+// Rules run in their own queue, after a message is saved, so they never slow the inbound pipeline.
+const automationWorker = new Worker<AutomationJob>(
+  QueueName.AUTOMATION,
+  (job) => runInboxAutomation(deps, job.data),
+  { ...queueOpts, concurrency: 10 },
+);
+automationWorker.on('failed', (job, err) => {
+  log.warn({ jobId: job?.id, err: err.message }, 'automation job attempt failed');
+});
+
 // Its own queue: a customer's slow endpoint cannot hold up anything else.
 const webhookDeliveryWorker = new Worker<WebhookDeliveryJob>(
   QueueName.WEBHOOK_DELIVERIES,
@@ -299,6 +327,15 @@ const maintenanceQueue = new Queue(QueueName.MAINTENANCE, queueOpts);
 const maintenanceWorker = new Worker(
   QueueName.MAINTENANCE,
   async (job) => {
+    if (job.name === 'sla-check') {
+      const due = await slaDueConversations(deps);
+      for (const d of due) {
+        await checkSla(deps, d.org_id, d.id).catch((err: unknown) =>
+          log.warn({ err: String(err), conversationId: d.id }, 'SLA check failed'),
+        );
+      }
+      return;
+    }
     if (job.name === 'webhook-dispatch') {
       const due = await dueWebhookDeliveries(deps);
       await Promise.all(
@@ -363,6 +400,9 @@ void maintenanceQueue
   .upsertJobScheduler('message-partitions', { pattern: '0 2 * * *' }, { name: 'partitions' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule partitions'));
 void maintenanceQueue
+  .upsertJobScheduler('sla-check', { every: 60_000 }, { name: 'sla-check' })
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule SLA checks'));
+void maintenanceQueue
   .upsertJobScheduler('webhook-dispatch', { every: 5_000 }, { name: 'webhook-dispatch' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule webhooks'));
 void maintenanceQueue
@@ -409,6 +449,9 @@ async function shutdown() {
     campaignWorker.close(),
     billingWorker.close(),
     webhookDeliveryWorker.close(),
+    automationWorker.close(),
+    automationQueue.close(),
+    outboundQueue.close(),
     webhookDeliveryQueue.close(),
     campaignQueue.close(),
     maintenanceWorker.close(),

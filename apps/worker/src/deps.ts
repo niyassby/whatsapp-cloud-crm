@@ -1,7 +1,9 @@
 import type { PaymentProviders } from '@wacrm/billing';
 import type { DbClient } from '@wacrm/db';
 import type {
+  AutomationJob,
   CampaignJob,
+  OutboundJob,
   MediaDownloadJob,
   RealtimePublisher,
   TemplateSyncJob,
@@ -19,6 +21,8 @@ export interface WorkerDeps {
   enqueueMediaDownload: (job: MediaDownloadJob) => Promise<void>;
   enqueueTemplateSync: (job: TemplateSyncJob) => Promise<void>;
   enqueueCampaignJob: (job: CampaignJob, delayMs?: number) => Promise<void>;
+  enqueueOutbound: (job: OutboundJob) => Promise<void>;
+  enqueueAutomation: (job: AutomationJob) => Promise<void>;
   /**
    * Ask to send up to `wanted` messages on this number this second. Answers how many are allowed.
    * Shares its counter with the inbox's limit, so campaigns only use what the inbox leaves.

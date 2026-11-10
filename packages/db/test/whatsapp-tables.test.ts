@@ -268,8 +268,8 @@ describe('function hygiene', () => {
       FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
       WHERE p.proname LIKE 'webhook\_%' OR p.proname LIKE 'data\_deletion\_%'
          OR p.proname LIKE 'secrets\_list\_%' OR p.proname = 'meta_connections_by_user'
-         OR p.proname LIKE 'billing\_%' OR p.proname IN ('api_key_lookup', 'next_invoice_number')`;
-    expect(rows.length).toBe(20);
+         OR p.proname LIKE 'billing\_%' OR p.proname IN ('api_key_lookup', 'next_invoice_number', 'sla_due_conversations')`;
+    expect(rows.length).toBe(21);
     for (const r of rows) {
       expect([r.proname, r.owner, r.secdef]).toEqual([r.proname, 'app_definer', true]);
       expect(r.config).toEqual(['search_path=public, pg_temp']);
@@ -281,7 +281,7 @@ describe('function hygiene', () => {
       SELECT pg_get_function_result(p.oid) AS src FROM pg_proc p
       WHERE p.proname LIKE 'webhook\_%' OR p.proname LIKE 'data\_deletion\_%'
          OR p.proname LIKE 'secrets\_list\_%' OR p.proname = 'meta_connections_by_user'
-         OR p.proname LIKE 'billing\_%' OR p.proname IN ('api_key_lookup', 'next_invoice_number')`;
+         OR p.proname LIKE 'billing\_%' OR p.proname IN ('api_key_lookup', 'next_invoice_number', 'sla_due_conversations')`;
     for (const r of rows) expect(r.src).not.toMatch(/token|pin|secret/i);
   });
 

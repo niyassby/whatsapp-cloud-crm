@@ -180,6 +180,9 @@ function Row({
       </span>
       <span className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className="truncate">{c.assignee?.name ?? 'Unassigned'}</span>
+        {c.slaBreached && c.awaitingReplySince && (
+          <span className="shrink-0 font-medium text-destructive">Overdue</span>
+        )}
         {!isWindowOpen(c) && <span className="ml-auto shrink-0">Window closed</span>}
       </span>
     </button>

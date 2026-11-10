@@ -30,6 +30,7 @@ export interface ServerToClientEvents {
   'wallet:updated': () => void;
   'campaign:updated': (e: { campaignId: string }) => void;
   'billing:updated': (e: Record<string, never>) => void;
+  'notification:new': (e: { userId: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -48,6 +49,8 @@ export interface TenantEventMap {
   'wallet:updated': Record<string, never>;
   'campaign:updated': { campaignId: string };
   'billing:updated': Record<string, never>;
+  /** To the org's room, carrying only who it is for. That person fetches it with their own access. */
+  'notification:new': { userId: string };
 }
 
 /** Publish to everyone in an org. API: Socket.IO server. Worker: Redis emitter. */

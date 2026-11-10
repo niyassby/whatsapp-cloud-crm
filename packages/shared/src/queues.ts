@@ -18,7 +18,15 @@ export const QueueName = {
   CAMPAIGNS: 'campaigns',
   BILLING_EVENTS: 'billing-events',
   WEBHOOK_DELIVERIES: 'webhook-deliveries',
+  AUTOMATION: 'automation',
 } as const;
+
+/** One inbound message to run the rules on. */
+export interface AutomationJob {
+  orgId: string;
+  messageId: string;
+  createdAt: string;
+}
 
 export interface WebhookDeliveryJob {
   orgId: string;

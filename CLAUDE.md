@@ -230,6 +230,19 @@ How to use it, for customers: `infra/public-api.md`. Reference: `GET /v1/docs`, 
 - Web: `/settings/api-keys`, `/settings/webhooks` (the delivery log polls while open).
 - Tests: `apps/api/test/public-api.test.ts`, `apps/worker/test/webhooks.test.ts` (includes the real HTTP client against a local server), `packages/db/test/developer-tables.test.ts`, `packages/shared/src/server/webhook-signing.test.ts`, `e2e/public-api.spec.ts` (the acceptance flow, with its own receiver).
 
+## Rules and routing (Phase 3.1)
+
+- Tables: `automation_settings` (one per org, missing means all off), `auto_reply_rules`, `assignment_rules`, `notifications` (per person, no DELETE grant). `memberships` gained `available` and `skills`; `conversations` gained `awaiting_reply_since`, `sla_due_at` and `sla_stage`. Pure logic (matching, business hours, picking an agent, schemas) is in `packages/shared/src/automation.ts`.
+- Where it runs: after the inbound pipeline saves a message it queues an `automation` job (its own queue, concurrency 10, job id `auto-<messageId>`). `runInboxAutomation` (`apps/worker/src/processors/automation.ts`) claims the message in `message_refs` (kind `automation`) in the same transaction as everything it does, so a redelivered webhook, a retried job or a replay acts once. A redelivered webhook queues the job again, in case the first queueing failed. Webhook handling never waits on a rule.
+- Order per inbound message: replies, then assignment, then the SLA clock. Replies are a welcome (first inbound message of a conversation), the first matching keyword rule by priority, then an away message outside business hours (only if no keyword answered, once per `awayCooldownMinutes`). At most `MAX_AUTOMATED_REPLIES_PER_HOUR` (3) per conversation, so two bots cannot loop. Nothing automatic goes to an opted-out contact. Replies are `text` messages with `content.automation` set and no sender, sent through the outbound queue, so the per-number limit and retries apply and they are free (the customer just opened the window).
+- Matching: exact (whole message), contains (whole words, any script), regex (case-insensitive). Text is normalized and capped at 1000 characters. `regexProblem` refuses backreferences and nested repetition such as `(a+)+`, because patterns run in a shared worker; a stored pattern that fails the check never matches.
+- Assignment (`chooseAgent`): only open, unassigned conversations. Active rules by priority: all set conditions must match (contact tag, number, keywords), then candidates are named agents or everyone with a skill, filtered to active and available members. A rule with nobody available falls through to the next, then to `defaultAssignment` (none, round_robin, load_based). Round-robin keeps its place on the rule row (or the settings row), locked with `FOR UPDATE`, so concurrent conversations alternate fairly. Load-based counts open assigned conversations.
+- SLA: starts at the first unanswered customer message (later ones do not move it); a person's reply or closing the thread clears it; automated and API sends do not. `sla-check` runs every minute through `sla_due_conversations` (definer, ids only) and `checkSla`, which locks the row: stage 1 notifies the assignee (or owners and admins when unassigned) and schedules escalation if set; stage 2 notifies owners and admins and can reassign through `chooseAgent`, skipping the current assignee. Turning the SLA off clears every clock.
+- Notifications: RLS lets anyone in the org insert one (the worker has no user), but only that person, in that org, can read or mark it. Realtime sends `notification:new` with just the user id to the org room, and only that person refetches. The bell is in the shell header; availability is a checkbox in the account menu.
+- Permissions: `AUTOMATION_MANAGE` (owners and admins) for settings, rules and skills; anyone with `INBOX_REPLY` sets their own availability. Changes are audited as `automation.changed`.
+- Web: `/settings/automation` (auto-replies, messages, business hours, SLA, default assignment, assignment rules, team skills), the bell, the availability checkbox, and an Overdue mark in the conversation list.
+- Tests: `packages/shared/src/automation.test.ts`, `apps/worker/test/automation.test.ts`, `apps/api/test/automation.test.ts`, `packages/db/test/automation-tables.test.ts`, `e2e/automation.spec.ts`.
+
 ## Troubleshooting
 
 - Dev page reloads forever, with the terminal repeating `Compiled in Xms` and the browser getting `HMR hash mismatch`: the Turbopack dev cache is stale, which `next build` beside a dev server can cause. Stop the dev server and delete `apps/web/.next/dev`.
@@ -312,7 +325,7 @@ Mark as phases complete.
 
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
 - [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 campaigns and dashboard DONE; 2.5 billing code DONE, real sandbox payments not verified; 2.6 public API and webhooks DONE. Gate NOT passed until real sandbox payments are run: wallet concurrency, webhook idempotency, campaign load and OpenAPI all pass). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
-- [ ] Section 3: Automation, integrations, AI (3.1 to 3.7)
+- [ ] Section 3: Automation, integrations, AI (3.1 rules and routing DONE; 3.2 to 3.7 to do). Started with the Section 2 gate still open (no sandbox payments run), by the project owner's decision (2026-11-09).
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
 
 ## Decisions log
@@ -408,6 +421,12 @@ Add one line per decision: date, decision, reason.
 - 2026-11-07: Keys and endpoints are managed only from the dashboard. Reason: a leaked key must not be able to mint more keys or redirect events.
 - 2026-11-07: A key acts for its creator for attribution, but access comes only from scopes. Reason: services and audit expect a user, and tying access to a person's role would change a key's power when their role changes.
 - 2026-11-07: Internal notes never leave through the API or webhooks.
+- 2026-11-09: Section 3 started with the Section 2 gate open: sandbox payments not yet run. The project owner's decision. Run them together with 3.6's payment link check.
+- 2026-11-09: Rules run in their own queue after the message is saved, and claim the message in the same transaction as their effects. Reason: the webhook and inbound pipeline never wait on a rule, and no delivery or retry can reply twice.
+- 2026-11-09: One keyword rule answers per message: the first by priority. Reason: several replies to one question reads as spam, and order makes it predictable.
+- 2026-11-09: A cap of three automated replies per conversation per hour, whatever the rules say. Reason: two auto-responders talking to each other would otherwise loop.
+- 2026-11-09: The SLA counts calendar minutes, not business hours. Reason: simpler and predictable; business-hours SLAs can come later.
+- 2026-11-09: Notifications are in-app only. Reason: the worker has no mailer, and email for these needs the queued email work that was deferred in 1.5.
 
 ## Known gaps / TODO
 
@@ -441,6 +460,7 @@ Add one line per decision: date, decision, reason.
 - Public API: no media send, no `GET` for one message, and no filter for messages since a date. Imports do not emit `contact.created` per row, to avoid flooding endpoints. Only template status changes from webhooks emit `template.status_changed`, not those found by the hourly comparison.
 - Webhooks: no automatic switch-off for an endpoint that keeps failing. A slow endpoint can use up the 10 delivery slots and delay other workspaces' webhooks, since there is no per-endpoint limit yet. No per-plan API rate limit: the same limit for everyone.
 - `@nestjs/swagger` pulls in `swagger-ui-dist`, whose `@scarf/scarf` postinstall sends install analytics. Set `SCARF_ANALYTICS=false` in CI and deploy builds if that is unwanted.
+- Rules and routing: notifications are in-app only, with no email or push. The SLA ignores business hours. No holidays in business hours, and one span per day in the settings screen (the API takes up to four). Auto-reply rules cannot be limited to one number from the screen yet (the API takes it).
 - Real rate cards are not loaded. `sample-rate-cards.csv` is not Meta's pricing. Before charging anyone: build a CSV from Meta's current rate card with your margin, and run `pnpm rates:import`. Check how Meta's market groups map to countries.
 - Meta bills by its own rules, such as volume tiers, which flat per-country rates do not model. Reconcile against Meta's invoices.
 - No platform-admin screen for rate cards or manual credits: CLI only until Section 4.

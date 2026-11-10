@@ -170,6 +170,10 @@ export class InboxService {
         where: { id },
         data: {
           ...(input.status ? { status: input.status } : {}),
+          // Nobody is waiting on a closed thread.
+          ...(input.status === 'closed'
+            ? { awaitingReplySince: null, slaDueAt: null, slaStage: 0 }
+            : {}),
           ...(input.assigneeId !== undefined ? { assigneeId: input.assigneeId } : {}),
         },
         include: conversationInclude,
@@ -495,8 +499,16 @@ export class InboxService {
           data: {
             lastMessageAt: createdAt,
             lastMessagePreview: preview,
-            // A person replying opens the thread. Software sending in bulk must not fill the inbox.
-            ...(actor.automated ? {} : { status: 'open' as const }),
+            // A person replying opens the thread, and answers whoever was waiting. Software
+            // sending in bulk must not fill the inbox, and is not an answer.
+            ...(actor.automated
+              ? {}
+              : {
+                  status: 'open' as const,
+                  awaitingReplySince: null,
+                  slaDueAt: null,
+                  slaStage: 0,
+                }),
           },
           include: conversationInclude,
         });
