@@ -124,7 +124,10 @@ describe('API keys', () => {
     expect(created.key).toMatch(/^wak_[a-f0-9]{16}_[\w-]{40,}$/);
     const row = await owner.apiKey.findFirstOrThrow({ where: { id: created.id } });
     expect(row.keyHash).not.toContain(created.key);
-    expect(JSON.stringify(row)).not.toContain(created.key.split('_')[2]);
+    // The secret is everything after wak_<16 hex>_, and may itself contain an underscore.
+    const secret = created.key.slice('wak_'.length + 16 + 1);
+    expect(secret.length).toBeGreaterThanOrEqual(40);
+    expect(JSON.stringify(row)).not.toContain(secret);
 
     const list = await s.client.get('/api-keys');
     expect(list.body).toHaveLength(1);
