@@ -396,7 +396,7 @@ describe('the engine', () => {
     });
     await t.say('ask');
     const [job] = t.built.outbound;
-    expect(await sendOutboundMessage(t.built.deps, job!)).toBe('sent');
+    expect(await sendOutboundMessage(t.built.deps, job!, { finalAttempt: true })).toBe('sent');
     const call = t.built.fake.calls.find((c) => c.method === 'sendInteractive');
     expect(call?.args[1]).toEqual({
       type: 'button',
