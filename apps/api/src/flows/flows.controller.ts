@@ -140,6 +140,28 @@ export class FlowsController {
     return this.flows.publish(actor(auth, req), id);
   }
 
+  @Post(':id/duplicate')
+  @RequirePermission(Permission.FLOWS_MANAGE)
+  @RequireFeature('flows')
+  duplicate(
+    @CurrentAuth() auth: AuthContext,
+    @Req() req: FastifyRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<FlowDto> {
+    return this.flows.duplicate(actor(auth, req), id);
+  }
+
+  @Post(':id/revert')
+  @HttpCode(200)
+  @RequirePermission(Permission.FLOWS_MANAGE)
+  @RequireFeature('flows')
+  revert(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<FlowDto> {
+    return this.flows.revert(actor(auth), id);
+  }
+
   @Patch(':id/active')
   @RequirePermission(Permission.FLOWS_MANAGE)
   @RequireFeature('flows')

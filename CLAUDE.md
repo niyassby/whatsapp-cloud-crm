@@ -46,7 +46,10 @@ Package manager: pnpm 9 (`packageManager` pinned in root package.json). Packages
 
 ```
 pnpm install
-pnpm docker:up          # Postgres 16 + pgvector (host :5433), Redis 7 (:6379), SeaweedFS S3 (:9000), Mailpit (SMTP :1025, inbox http://localhost:8025)
+pnpm services:up       # no Docker: starts SeaweedFS S3 (:9000) and Mailpit (SMTP :1025, inbox http://localhost:8025) from .tools/, checks Postgres (:5433) and Redis (:6379) services. See infra/native-setup.md
+pnpm services:status   # check all four answer
+pnpm services:down
+pnpm docker:up          # alternative: the same services in Docker (Postgres 16 + pgvector). Not both at once
 pnpm docker:down
 cp .env.example .env    # first time only
 pnpm db:setup           # first time: migrate:deploy + roles + seed
@@ -259,10 +262,22 @@ How to use it, for customers: `infra/public-api.md`. Reference: `GET /v1/docs`, 
 - HTTP step: https only, the host cannot come from a variable, values are percent-encoded in the URL and JSON-escaped in a JSON body, same SSRF guard as webhooks (`createSafeHttp`, checks every resolved address), no redirects, 10 seconds, 64 KB kept. Response values are saved with dotted paths.
 - Plan feature `flows` (Starter, Growth, Scale). Permission `FLOWS_MANAGE` (owners and admins). Changes are audited as `flow.changed`.
 - API: `/flows` CRUD, `POST /flows/:id/publish`, `PATCH /flows/:id/active`, `GET /flows/:id/versions`, `GET /flows/:id/runs`, `POST /flows/:id/runs` (start for one contact), `GET /flows/runs/:runId` (with history), `POST /flows/runs/:runId/cancel`, `POST /flows/media` (files for media steps, `orgs/<org>/flows/<id>`).
-- Web: `/flows` (list, new flow) and `/flows/[id]` (problems, the draft as JSON until the 3.3 canvas, publish, on/off, versions, runs with variables and step history, stop a run).
+- Web: `/flows` (list, new flow, import) and `/flows/[id]` (the 3.3 builder, publish, on/off, runs with variables and step history, stop a run, versions).
 - Tests: `packages/shared/src/flows.test.ts`, `apps/worker/test/flows.test.ts` (the acceptance test: 10 nodes, delays, branching, restarts between and inside steps), `apps/api/test/flows.test.ts`, `packages/db/test/flows-tables.test.ts`.
 
+## Flow builder (Phase 3.3)
+
+- Canvas: `@xyflow/react` (React Flow 12) in `apps/web/src/components/flows/builder`. `flow-builder.tsx` keeps its own copy of the draft and saves it 800 ms after a change (only if it parses; the save status says why not). `step-node.tsx` draws a step with one labelled exit per handle and its problems; the trigger is a pseudo-node above the first step, and joining it to a step sets `startNodeId`. Positions are written back when a drag ends.
+- Editing without dragging lines: the side panel (`node-form.tsx`) has a form per step type and a "Then" choice per exit, so a flow can be built with clicks and keyboard. A step added while another is selected goes under it and joins its first free exit. Below the `xl` breakpoint the step list becomes an "Add step" menu on the canvas.
+- Shared helpers: `packages/shared/src/flow-builder.ts` (step names and groups, valid defaults, `newNode`, `addNode`, `updateNode` drops edges from exits a step no longer has, `removeNode`, `duplicateNode`, `connect`, `handleLabel`, `nodeSummary`, `variableOptions`). New template and tag steps hold `UNSET_ID`, and an empty media step `mediaKey: 'unset'`; `flowIssues` reports them as "Choose a template" and so on, on the step.
+- Variables: `VariableField` inserts `{{...}}` at the cursor from `variableOptions`: contact details, custom fields, every `saveAs` and saved HTTP value in the flow, and the trigger text.
+- Simulator: `packages/shared/src/flow-simulator.ts` runs a definition in memory (`startSimulation`, `simulateReply`, `simulateTimeout`, `simulateHttp`) with the same decision helpers and loop guards as the worker. Nothing is sent, stored or charged; the person testing answers HTTP steps with a sample JSON or a failure, and skips delays. The Test panel shows the conversation and highlights the path on the canvas. It runs the unsaved draft.
+- Draft and published: the header shows the version, "unpublished changes" and the save status. Publish saves first. "Discard unpublished changes" is `POST /flows/:id/revert`. "Duplicate flow" is `POST /flows/:id/duplicate` (a new, unpublished copy). Export downloads `{ format: 'wacrm-flow', version: 1, name, definition }`; Import on the flows list takes that or a bare definition and creates a new flow. Ids from another workspace (templates, tags, people) show as problems until chosen again. "Edit as JSON" stays in the menu.
+- Tests: `packages/shared/src/flow-simulator.test.ts` (the order-status flow end to end, builder helpers), `apps/api/test/flows.test.ts` (duplicate, revert), `e2e/flows.spec.ts` (the 3.3 acceptance: build an order-status flow with clicks, test it, publish it, then a real message runs it; also problems, export, import and duplicate).
+
 ## Troubleshooting
+
+- Local services run without Docker on the development PC (`infra/native-setup.md`): PostgreSQL 18 as a Windows service on 5433, Memurai (Redis) on 6379, and SeaweedFS and Mailpit from `.tools/` via `pnpm services:up`. If a test or the app cannot reach one, run `pnpm services:status`; logs are in `.tools/logs`.
 
 - Dev page reloads forever, with the terminal repeating `Compiled in Xms` and the browser getting `HMR hash mismatch`: the Turbopack dev cache is stale, which `next build` beside a dev server can cause. Stop the dev server and delete `apps/web/.next/dev`.
 - Prisma `P1001`, or the app hanging on Postgres or Redis while `docker ps` shows them healthy: Docker Desktop's port forwarding has stuck. Restart Docker Desktop, then `pnpm docker:up`.
@@ -344,7 +359,7 @@ Mark as phases complete.
 
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
 - [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 campaigns and dashboard DONE; 2.5 billing code DONE, real sandbox payments not verified; 2.6 public API and webhooks DONE. Gate NOT passed until real sandbox payments are run: wallet concurrency, webhook idempotency, campaign load and OpenAPI all pass). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
-- [ ] Section 3: Automation, integrations, AI (3.1 rules and routing DONE; 3.2 flow engine DONE; 3.3 to 3.7 to do). Started with the Section 2 gate still open (no sandbox payments run), by the project owner's decision (2026-11-09).
+- [ ] Section 3: Automation, integrations, AI (3.1 rules and routing DONE; 3.2 flow engine DONE; 3.3 flow builder DONE; 3.4 to 3.7 to do). Started with the Section 2 gate still open (no sandbox payments run), by the project owner's decision (2026-11-09).
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
 
 ## Decisions log
@@ -452,6 +467,11 @@ Add one line per decision: date, decision, reason.
 - 2026-11-10: HTTP, connector and AI steps are at least once: a crash between the call and its commit repeats the call. Reason: no connection is held while a slow endpoint answers, and endpoints can dedupe on the run id.
 - 2026-11-10: Drafts may be invalid; publishing checks shape and references. Reason: a builder saves half-made flows, and only what runs must be right.
 - 2026-11-10: Flows are a plan feature on Starter, Growth and Scale, not Free.
+- 2026-11-10: The simulator runs in the browser on shared code, not on the server. Reason: a test must never send, charge or call anything, and testing an unsaved draft needs no round trip. The engine and simulator share every decision helper, and a shared test runs the acceptance flow through the simulator.
+- 2026-11-10: Steps can be joined from the side panel as well as by dragging. Reason: dragging small handles is hard for many people and impossible by keyboard; it also makes the builder testable.
+- 2026-11-10: Exported flows keep their template, tag and member ids. Reason: within one workspace they still work, and across workspaces the problems list names what to choose again.
+- 2026-11-11: Every database connection sets `TimeZone=UTC` (`createPrismaClient`). Reason: a Date bound into raw SQL reaches Postgres without a zone and is read in the session zone; the native Windows Postgres runs in Asia/Calcutta, which moved every cutoff (stale campaign sends, due SLAs, due flow runs, stuck messages) by 5.5 hours. Docker's UTC had hidden it. `packages/db/test/client.test.ts` pins it.
+- 2026-11-11: Local development runs without Docker. Reason: Docker Desktop's VM took several GB on the 8 GB development PC and kept crashing mid-test. Native PostgreSQL 18 (port 5433), Memurai for Redis (6379), and SeaweedFS and Mailpit binaries in `.tools/` use about 200 MB on the same ports, so `.env` and the code are unchanged. Docker Compose stays as an option. Odoo's bundled Postgres 12 on 5432 is too old (no core `gen_random_uuid`) and is left alone.
 - 2026-11-10: `outbound-sweep` re-queues outbound messages still `queued` a minute after they were made, campaigns and drips aside. Reason: any path that commits a message and then queues it (flows, rules, the inbox) could lose the job in a crash in between.
 
 ## Known gaps / TODO
@@ -487,10 +507,10 @@ Add one line per decision: date, decision, reason.
 - Webhooks: no automatic switch-off for an endpoint that keeps failing. A slow endpoint can use up the 10 delivery slots and delay other workspaces' webhooks, since there is no per-endpoint limit yet. No per-plan API rate limit: the same limit for everyone.
 - `@nestjs/swagger` pulls in `swagger-ui-dist`, whose `@scarf/scarf` postinstall sends install analytics. Set `SCARF_ANALYTICS=false` in CI and deploy builds if that is unwanted.
 - Rules and routing: notifications are in-app only, with no email or push. The SLA ignores business hours. No holidays in business hours, and one span per day in the settings screen (the API takes up to four). Auto-reply rules cannot be limited to one number from the screen yet (the API takes it).
-- Flows: the builder is JSON until 3.3, with no simulator yet. `integration_action` always fails and `ai_reply` always hands off until 3.4 and 3.7. Tags added by CSV import do not start flows. Tag triggers are queued after commit, so a Redis outage at that moment loses the trigger. Runs and their history are kept forever; add retention before launch.
+- Flows: the simulator answers HTTP steps by hand and does not check the 24-hour window, the wallet or consent. List steps with more than one section are edited as JSON. No undo in the builder yet. `integration_action` always fails and `ai_reply` always hands off until 3.4 and 3.7. Tags added by CSV import do not start flows. Tag triggers are queued after commit, so a Redis outage at that moment loses the trigger. Runs and their history are kept forever; add retention before launch.
 - Real rate cards are not loaded. `sample-rate-cards.csv` is not Meta's pricing. Before charging anyone: build a CSV from Meta's current rate card with your margin, and run `pnpm rates:import`. Check how Meta's market groups map to countries.
 - Meta bills by its own rules, such as volume tiers, which flat per-country rates do not model. Reconcile against Meta's invoices.
 - No platform-admin screen for rate cards or manual credits: CLI only until Section 4.
 - Verify current Meta messaging limits and partner requirements.
-- Confirm pgvector is available on the chosen production Postgres host before Phase 3.7 (local image has pgvector 0.8.7).
+- Confirm pgvector is available on the chosen production Postgres host before Phase 3.7. The native Windows PostgreSQL 18 has no pgvector; 3.7 must install it (a Windows build) or use a hosted Postgres for that work.
 - Start Meta Business Verification and App Review early (needed for Embedded Signup at scale).

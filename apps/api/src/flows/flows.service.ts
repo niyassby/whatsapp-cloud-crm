@@ -23,6 +23,7 @@ import {
   mediaRuleFor,
   sameJsonValue,
   type UpdateFlowInput,
+  UNSET_ID,
 } from '@wacrm/shared';
 import type { ObjectStorage } from '@wacrm/shared/server';
 import { AuditAction, AuditService } from '../audit/audit.service';
@@ -225,8 +226,11 @@ export class FlowsService {
       templateIds.add(def.trigger.templateId);
     }
     for (const node of def.nodes) {
-      if (node.type === 'send_template') templateIds.add(node.data.templateId);
-      if (node.type === 'tag') tagIds.add(node.data.tagId);
+      // Unchosen ids are reported by flowIssues already.
+      if (node.type === 'send_template' && node.data.templateId !== UNSET_ID) {
+        templateIds.add(node.data.templateId);
+      }
+      if (node.type === 'tag' && node.data.tagId !== UNSET_ID) tagIds.add(node.data.tagId);
       if ((node.type === 'assign_agent' || node.type === 'human_handoff') && node.data.userId) {
         userIds.add(node.data.userId);
       }
@@ -275,7 +279,7 @@ export class FlowsService {
     }
     if (def.settings.phoneId && !phone) error(null, 'The chosen number no longer exists');
     for (const node of def.nodes) {
-      if (node.type === 'send_template') {
+      if (node.type === 'send_template' && node.data.templateId !== UNSET_ID) {
         const t = foundTemplates.get(node.data.templateId);
         if (!t) error(node.id, 'The template no longer exists');
         else if (!t.supported) error(node.id, 'This template cannot be sent from the app');
@@ -287,7 +291,7 @@ export class FlowsService {
           });
         }
       }
-      if (node.type === 'tag' && !foundTags.has(node.data.tagId)) {
+      if (node.type === 'tag' && node.data.tagId !== UNSET_ID && !foundTags.has(node.data.tagId)) {
         error(node.id, 'The tag no longer exists');
       }
       if (
@@ -312,6 +316,48 @@ export class FlowsService {
       }
     }
     return issues;
+  }
+
+  /** A new flow with this one's draft, off and unpublished, for trying a variation. */
+  duplicate(actor: FlowActor, id: string): Promise<FlowDto> {
+    return this.db.run(async (tx) => {
+      const row = await this.load(tx, id);
+      const copy = await tx.flow.create({
+        data: {
+          orgId: actor.orgId,
+          name: `${row.name} (copy)`.slice(0, 100),
+          draft: parseDraft(row.draft) as unknown as Prisma.InputJsonValue,
+          triggerType: parseDraft(row.draft).trigger.type,
+          createdById: actor.userId,
+        },
+        include: flowInclude,
+      });
+      await this.audit.record(tx, actor.orgId, {
+        action: AuditAction.FLOW_CHANGED,
+        actorUserId: actor.userId,
+        targetType: 'flow',
+        targetId: copy.id,
+        metadata: { change: 'duplicated', from: id },
+        meta: actor.meta,
+      });
+      return this.dto(tx, copy);
+    });
+  }
+
+  /** Throw away draft changes: the draft becomes the published version again. */
+  revert(actor: FlowActor, id: string): Promise<FlowDto> {
+    return this.db.run(async (tx) => {
+      const row = await this.load(tx, id);
+      if (!row.publishedVersion) {
+        throw new AppError(ErrorCode.FLOW_INVALID, 'This flow has never been published');
+      }
+      const updated = await tx.flow.update({
+        where: { id },
+        data: { draft: row.publishedVersion.definition as Prisma.InputJsonValue },
+        include: flowInclude,
+      });
+      return this.dto(tx, updated);
+    });
   }
 
   /** Freeze the draft as a new version. New runs use it; runs already going keep theirs. */

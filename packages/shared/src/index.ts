@@ -14,4 +14,6 @@ export * from './billing';
 export * from './public-api';
 export * from './automation';
 export * from './flows';
+export * from './flow-simulator';
+export * from './flow-builder';
 export * from './realtime';

@@ -4,7 +4,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { FlowDto } from '@wacrm/shared';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { FlowState } from '@/components/flows/flow-state';
 import { FormField } from '@/components/form-field';
 import { Button } from '@/components/ui/button';
@@ -27,7 +28,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { api } from '@/lib/api';
-import { flowKeys, TRIGGER_LABELS, useFlows } from '@/lib/flows';
+import { flowKeys, parseFlowFile, TRIGGER_LABELS, useFlows } from '@/lib/flows';
 import { handleApiError } from '@/lib/forms';
 
 function NewFlow({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -81,6 +82,46 @@ function NewFlow({ open, onClose }: { open: boolean; onClose: () => void }) {
   );
 }
 
+/** A flow file exported from this or another workspace becomes a new, unpublished flow. */
+function ImportFlow() {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const input = useRef<HTMLInputElement>(null);
+  const read = async (file: File) => {
+    const parsed = parseFlowFile(await file.text(), file.name.replace(/.json$/i, ''));
+    if ('error' in parsed) {
+      toast.error(parsed.error);
+      return;
+    }
+    try {
+      const flow = await api<FlowDto>('/flows', { method: 'POST', body: parsed });
+      await queryClient.invalidateQueries({ queryKey: flowKeys.all });
+      router.push(`/flows/${flow.id}`);
+    } catch (err) {
+      handleApiError(err);
+    }
+  };
+  return (
+    <>
+      <input
+        ref={input}
+        type="file"
+        accept="application/json,.json"
+        className="sr-only"
+        aria-label="Flow file to import"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f) void read(f);
+        }}
+      />
+      <Button variant="outline" onClick={() => input.current?.click()}>
+        Import
+      </Button>
+    </>
+  );
+}
+
 export default function FlowsPage() {
   const flows = useFlows();
   const [creating, setCreating] = useState(false);
@@ -95,7 +136,10 @@ export default function FlowsPage() {
             tag and more.
           </p>
         </div>
-        <Button onClick={() => setCreating(true)}>New flow</Button>
+        <div className="flex gap-2">
+          <ImportFlow />
+          <Button onClick={() => setCreating(true)}>New flow</Button>
+        </div>
       </div>
 
       <Card>

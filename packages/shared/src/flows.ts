@@ -374,6 +374,9 @@ export const WAITING_NODE_TYPES = new Set<FlowNodeType>([
 
 // ------------------------------------------------------------------ checking a definition
 
+/** Placeholder id in a new step, until the person chooses a template or tag. */
+export const UNSET_ID = '00000000-0000-0000-0000-000000000000';
+
 export interface FlowIssue {
   /** The node it concerns, or null for the flow as a whole. */
   nodeId: string | null;
@@ -440,6 +443,11 @@ export function flowIssues(def: FlowDefinition): FlowIssue[] {
   }
 
   for (const node of def.nodes) {
+    if (node.type === 'send_template' && node.data.templateId === UNSET_ID) {
+      error(node.id, 'Choose a template');
+    }
+    if (node.type === 'tag' && node.data.tagId === UNSET_ID) error(node.id, 'Choose a tag');
+    if (node.type === 'media' && node.data.mediaKey === 'unset') error(node.id, 'Upload a file');
     switch (node.type) {
       case 'buttons': {
         const ids = node.data.buttons.map((b) => b.id);

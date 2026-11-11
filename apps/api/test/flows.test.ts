@@ -89,6 +89,31 @@ describe('flows', () => {
     expect(versions.body.map((v: { version: number }) => v.version)).toEqual([2, 1]);
   });
 
+  it('duplicates a flow as an unpublished copy, and reverts a draft to what is published', async () => {
+    const s = await workspace();
+    const { body } = await s.client.post('/flows', { name: 'Original', definition: DEF });
+    await s.client.post(`/flows/${body.id}/publish`);
+    const copy = await s.client.post(`/flows/${body.id}/duplicate`);
+    expect(copy.status).toBe(201);
+    expect(copy.body).toMatchObject({
+      name: 'Original (copy)',
+      active: false,
+      publishedVersion: null,
+      draft: { startNodeId: 'greet' },
+    });
+
+    await s.client.req('PUT', `/flows/${body.id}`, {
+      definition: {
+        ...DEF,
+        nodes: [{ ...DEF.nodes![0]!, data: { text: 'Changed' } }, DEF.nodes![1]!],
+      },
+    });
+    const reverted = await s.client.post(`/flows/${body.id}/revert`);
+    expect(reverted.body.hasUnpublishedChanges).toBe(false);
+    expect(reverted.body.draft.nodes[0].data.text).toBe('Hi {{contact.name}}');
+    expect((await s.client.post(`/flows/${copy.body.id}/revert`)).status).toBe(400);
+  });
+
   it('turns on only once published', async () => {
     const s = await workspace();
     const { body } = await s.client.post('/flows', { name: 'F', definition: DEF });
