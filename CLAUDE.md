@@ -290,6 +290,19 @@ How to add a connector: `infra/connectors.md`.
 - Web: `/integrations` (connections, reconnect prompts, marketplace by category, connect dialog: API key form or OAuth redirect, webhook address and secret shown once), `/integrations/[id]` (details, test, reconnect, disconnect, event log with details and Try again), a reconnect banner in the shell, and in the flow builder an app, connection, action and inputs for integration steps, an app and event for integration triggers, and `{{trigger.data...}}` variables from the trigger's sample.
 - Tests: `packages/connectors/test/framework.test.ts`, `apps/worker/test/integrations.test.ts` (the acceptance: a connector defined in the test only, through webhooks, claims, syncs, flow actions, OAuth refresh and health), `apps/api/test/integrations.test.ts`, `packages/db/test/integrations-tables.test.ts`, `e2e/integrations.spec.ts` (connect the Demo Store against a fake store, a signed order webhook, a flow looks the order up).
 
+## Commerce connectors (Phase 3.5)
+
+Setup for each store: `infra/connectors.md` (Built-in commerce connectors).
+
+- `BUILT_IN_CONNECTORS` = Shopify (`connectors/shopify.ts`, OAuth app), WooCommerce (`woocommerce.ts`, REST key pair) and Custom store (`custom-store.ts`, signed JSON plus a generic `request` action). All emit the shared commerce events and data shapes in `packages/connectors/src/commerce.ts` (`order.created`, `order.paid`, `order.fulfilled`, `order.cancelled`, `shipment.updated`, `checkout.started`, `customer.created`), so one flow fits any store and template variables come from `{{trigger.data.order.*}}`.
+- Framework additions: `map` can be async and gets the connector context; a mapped event can carry `contact.consent`, `correlation`, `cancels` and `effect` (`disconnect` / `erase` / `notify`); `webhook.secretEnv` (one app secret for every connection); `appWebhook` for app-wide webhooks at `POST /integrations/apps/:key/hooks`, routed by a setting through the definer `integration_connections_by_setting`; `setup` (worker job `setup` after every connect, registers webhooks, must be repeatable); `normalizeSettings`.
+- Shopify: `SHOPIFY_CLIENT_ID` / `SHOPIFY_CLIENT_SECRET` (API and worker); the secret verifies every webhook (`X-Shopify-Hmac-SHA256`). Admin API `SHOPIFY_API_VERSION` (2026-07). Fulfillment webhooks fetch their order. Privacy webhooks: uninstall disconnects, shop redact also blanks stored payloads, customer redact and data requests notify owners and admins (`integration_request`).
+- Abandoned carts are flows: `checkout.started` (only with a phone, not completed) carries correlation `checkout:<token>`, stored on the run as `trigger.correlation`; the order with that checkout token `cancels` it, so a run still waiting ends `cancelled_by_event`.
+- Consent at checkout: applied with `setContactConsent` only while the contact's state is `unknown`, never over an opt-out. Shopify counts only `sms_marketing_consent.state: subscribed`.
+- Processing order in `processIntegrationEvent`: map outside the transaction, then under the event lock: cancels, effects (claimed), contact, claim (only once a contact exists, so a checkout without a phone can start later when the phone arrives), consent, flows.
+- WooCommerce: statuses map to events once per order (`processing` paid, `completed` fulfilled, `cancelled`); a created order also emits `order.created`. Setup lists existing webhooks and adds only what is missing.
+- Tests: `packages/connectors/test/commerce.test.ts` (mapping, signatures, setup), `apps/worker/test/commerce.test.ts` (the acceptance: a Shopify order sends the confirmation template, its fulfillment the shipping update; abandoned cart cancel; consent; privacy; WooCommerce), `apps/api/test/integrations.test.ts` (Shopify OAuth on the named shop, app-secret signatures, privacy route).
+
 ## Troubleshooting
 
 - Local services run without Docker on the development PC (`infra/native-setup.md`): PostgreSQL 18 as a Windows service on 5433, Memurai (Redis) on 6379, and SeaweedFS and Mailpit from `.tools/` via `pnpm services:up`. If a test or the app cannot reach one, run `pnpm services:status`; logs are in `.tools/logs`.
@@ -319,6 +332,7 @@ Validate with Zod at startup. Never commit real secrets. Keep `.env.example` cur
 - `CAMPAIGN_MPS_PER_NUMBER` (40, below `OUTBOUND_MPS_PER_NUMBER` on purpose), `CAMPAIGN_MAX_FAILURE_RATE` (0.2). Worker only
 - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`: API and worker both need them, and a provider exists only with all its values. `STRIPE_API_BASE`, `RAZORPAY_API_BASE` for local fakes only (refused in production)
 - `BILLING_SELLER_NAME` (defaults to `APP_NAME`), `BILLING_SELLER_ADDRESS`, `BILLING_SELLER_TAX_ID`: printed on invoices
+- `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET` (API and worker): the Shopify app; the secret also verifies Shopify webhooks
 - `API_PUBLIC_URL` (default http://localhost:4000): this API as providers reach it, for integration webhooks and OAuth callbacks. `INTEGRATIONS_DEMO` (API and worker) adds the Demo Store connector. OAuth connectors read their own client id and secret variables (see `infra/connectors.md`)
 - `SENTRY_DSN`
 
@@ -375,7 +389,7 @@ Mark as phases complete.
 
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
 - [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 campaigns and dashboard DONE; 2.5 billing code DONE, real sandbox payments not verified; 2.6 public API and webhooks DONE. Gate NOT passed until real sandbox payments are run: wallet concurrency, webhook idempotency, campaign load and OpenAPI all pass). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
-- [ ] Section 3: Automation, integrations, AI (3.1 rules and routing DONE; 3.2 flow engine DONE; 3.3 flow builder DONE; 3.4 connector framework DONE; 3.5 to 3.7 to do). Started with the Section 2 gate still open (no sandbox payments run), by the project owner's decision (2026-11-09).
+- [ ] Section 3: Automation, integrations, AI (3.1 rules and routing DONE; 3.2 flow engine DONE; 3.3 flow builder DONE; 3.4 connector framework DONE; 3.5 commerce connectors code DONE, not checked against a real Shopify dev store; 3.6 and 3.7 to do). Started with the Section 2 gate still open (no sandbox payments run), by the project owner's decision (2026-11-09).
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
 
 ## Decisions log
@@ -496,7 +510,15 @@ Add one line per decision: date, decision, reason.
 - 2026-11-11: Local development runs without Docker. Reason: Docker Desktop's VM took several GB on the 8 GB development PC and kept crashing mid-test. Native PostgreSQL 18 (port 5433), Memurai for Redis (6379), and SeaweedFS and Mailpit binaries in `.tools/` use about 200 MB on the same ports, so `.env` and the code are unchanged. Docker Compose stays as an option. Odoo's bundled Postgres 12 on 5432 is too old (no core `gen_random_uuid`) and is left alone.
 - 2026-11-10: `outbound-sweep` re-queues outbound messages still `queued` a minute after they were made, campaigns and drips aside. Reason: any path that commits a message and then queues it (flows, rules, the inbox) could lose the job in a crash in between.
 
+- 2026-11-11: Store connectors emit one shared set of commerce events and data shapes. Reason: a flow and its template mapping keep working if a business moves from WooCommerce to Shopify, and the builder shows one sample.
+- 2026-11-11: Abandoned-cart recovery is a normal flow (delay, then template) that the order cancels by correlation, not a separate job type. Reason: the flow engine already has durable delays, restarts and history; the business edits the wait and message itself.
+- 2026-11-11: Checkout consent only moves a contact from unknown to opted in. Reason: an opt-out on WhatsApp outranks a checkbox in a store, and the import rule is the same.
+- 2026-11-11: Shopify privacy requests notify owners and admins instead of deleting. Reason: the workspace is the controller of its WhatsApp history, and personal data erasure is not built yet; uninstall and shop redact do act at once.
+
 ## Known gaps / TODO
+
+- Phase 3.5 not verified against a real Shopify dev store or WooCommerce site: needs a Partner app, its keys in `.env`, and a tunnel for `API_PUBLIC_URL`. Payloads follow the docs. Confirm Admin API version `2026-07` is offered. Shopify's protected customer data approval is needed before a public listing.
+- Shopify customer redact and data requests only notify; nothing erases or exports automatically yet (ties to the personal data erasure gap). No order-level events for refunds or edits. WooCommerce has no abandoned carts (no core webhook for them).
 
 - Section 1 gate still open: Embedded Signup through the Meta popup (needs `META_EMBEDDED_SIGNUP_CONFIG_ID`) and replay of a real event from Settings > WhatsApp.
 - Live payloads carry `contacts[].user_id`, `messages[].from_user_id` and `statuses[].recipient_user_id` (format `IN.…`), and `pricing` on statuses. The app ignores all of them and keys contacts on `wa_id`. Decide how to store the user id, and use `pricing` when billing arrives.

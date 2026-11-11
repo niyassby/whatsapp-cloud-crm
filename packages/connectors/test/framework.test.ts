@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   authorizeUrl,
   buildRegistry,
+  type ConnectorContext,
   type ConnectorDefinition,
   connectorProblem,
   demoStore,
@@ -163,7 +164,8 @@ describe('webhooks', () => {
   });
 
   it('maps deliveries to events, and ignores what it does not know', () => {
-    const map = demoStore.webhook!.map;
+    const map = (body: unknown, h = {}, settings = {}) =>
+      demoStore.webhook!.map(body, h, settings, {} as ConnectorContext);
     expect(
       map(
         { type: 'order.created', order: { id: '7', customer: { phone: '+91 98000 00001' } } },

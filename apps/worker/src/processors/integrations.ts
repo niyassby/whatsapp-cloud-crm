@@ -21,7 +21,7 @@ import {
   refreshTokens,
   sha256Hex,
 } from '@wacrm/connectors';
-import { assertWithinLimit, Prisma, type TenantTx, withTenant } from '@wacrm/db';
+import { assertWithinLimit, Prisma, setContactConsent, type TenantTx, withTenant } from '@wacrm/db';
 import { AppError, ErrorCode, type IntegrationJob } from '@wacrm/shared';
 import { integrationCredentialsAad, normalizePhone } from '@wacrm/shared/server';
 import type { WorkerDeps } from '../deps';
@@ -41,6 +41,7 @@ interface LoadedConnection {
   credentials: Credentials;
   tokenExpiresAt: Date | null;
   syncCursor: unknown;
+  webhookToken: string | null;
 }
 
 export function decryptCredentials(deps: WorkerDeps, id: string, enc: string | null): Credentials {
@@ -64,6 +65,7 @@ async function loadConnection(
     credentials: decryptCredentials(deps, row.id, row.credentialsEnc),
     tokenExpiresAt: row.tokenExpiresAt,
     syncCursor: row.syncCursor,
+    webhookToken: row.webhookToken,
   };
 }
 
@@ -414,10 +416,66 @@ interface StoredPayload {
   mapped?: MappedEvent;
 }
 
+/** Stop runs still under way that an earlier event started with one of these correlations. */
+async function cancelCorrelatedRuns(
+  tx: TenantTx,
+  orgId: string,
+  keys: string[],
+  by: string,
+): Promise<number> {
+  if (keys.length === 0) return 0;
+  const runs = await tx.flowRun.findMany({
+    where: {
+      status: { in: ['running', 'waiting'] },
+      OR: keys.map((k) => ({ trigger: { path: ['correlation'], equals: k } })),
+    },
+    select: { id: true, currentNodeId: true },
+  });
+  let cancelled = 0;
+  for (const run of runs) {
+    // Reviewed raw SQL: the engine holds this lock while it runs a step.
+    await tx.$queryRaw`SELECT 1 FROM flow_runs WHERE id = ${run.id}::uuid FOR UPDATE`;
+    const res = await tx.flowRun.updateMany({
+      where: { id: run.id, status: { in: ['running', 'waiting'] } },
+      data: {
+        status: 'cancelled',
+        endReason: 'cancelled_by_event',
+        endedAt: new Date(),
+        wakeAt: null,
+        awaiting: Prisma.DbNull,
+        input: Prisma.DbNull,
+      },
+    });
+    if (res.count === 0) continue;
+    cancelled++;
+    await tx.flowRunStep.create({
+      data: {
+        orgId,
+        runId: run.id,
+        nodeId: run.currentNodeId ?? '',
+        nodeType: 'run',
+        outcome: 'cancelled',
+        detail: { reason: 'cancelled_by_event', by },
+      },
+    });
+  }
+  return cancelled;
+}
+
+async function managerIds(tx: TenantTx, orgId: string): Promise<string[]> {
+  const rows = await tx.membership.findMany({
+    where: { orgId, status: 'active', role: { in: ['owner', 'admin'] } },
+    select: { userId: true },
+  });
+  return rows.map((r) => r.userId);
+}
+
 /**
- * Act on one inbound event. Claimed in one transaction with everything it does: each outside
- * event (by the connector's id for it) starts its flows once, whether it came by webhook,
- * redelivery or sync. A retry after a crash finds the claim and changes nothing.
+ * Act on one inbound event. The connector maps it first (it may fetch what the delivery leaves
+ * out), then one transaction does everything else: effects, cancelling runs an earlier event
+ * started, consent, and starting flows, with a claim on each outside event once it is acted on.
+ * A redelivery, a sync of the same order or a retry after a crash finds the claim and is logged
+ * as already handled.
  */
 export async function processIntegrationEvent(
   deps: WorkerDeps,
@@ -425,104 +483,7 @@ export async function processIntegrationEvent(
   eventId: string,
   opts: { finalAttempt?: boolean } = {},
 ): Promise<'processed' | 'ignored' | 'skipped' | 'failed'> {
-  const attempt = () =>
-    withTenant(
-      deps.db,
-      { orgId },
-      async (tx) => {
-        // Reviewed raw SQL: a row lock under RLS, so two jobs cannot act on one event.
-        await tx.$queryRaw`SELECT 1 FROM integration_events WHERE id = ${eventId}::uuid FOR UPDATE`;
-        const event = await tx.integrationEvent.findUnique({ where: { id: eventId } });
-        if (!event || event.direction !== 'inbound' || event.status !== 'received') return null;
-        const conn = await tx.integrationConnection.findUniqueOrThrow({
-          where: { id: event.connectionId },
-        });
-        const def = deps.connectors.get(conn.connectorKey);
-        const settings = (conn.settings ?? {}) as Record<string, string>;
-        const payload = event.payload as StoredPayload;
-
-        const finish = async (
-          status: 'processed' | 'ignored',
-          type: string | null,
-          result: unknown,
-        ) => {
-          await tx.integrationEvent.update({
-            where: { id: eventId },
-            data: {
-              status,
-              type,
-              attempts: { increment: 1 },
-              result: result as Prisma.InputJsonValue,
-              error: null,
-            },
-          });
-          return { status, runIds: [] as string[] };
-        };
-
-        if (!def)
-          return finish('ignored', null, {
-            reason: `The ${conn.connectorKey} connector is not available`,
-          });
-        const mapped = payload.mapped
-          ? [payload.mapped]
-          : (def.webhook?.map(payload.body, payload.headers ?? {}, settings) ?? []);
-        if (mapped.length === 0) return finish('ignored', null, { reason: 'Nothing to act on' });
-
-        const org = await tx.organization.findUniqueOrThrow({
-          where: { id: orgId },
-          select: { billingCountry: true },
-        });
-        const country = settings.defaultCountry || org.billingCountry || 'IN';
-        const runIds: string[] = [];
-        const results: Record<string, unknown>[] = [];
-        for (const ev of mapped) {
-          const claim = await tx.integrationEventClaim.createMany({
-            data: {
-              orgId,
-              connectionId: conn.id,
-              externalId: ev.externalId.slice(0, 300),
-              eventId,
-            },
-            skipDuplicates: true,
-          });
-          if (claim.count === 0) {
-            results.push({
-              trigger: ev.trigger,
-              externalId: ev.externalId,
-              skipped: 'Already handled',
-            });
-            continue;
-          }
-          const contact = await resolveContact(tx, orgId, ev.contact, country);
-          if ('skip' in contact) {
-            results.push({ trigger: ev.trigger, externalId: ev.externalId, skipped: contact.skip });
-            continue;
-          }
-          const started = await startFlowsForEventTx(tx, orgId, {
-            type: 'integration_event',
-            connector: conn.connectorKey,
-            event: ev.trigger,
-            contactId: contact.id,
-            data: ev.data,
-          });
-          runIds.push(...started);
-          results.push({
-            trigger: ev.trigger,
-            externalId: ev.externalId,
-            contactId: contact.id,
-            flowsStarted: started.length,
-          });
-        }
-        await finish('processed', mapped[0]!.trigger, { events: results });
-        return { status: 'processed' as const, runIds };
-      },
-      { timeout: 30_000, maxWait: 10_000 },
-    );
-
-  let outcome: Awaited<ReturnType<typeof attempt>>;
-  try {
-    outcome = await attempt();
-  } catch (err) {
+  const failed = async (err: unknown) => {
     // Rolled back. Count the try and keep the error, so the log shows why it is being retried.
     await withTenant(deps.db, { orgId }, (tx) =>
       tx.integrationEvent.updateMany({
@@ -534,15 +495,203 @@ export async function processIntegrationEvent(
         },
       }),
     ).catch(() => undefined);
-    if (opts.finalAttempt) return 'failed';
+    if (opts.finalAttempt) return 'failed' as const;
     throw err;
+  };
+
+  // ---- read and map, outside any transaction
+  const loaded = await withTenant(deps.db, { orgId }, async (tx) => {
+    const event = await tx.integrationEvent.findUnique({ where: { id: eventId } });
+    if (!event || event.direction !== 'inbound' || event.status !== 'received') return null;
+    const conn = await loadConnection(deps, tx, event.connectionId);
+    return conn ? { event, conn } : null;
+  });
+  if (!loaded) return 'skipped';
+  const { event, conn } = loaded;
+  const def = deps.connectors.get(conn.connectorKey);
+  const payload = event.payload as StoredPayload;
+  let mapped: MappedEvent[] = [];
+  let ignoreReason: string | null = null;
+  if (!def) {
+    ignoreReason = `The ${conn.connectorKey} connector is not available`;
+  } else if (payload.mapped) {
+    mapped = [payload.mapped];
+  } else if (def.webhook) {
+    try {
+      mapped = await def.webhook.map(
+        payload.body,
+        payload.headers ?? {},
+        conn.settings,
+        contextFor(deps, conn),
+      );
+    } catch (err) {
+      return failed(err);
+    }
+  }
+  if (!ignoreReason && mapped.length === 0) ignoreReason = 'Nothing to act on';
+
+  const attempt = () =>
+    withTenant(
+      deps.db,
+      { orgId },
+      async (tx) => {
+        // Reviewed raw SQL: a row lock under RLS, so two jobs cannot act on one event.
+        await tx.$queryRaw`SELECT 1 FROM integration_events WHERE id = ${eventId}::uuid FOR UPDATE`;
+        const current = await tx.integrationEvent.findUnique({
+          where: { id: eventId },
+          select: { status: true },
+        });
+        if (current?.status !== 'received') return null;
+
+        const finish = async (
+          status: 'processed' | 'ignored',
+          type: string | null,
+          result: unknown,
+        ) =>
+          tx.integrationEvent.update({
+            where: { id: eventId },
+            data: {
+              status,
+              type,
+              attempts: { increment: 1 },
+              result: result as Prisma.InputJsonValue,
+              error: null,
+            },
+          });
+        const runIds: string[] = [];
+        const notified: string[] = [];
+        if (ignoreReason) {
+          await finish('ignored', null, { reason: ignoreReason });
+          return { status: 'ignored' as const, runIds, notified };
+        }
+
+        const org = await tx.organization.findUniqueOrThrow({
+          where: { id: orgId },
+          select: { billingCountry: true },
+        });
+        const country = conn.settings.defaultCountry || org.billingCountry || 'IN';
+        const results: Record<string, unknown>[] = [];
+        for (const ev of mapped) {
+          const row: Record<string, unknown> = { trigger: ev.trigger, externalId: ev.externalId };
+          results.push(row);
+
+          if (ev.cancels?.length) {
+            row.cancelledRuns = await cancelCorrelatedRuns(tx, orgId, ev.cancels, ev.externalId);
+          }
+          if (ev.effect) {
+            const claim = await tx.integrationEventClaim.createMany({
+              data: {
+                orgId,
+                connectionId: conn.id,
+                externalId: ev.externalId.slice(0, 300),
+                eventId,
+              },
+              skipDuplicates: true,
+            });
+            if (claim.count === 0) {
+              row.skipped = 'Already handled';
+              continue;
+            }
+            if (ev.effect.kind === 'disconnect' || ev.effect.kind === 'erase') {
+              await tx.integrationConnection.update({
+                where: { id: conn.id },
+                data: {
+                  status: 'disconnected',
+                  credentialsEnc: null,
+                  webhookToken: null,
+                  tokenExpiresAt: null,
+                  syncEveryMinutes: null,
+                  lastError: ev.effect.reason,
+                },
+              });
+              if (ev.effect.kind === 'erase') {
+                // Payloads hold customers' details; the rows stay as a record that events came.
+                await tx.integrationEvent.updateMany({
+                  where: { connectionId: conn.id },
+                  data: { payload: {}, result: Prisma.DbNull },
+                });
+              }
+              row.effect = ev.effect.kind === 'erase' ? 'erased' : 'disconnected';
+            } else {
+              const managers = await managerIds(tx, orgId);
+              await tx.notification.createMany({
+                data: managers.map((userId) => ({
+                  orgId,
+                  userId,
+                  kind: 'integration_request',
+                  title: ev.effect?.kind === 'notify' ? ev.effect.title.slice(0, 200) : '',
+                  body: ev.effect?.kind === 'notify' ? ev.effect.body.slice(0, 1000) : null,
+                })),
+              });
+              notified.push(...managers);
+              row.effect = 'notified';
+            }
+            continue;
+          }
+
+          const contact = await resolveContact(tx, orgId, ev.contact, country);
+          if ('skip' in contact) {
+            // Not claimed: a later delivery that names the customer can still act.
+            row.skipped = contact.skip;
+            continue;
+          }
+          const claim = await tx.integrationEventClaim.createMany({
+            data: {
+              orgId,
+              connectionId: conn.id,
+              externalId: ev.externalId.slice(0, 300),
+              eventId,
+            },
+            skipDuplicates: true,
+          });
+          if (claim.count === 0) {
+            row.skipped = 'Already handled';
+            continue;
+          }
+          row.contactId = contact.id;
+          if (ev.contact?.consent) {
+            const now = await tx.contact.findUniqueOrThrow({
+              where: { id: contact.id },
+              select: { optInStatus: true },
+            });
+            // Consent given at a checkout only fills a gap; an opt-out always stands.
+            if (now.optInStatus === 'unknown') {
+              row.consent = await setContactConsent(tx, {
+                orgId,
+                contactId: contact.id,
+                status: 'opted_in',
+                source: ev.contact.consent.source.slice(0, 100),
+                proof: ev.contact.consent.proof.slice(0, 2000),
+              });
+            }
+          }
+          const started = await startFlowsForEventTx(tx, orgId, {
+            type: 'integration_event',
+            connector: conn.connectorKey,
+            event: ev.trigger,
+            contactId: contact.id,
+            data: ev.data,
+            ...(ev.correlation ? { correlation: ev.correlation } : {}),
+          });
+          runIds.push(...started);
+          row.flowsStarted = started.length;
+        }
+        await finish('processed', mapped[0]!.trigger, { events: results });
+        return { status: 'processed' as const, runIds, notified };
+      },
+      { timeout: 30_000, maxWait: 10_000 },
+    );
+
+  let outcome: Awaited<ReturnType<typeof attempt>>;
+  try {
+    outcome = await attempt();
+  } catch (err) {
+    return failed(err);
   }
   if (!outcome) return 'skipped';
   for (const runId of outcome.runIds) await deps.enqueueFlowJob({ kind: 'advance', orgId, runId });
-  const conn = await withTenant(deps.db, { orgId }, (tx) =>
-    tx.integrationEvent.findUnique({ where: { id: eventId }, select: { connectionId: true } }),
-  );
-  if (conn) deps.publisher.emit(orgId, 'integration:updated', { connectionId: conn.connectionId });
+  for (const userId of outcome.notified) deps.publisher.emit(orgId, 'notification:new', { userId });
+  deps.publisher.emit(orgId, 'integration:updated', { connectionId: conn.id });
   return outcome.status;
 }
 
@@ -646,6 +795,43 @@ export async function syncConnection(
   return { events: created.length };
 }
 
+/**
+ * Run the connector's setup after connecting or reconnecting, such as registering its webhooks
+ * with the provider at this connection's address. Connectors make it safe to run twice.
+ */
+export async function setupConnection(
+  deps: WorkerDeps,
+  orgId: string,
+  connectionId: string,
+): Promise<'done' | 'skipped' | 'reconnect'> {
+  let usable;
+  try {
+    usable = await usableConnection(deps, orgId, connectionId);
+  } catch {
+    return 'skipped';
+  }
+  const { conn, def } = usable;
+  if (!def.setup) return 'skipped';
+  const webhookUrl = conn.webhookToken
+    ? `${deps.apiPublicUrl.replace(/\/$/, '')}/integrations/hooks/${conn.webhookToken}`
+    : null;
+  try {
+    await def.setup(contextFor(deps, conn), { webhookUrl });
+    await setStatus(deps, orgId, connectionId, { lastError: null });
+    return 'done';
+  } catch (err) {
+    if (err instanceof ConnectorError && err.opts.reconnect) {
+      await needsReconnect(deps, orgId, connectionId, err.message);
+      return 'reconnect';
+    }
+    await setStatus(deps, orgId, connectionId, {
+      status: 'error',
+      lastError: `Setup: ${message(err)}`,
+    });
+    throw err;
+  }
+}
+
 /** Refreshes, health checks and syncs that are due, across orgs. A definer function; ids only. */
 export function integrationDueWork(deps: Pick<WorkerDeps, 'db'>, limit = 500) {
   return deps.db.$queryRaw<{ org_id: string; id: string; kind: 'refresh' | 'health' | 'sync' }[]>`
@@ -664,6 +850,8 @@ export async function processIntegrationJob(
       return refreshConnection(deps, job.orgId, job.connectionId);
     case 'health':
       return checkConnectionHealth(deps, job.orgId, job.connectionId);
+    case 'setup':
+      return setupConnection(deps, job.orgId, job.connectionId);
     case 'sync': {
       const r = await syncConnection(deps, job.orgId, job.connectionId);
       return r === 'skipped' ? r : `synced ${r.events}`;

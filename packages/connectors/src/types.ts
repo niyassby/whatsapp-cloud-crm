@@ -94,7 +94,21 @@ export interface EventContact {
   phone?: string | null;
   email?: string | null;
   name?: string | null;
+  /**
+   * Marketing consent the customer gave in the provider, such as ticking "keep me updated" at a
+   * checkout. Only ever moves a contact from unknown to opted in, never over an opt-out.
+   */
+  consent?: { source: string; proof: string } | null;
 }
+
+/** Something the framework does itself instead of starting flows. */
+export type EventEffect =
+  /** The app was uninstalled or the shop closed: stop and forget the credentials. */
+  | { kind: 'disconnect'; reason: string }
+  /** The provider asks for the shop's data to be erased: disconnect and blank its event log. */
+  | { kind: 'erase'; reason: string }
+  /** A request a person must handle, such as a customer asking for their data. */
+  | { kind: 'notify'; title: string; body: string };
 
 /** An outside event in the app's own shape. */
 export interface MappedEvent {
@@ -104,6 +118,15 @@ export interface MappedEvent {
   externalId: string;
   contact: EventContact | null;
   data: Record<string, unknown>;
+  /**
+   * Runs started by this event remember it, so a later event can stop them: an abandoned cart
+   * gives `checkout:<token>`, and the order for that cart cancels it.
+   */
+  correlation?: string;
+  /** Stop runs still waiting that were started with any of these correlations. */
+  cancels?: string[];
+  /** Handled by the framework; such an event starts no flows. */
+  effect?: EventEffect;
 }
 
 export interface InboundRequest {
@@ -115,16 +138,37 @@ export interface InboundRequest {
 export interface ConnectorWebhook {
   /** Credential key holding the signing secret. Default `webhookSecret`, made by the framework. */
   secretField?: string;
+  /**
+   * The signing secret is the app's, from this environment variable, not per connection (Shopify
+   * signs every shop's webhooks with the app's client secret).
+   */
+  secretEnv?: string;
   /** Check the request came from the provider, on the exact bytes it sent. */
   verify(req: InboundRequest, secret: string, settings: Record<string, string>): boolean;
   /** The provider's id for this delivery, if it sends one; otherwise the body's hash is used. */
   deliveryId?(req: InboundRequest): string | null;
-  /** Turn one delivery into events. Unknown or unwanted deliveries map to none. */
+  /**
+   * Turn one delivery into events. Unknown or unwanted deliveries map to none. Runs in the worker
+   * with the connection's context, so it may fetch what the delivery leaves out.
+   */
   map(
     body: unknown,
     headers: Record<string, string>,
     settings: Record<string, string>,
-  ): MappedEvent[];
+    ctx: ConnectorContext,
+  ): MappedEvent[] | Promise<MappedEvent[]>;
+}
+
+/**
+ * Webhooks a provider sends to one address for the whole app rather than per connection, such as
+ * Shopify's privacy requests. The framework routes each to the connections it names.
+ */
+export interface ConnectorAppWebhook {
+  /** Environment variable holding the app's signing secret. */
+  secretEnv: string;
+  verify(req: InboundRequest, secret: string): boolean;
+  /** Which connections it is for: those whose setting `key` equals `value`. */
+  route(body: unknown, headers: Record<string, string>): { setting: string; value: string } | null;
 }
 
 export interface ConnectorSync {
@@ -147,4 +191,12 @@ export interface ConnectorDefinition {
   /** Throws when the connection no longer works. Run after connecting and every hour. */
   healthCheck?(ctx: ConnectorContext): Promise<void>;
   sync?: ConnectorSync;
+  /**
+   * Run after connecting and reconnecting, for example to register webhooks with the provider.
+   * Must be safe to run again.
+   */
+  setup?(ctx: ConnectorContext, opts: { webhookUrl: string | null }): Promise<void>;
+  /** Clean and check settings before saving. Return an error message, or the cleaned settings. */
+  normalizeSettings?(settings: Record<string, string>): Record<string, string> | string;
+  appWebhook?: ConnectorAppWebhook;
 }

@@ -169,6 +169,17 @@ export class IntegrationsPublicController {
     await res.status(302).header('location', to).send();
   }
 
+  /** Webhooks for the whole app, such as Shopify's privacy requests. */
+  @Post('apps/:connectorKey/hooks')
+  @HttpCode(200)
+  appHook(
+    @Param('connectorKey') connectorKey: string,
+    @Req() req: RawBodyRequest<FastifyRequest>,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ): Promise<{ received: true }> {
+    return this.integrations.receiveAppWebhook(connectorKey, req.rawBody, headers);
+  }
+
   @Post('hooks/:token')
   @HttpCode(200)
   hook(

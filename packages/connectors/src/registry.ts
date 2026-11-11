@@ -108,6 +108,19 @@ export class ConnectorRegistry {
 export const webhookSecretField = (def: ConnectorDefinition) =>
   def.webhook?.secretField ?? 'webhookSecret';
 
+/**
+ * The secret a connection's webhooks are signed with: the app's, from the environment, when the
+ * provider signs for the whole app; otherwise the connection's own credential.
+ */
+export function webhookSigningSecret(
+  def: ConnectorDefinition,
+  credentials: Record<string, string>,
+  env: Record<string, string | undefined>,
+): string {
+  if (def.webhook?.secretEnv) return env[def.webhook.secretEnv] ?? '';
+  return credentials[webhookSecretField(def)] ?? '';
+}
+
 /** Fill {settings.x} in a URL from the connection's settings, encoded. */
 export function fillSettings(template: string, settings: Record<string, string>): string {
   return template.replace(/\{settings\.([a-zA-Z0-9_]+)\}/g, (_, k: string) =>

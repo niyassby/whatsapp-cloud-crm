@@ -8,6 +8,7 @@ import {
   oauthClient,
   sha256Hex,
   webhookSecretField,
+  webhookSigningSecret,
 } from '@wacrm/connectors';
 import { Prisma, type TenantTx, withTenant } from '@wacrm/db';
 import {
@@ -174,19 +175,36 @@ export class IntegrationsService {
 
   /** A fresh signing secret, when the connector takes webhooks and the person did not give one. */
   private withWebhookSecret(def: ConnectorDefinition, credentials: Record<string, string>) {
-    if (!def.webhook) return { credentials, generated: null };
+    // No secret of our own when the provider signs with the app's (Shopify).
+    if (!def.webhook || def.webhook.secretEnv) return { credentials, generated: null };
     const field = webhookSecretField(def);
     if (credentials[field]) return { credentials, generated: null };
     const secret = randomBytes(24).toString('base64url');
     return { credentials: { ...credentials, [field]: secret }, generated: secret };
   }
 
-  private async afterConnect(orgId: string, connectionId: string): Promise<void> {
+  private async afterConnect(
+    orgId: string,
+    connectionId: string,
+    def: ConnectorDefinition | undefined,
+  ): Promise<void> {
     this.realtime.emit(orgId, 'integration:updated', { connectionId });
-    // Check it works straight away rather than waiting for the hourly check.
-    await this.queues
-      .enqueueIntegrationJob({ kind: 'health', orgId, connectionId })
-      .catch((err: unknown) => this.logger.error(`could not queue a health check: ${String(err)}`));
+    // Register webhooks and check it works straight away rather than waiting for the hourly check.
+    const kinds = [...(def?.setup ? (['setup'] as const) : []), 'health' as const];
+    for (const kind of kinds) {
+      await this.queues
+        .enqueueIntegrationJob({ kind, orgId, connectionId })
+        .catch((err: unknown) => this.logger.error(`could not queue ${kind}: ${String(err)}`));
+    }
+  }
+
+  /** Declared fields, then the connector's own cleaning (a shop name to its full domain). */
+  private cleanSettings(def: ConnectorDefinition, values: Record<string, string>) {
+    const settings = this.cleanFields(def.settings ?? [], values, 'settings');
+    if (!def.normalizeSettings) return settings;
+    const result = def.normalizeSettings(settings);
+    if (typeof result === 'string') throw new AppError(ErrorCode.INTEGRATION_INVALID, result);
+    return result;
   }
 
   /** Connect with an API key, or for webhooks only. OAuth goes through startOAuth instead. */
@@ -198,7 +216,7 @@ export class IntegrationsService {
     if (def.auth.type === 'oauth2') {
       throw new AppError(ErrorCode.INTEGRATION_INVALID, `${def.name} connects by signing in`);
     }
-    const settings = this.cleanFields(def.settings ?? [], input.settings ?? {}, 'settings');
+    const settings = this.cleanSettings(def, input.settings ?? {});
     const given =
       def.auth.type === 'api_key'
         ? this.cleanFields(def.auth.fields, input.credentials ?? {}, 'credential')
@@ -229,7 +247,7 @@ export class IntegrationsService {
       });
       return created;
     });
-    await this.afterConnect(actor.orgId, id);
+    await this.afterConnect(actor.orgId, id, this.connectors.get(row.connectorKey));
     return { ...this.toDto(row), webhookSecret: generated };
   }
 
@@ -244,8 +262,7 @@ export class IntegrationsService {
       const def = this.connector(current.connectorKey);
       const data: Prisma.IntegrationConnectionUpdateInput = {};
       if (input.name) data.name = input.name.trim();
-      if (input.settings)
-        data.settings = this.cleanFields(def.settings ?? [], input.settings, 'settings');
+      if (input.settings) data.settings = this.cleanSettings(def, input.settings);
       if (input.credentials) {
         if (def.auth.type !== 'api_key') {
           throw new AppError(ErrorCode.INTEGRATION_INVALID, 'Reconnect by signing in again');
@@ -273,7 +290,7 @@ export class IntegrationsService {
       });
       return updated;
     });
-    await this.afterConnect(actor.orgId, id);
+    await this.afterConnect(actor.orgId, id, this.connectors.get(row.connectorKey));
     return this.toDto(row);
   }
 
@@ -405,7 +422,7 @@ export class IntegrationsService {
     const stored = await withTenant(this.prisma.client, { orgId }, async (tx) => {
       const row = await tx.integrationConnection.findUniqueOrThrow({ where: { id: found.id } });
       const settings = (row.settings ?? {}) as Record<string, string>;
-      const secret = this.decrypt(row)[webhookSecretField(def)] ?? '';
+      const secret = webhookSigningSecret(def, this.decrypt(row), process.env);
       if (!def.webhook!.verify({ rawBody, headers }, secret, settings)) return null;
 
       const deliveryId = def.webhook!.deliveryId?.({ rawBody, headers }) ?? null;
@@ -462,6 +479,82 @@ export class IntegrationsService {
     return { received: true };
   }
 
+  /**
+   * A webhook the provider sends to one address for the whole app (Shopify's privacy requests).
+   * Verified with the app's secret, then stored once for each connection it names.
+   */
+  async receiveAppWebhook(
+    connectorKey: string,
+    rawBody: Buffer | undefined,
+    rawHeaders: Record<string, string | string[] | undefined>,
+  ): Promise<{ received: true }> {
+    const def = this.connectors.get(connectorKey);
+    if (!def?.appWebhook || !rawBody)
+      throw new AppError(ErrorCode.NOT_FOUND, 'Unknown webhook address');
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(rawHeaders)) {
+      if (v !== undefined) headers[k.toLowerCase()] = Array.isArray(v) ? v.join(', ') : v;
+    }
+    const secret = process.env[def.appWebhook.secretEnv] ?? '';
+    if (!secret || !def.appWebhook.verify({ rawBody, headers }, secret)) {
+      this.logger.warn(`rejected a ${def.key} app webhook with an invalid signature`);
+      throw new AppError(ErrorCode.INTEGRATION_SIGNATURE_INVALID, 'Invalid signature');
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(rawBody.toString('utf8'));
+    } catch {
+      throw new AppError(ErrorCode.VALIDATION_FAILED, 'Expected JSON');
+    }
+    const route = def.appWebhook.route(body, headers);
+    if (!route) return { received: true };
+    // Reviewed raw SQL: a definer function, as no tenant is known yet. Ids, org and status only.
+    const targets = await this.prisma.client.$queryRaw<{ org_id: string; id: string }[]>`
+      SELECT org_id, id FROM integration_connections_by_setting(${def.key}, ${route.setting}, ${route.value})`;
+    const deliveryId = def.webhook?.deliveryId?.({ rawBody, headers }) ?? null;
+    const dedupeKey = deliveryId
+      ? `delivery:${deliveryId.slice(0, 200)}`
+      : `body:${sha256Hex(rawBody)}`;
+    for (const target of targets) {
+      const stored = await withTenant(this.prisma.client, { orgId: target.org_id }, async (tx) => {
+        await tx.integrationEvent.createMany({
+          data: {
+            id: randomUUID(),
+            orgId: target.org_id,
+            connectionId: target.id,
+            direction: 'inbound',
+            dedupeKey,
+            status: 'received',
+            payload: {
+              body,
+              headers: keepableHeaders(rawHeaders),
+              via: 'app_webhook',
+            } as Prisma.InputJsonValue,
+          },
+          skipDuplicates: true,
+        });
+        return tx.integrationEvent.findUniqueOrThrow({
+          where: {
+            connectionId_direction_dedupeKey: {
+              connectionId: target.id,
+              direction: 'inbound',
+              dedupeKey,
+            },
+          },
+          select: { id: true, status: true },
+        });
+      });
+      if (stored.status === 'received') {
+        await this.queues.enqueueIntegrationJob({
+          kind: 'event',
+          orgId: target.org_id,
+          eventId: stored.id,
+        });
+      }
+    }
+    return { received: true };
+  }
+
   // ------------------------------------------------------------------ OAuth
 
   private redirectUri(): string {
@@ -481,7 +574,7 @@ export class IntegrationsService {
         `${def.name} is not set up on this server yet`,
       );
     }
-    const settings = this.cleanFields(def.settings ?? [], input.settings ?? {}, 'settings');
+    const settings = this.cleanSettings(def, input.settings ?? {});
     if (input.connectionId) {
       const current = await this.db.run((tx) => this.load(tx, input.connectionId!));
       if (current.connectorKey !== def.key)
@@ -584,7 +677,7 @@ export class IntegrationsService {
         });
       },
     );
-    await this.afterConnect(state.orgId, id);
+    await this.afterConnect(state.orgId, id, def);
     return `${web}/${id}?connected=1`;
   }
 }

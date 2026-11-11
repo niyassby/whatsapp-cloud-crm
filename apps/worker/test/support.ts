@@ -138,6 +138,7 @@ export function buildDeps(client: DbClient) {
     },
     allowPrivateHttp: false,
     connectors: buildRegistry({ demo: true }),
+    apiPublicUrl: 'https://api.crm.test',
     fetch: (async () => {
       throw new Error('No fetch in this test');
     }) as unknown as typeof fetch,

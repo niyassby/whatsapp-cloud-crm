@@ -28,7 +28,7 @@ export const QueueName = {
 export type IntegrationJob =
   /** An inbound event (webhook or sync) to map and act on. */
   | { kind: 'event'; orgId: string; eventId: string }
-  | { kind: 'refresh' | 'health' | 'sync'; orgId: string; connectionId: string };
+  | { kind: 'refresh' | 'health' | 'sync' | 'setup'; orgId: string; connectionId: string };
 
 /** Something outside a message that can start flows. */
 export type FlowEvent =
@@ -39,6 +39,8 @@ export type FlowEvent =
       event: string;
       contactId: string;
       data: Record<string, unknown>;
+      /** Lets a later event cancel the runs this one starts (an order cancels a cart reminder). */
+      correlation?: string;
     }
   | { type: 'manual'; flowId: string; contactId: string };
 

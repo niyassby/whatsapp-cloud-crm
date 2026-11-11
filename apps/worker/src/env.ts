@@ -41,6 +41,8 @@ export const workerEnvSchema = z.object({
     .enum(['true', 'false', '1', '0'])
     .transform((v) => v === 'true' || v === '1')
     .default(false),
+  /** The API as providers reach it, for webhook addresses registered by connectors. Same value as the API. */
+  API_PUBLIC_URL: z.url().default('http://localhost:4000'),
   /** Registers the Demo Store connector, for trying integrations locally. Same value as the API. */
   INTEGRATIONS_DEMO: z
     .enum(['true', 'false', '1', '0'])

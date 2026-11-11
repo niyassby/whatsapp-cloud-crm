@@ -301,6 +301,8 @@ export const NOTIFICATION_KINDS = [
   'sla_breached',
   'sla_escalated',
   'integration_needs_reconnect',
+  /** Something from a connected app a person must handle, such as a customer data request. */
+  'integration_request',
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

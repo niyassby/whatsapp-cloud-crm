@@ -30,6 +30,8 @@ const tokenRequests: string[] = [];
 beforeAll(async () => {
   process.env.OAUTHY_CLIENT_ID = 'client-1';
   process.env.OAUTHY_CLIENT_SECRET = 'client-secret';
+  process.env.SHOPIFY_CLIENT_ID = 'shop-client';
+  process.env.SHOPIFY_CLIENT_SECRET = 'shop-app-secret';
   t = await buildApp({
     connectors: buildRegistry({ demo: true, extra: [oauthy] }),
     env: { API_PUBLIC_URL: 'https://api.crm.test', WEBHOOK_ALLOW_PRIVATE_URLS: 'false' },
@@ -48,6 +50,8 @@ afterAll(async () => {
   await owner?.$disconnect();
   delete process.env.OAUTHY_CLIENT_ID;
   delete process.env.OAUTHY_CLIENT_SECRET;
+  delete process.env.SHOPIFY_CLIENT_ID;
+  delete process.env.SHOPIFY_CLIENT_SECRET;
 });
 
 async function workspace() {
@@ -88,8 +92,14 @@ describe('connectors', () => {
   it('lists what can be connected, without code, and says when OAuth is not set up', async () => {
     const s = await workspace();
     const res = await s.client.get('/integrations/connectors');
-    expect(res.body.map((c: { key: string }) => c.key)).toEqual(['demo_store', 'oauthy']);
-    expect(res.body[0]).toMatchObject({
+    expect(res.body.map((c: { key: string }) => c.key)).toEqual([
+      'custom_store',
+      'demo_store',
+      'oauthy',
+      'shopify',
+      'woocommerce',
+    ]);
+    expect(res.body.find((c: { key: string }) => c.key === 'demo_store')).toMatchObject({
       authType: 'api_key',
       receivesWebhooks: true,
       available: true,
@@ -324,5 +334,99 @@ describe('access', () => {
     expect(refused.status).toBe(402);
     expect(refused.body.code).toBe(ErrorCode.PLAN_FEATURE_UNAVAILABLE);
     expect((await s.client.get(`/integrations/connections/${body.id}`)).status).toBe(200);
+  });
+});
+
+describe('Shopify', () => {
+  const connectShop = async (c: Client, shop: string) => {
+    const start = await c.post('/integrations/oauth/start', {
+      connectorKey: 'shopify',
+      name: 'Shop',
+      settings: { shop },
+    });
+    if (start.status !== 200) return { start };
+    const state = new URL(start.body.url).searchParams.get('state')!;
+    await t.app.inject({
+      method: 'GET',
+      url: `/integrations/oauth/callback?code=c&state=${state}`,
+    });
+    return { start };
+  };
+
+  it('installs by OAuth on the shop the owner names, written however they like', async () => {
+    const s = await workspace();
+    const spy = vi.spyOn(t.app.get(QueuesService), 'enqueueIntegrationJob');
+    const { start } = await connectShop(s.client, 'https://Chai-House.myshopify.com/admin');
+    const url = new URL(start.body.url);
+    expect(url.origin).toBe('https://chai-house.myshopify.com');
+    expect(url.pathname).toBe('/admin/oauth/authorize');
+    expect(url.searchParams.get('client_id')).toBe('shop-client');
+    const conns = await s.client.get('/integrations/connections');
+    expect(conns.body[0]).toMatchObject({
+      connectorKey: 'shopify',
+      settings: { shop: 'chai-house.myshopify.com' },
+    });
+    // Webhooks are registered by the worker, then the connection is checked.
+    expect(spy.mock.calls.map((c) => (c[0] as { kind: string }).kind)).toEqual(['setup', 'health']);
+    spy.mockRestore();
+
+    const bad = await s.client.post('/integrations/oauth/start', {
+      connectorKey: 'shopify',
+      name: 'Shop',
+      settings: { shop: 'evil.example.com' },
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it('per-shop webhooks are signed with the app secret; privacy webhooks find the shop', async () => {
+    const s = await workspace();
+    const shop = `s${randomUUID().slice(0, 8)}.myshopify.com`;
+    await connectShop(s.client, shop);
+    const [conn] = (await s.client.get('/integrations/connections')).body;
+    const sign = (b: string, secret = 'shop-app-secret') =>
+      hmacSha256(secret, Buffer.from(b), 'base64');
+
+    const order = JSON.stringify({ id: 1, name: '#1001' });
+    const ok = await hook(conn.webhookUrl, order, {
+      'x-shopify-topic': 'orders/create',
+      'x-shopify-hmac-sha256': sign(order),
+      'x-shopify-webhook-id': 'w-1',
+    });
+    expect(ok.statusCode).toBe(200);
+    const forged = await hook(conn.webhookUrl, order, {
+      'x-shopify-topic': 'orders/create',
+      'x-shopify-hmac-sha256': sign(order, 'guess'),
+    });
+    expect(forged.statusCode).toBe(401);
+
+    const redact = JSON.stringify({ shop_id: 1, shop_domain: shop, customer: { id: 7 } });
+    const app = (body: string, hmac: string) =>
+      t.app.inject({
+        method: 'POST',
+        url: '/integrations/apps/shopify/hooks',
+        payload: body,
+        headers: {
+          'content-type': 'application/json',
+          'x-shopify-topic': 'customers/redact',
+          'x-shopify-hmac-sha256': hmac,
+        },
+      });
+    expect((await app(redact, sign(redact))).statusCode).toBe(200);
+    expect((await app(redact, sign(redact, 'guess'))).statusCode).toBe(401);
+    // A shop nobody connected is acknowledged, and stored nowhere.
+    const stranger = JSON.stringify({ shop_domain: 'nobody.myshopify.com' });
+    expect((await app(stranger, sign(stranger))).statusCode).toBe(200);
+    const unknownApp = await t.app.inject({
+      method: 'POST',
+      url: '/integrations/apps/nope/hooks',
+      payload: '{}',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(unknownApp.statusCode).toBe(404);
+
+    const events = await s.client.get(`/integrations/connections/${conn.id}/events`);
+    expect(
+      events.body.items.map((e: { payload: { via: string } }) => e.payload.via).sort(),
+    ).toEqual(['app_webhook', 'webhook']);
   });
 });

@@ -191,6 +191,7 @@ const deps: WorkerDeps = {
   httpRequest: createSafeHttp({ allowPrivate: env.WEBHOOK_ALLOW_PRIVATE_URLS }),
   allowPrivateHttp: env.WEBHOOK_ALLOW_PRIVATE_URLS,
   connectors: buildRegistry({ demo: env.INTEGRATIONS_DEMO }),
+  apiPublicUrl: env.API_PUBLIC_URL,
   fetch: globalThis.fetch,
   env: process.env,
   enqueueIntegrationJob: async (job, delayMs) => {

@@ -45,6 +45,8 @@ export interface WorkerDeps {
   connectors: ConnectorRegistry;
   /** For OAuth token requests to the provider a connector names. */
   fetch: typeof fetch;
+  /** This API as providers reach it: connections' webhook addresses are built from it. */
+  apiPublicUrl: string;
   /** Where connectors' OAuth app credentials are read from. */
   env: Record<string, string | undefined>;
   enqueueIntegrationJob: (job: IntegrationJob, delayMs?: number) => Promise<void>;

@@ -103,7 +103,20 @@ export const myShop: ConnectorDefinition = {
   contact; otherwise the event is logged and skipped. New contacts count against the plan's
   limit and start with no marketing consent.
 - **The webhook handler is tiny:** `verify` and `deliveryId` run in the API request; `map` runs in
-  the worker. Keep `verify` fast and side-effect free.
+  the worker. Keep `verify` fast and side-effect free. `map` may be async and gets the connector
+  context, so it can fetch what a webhook leaves out (Shopify fulfillments fetch their order).
+- **What a mapped event can also carry:** `contact.consent` (`{ source, proof }`, applied only when
+  the contact's consent is still unknown, never over an opt-out), `correlation` (stored on the flow
+  runs it starts), `cancels` (correlation keys whose waiting runs are cancelled, which is how an order
+  stops its abandoned-cart reminder) and `effect` (`disconnect`, `erase` or `notify`, for app
+  lifecycle and privacy requests; claimed like any event, so it happens once).
+- **App-level secrets:** `webhook.secretEnv` signs every connection's webhooks with one app secret
+  (Shopify) instead of a per-connection credential. `appWebhook` adds a route for the whole app,
+  `POST /integrations/apps/<key>/hooks`, whose `route` names the setting that finds the connections
+  (through the definer function `integration_connections_by_setting`).
+- **Setup and settings:** `setup(ctx, { webhookUrl })` runs in the worker after every connect and
+  reconnect (job `setup`), and must be safe to repeat. `normalizeSettings` cleans what a person typed,
+  or returns a message to refuse it.
 
 ## Testing a connector
 
@@ -112,3 +125,70 @@ export const myShop: ConnectorDefinition = {
   OAuth refreshes run without the network.
 - Locally, `INTEGRATIONS_DEMO=true` (API and worker) adds the Demo Store connector, and
   `API_PUBLIC_URL` must be an address the service can reach (a tunnel) for webhooks and OAuth.
+
+## Built-in commerce connectors (Phase 3.5)
+
+All three emit the same commerce events (`packages/connectors/src/commerce.ts`), so one flow works
+with any store: `order.created`, `order.paid`, `order.fulfilled`, `order.cancelled`,
+`shipment.updated`, `checkout.started` and `customer.created`. Data is `{ order }`, `{ order, shipment }`,
+`{ checkout }` or `{ customer }`, in one shape: for example `{{trigger.data.order.name}}`,
+`{{trigger.data.order.total}}`, `{{trigger.data.order.itemsSummary}}`,
+`{{trigger.data.shipment.tracking.url}}` and `{{trigger.data.checkout.recoveryUrl}}`. Map them to
+template variables in a `send_template` step.
+
+### Shopify
+
+1. In the Shopify Partner dashboard create an app. Set its redirect URL to
+   `<API_PUBLIC_URL>/integrations/oauth/callback`.
+2. Set the three mandatory privacy webhooks (customer data request, customer redact, shop redact)
+   to `<API_PUBLIC_URL>/integrations/apps/shopify/hooks`.
+3. Put the client id and secret in `SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET` (API and worker).
+4. In the app, Integrations > Shopify, enter the shop (`name.myshopify.com`, a full address is
+   cleaned up) and approve the install.
+
+The worker then registers the order, fulfillment, checkout, customer and `app/uninstalled` webhooks
+on the shop at the connection's own address. Every Shopify webhook is checked with the app secret
+(`X-Shopify-Hmac-SHA256`). The Admin API version is `SHOPIFY_API_VERSION` (`2026-07`); scopes are
+`read_orders`, `read_customers` and `read_fulfillments`.
+
+- **Consent:** only a customer who ticked SMS marketing at checkout (`sms_marketing_consent.state:
+subscribed`) is recorded as opted in, source `shopify_checkout`, with Shopify's details as proof.
+- **Abandoned carts:** `checkout.started` fires when a checkout has a phone and is not complete. Its
+  correlation is `checkout:<token>`; the order for that checkout cancels any run still waiting. Build
+  the reminder as a flow: delay, then a template with `{{trigger.data.checkout.recoveryUrl}}`.
+- **Uninstall** disconnects the connection. **Shop redact** also blanks the stored event payloads.
+  **Customer redact and data requests** notify owners and admins (`integration_request`), because
+  what to erase or export is the workspace's decision.
+
+### WooCommerce
+
+Make a REST API key (WooCommerce > Settings > Advanced > REST API, read/write) and enter it with the
+store address. The worker registers `order.created`, `order.updated` and `customer.created`
+webhooks, skipping any the address already has, signed with the connection's webhook secret. Order
+statuses map to events: `processing` is paid, `completed` is fulfilled, `cancelled` is cancelled;
+each fires once per order. Tracking is read from the Shipment Tracking extension when present.
+
+### Custom store
+
+For any other system: `POST` JSON to the connection's webhook address, signed as
+`X-Signature: sha256=<hex HMAC-SHA256 of the body with the webhook secret>`:
+
+```json
+{
+  "event": "order.created",
+  "id": "order-1001",
+  "customer": {
+    "phone": "+919800000000",
+    "name": "Asha",
+    "marketing_consent": true,
+    "consent_text": "Ticked at checkout"
+  },
+  "data": { "order": { "name": "#1001", "total": "1499.00" } },
+  "correlation": "checkout:abc",
+  "cancels": ["checkout:abc"]
+}
+```
+
+A commerce event name keeps its trigger; anything else arrives as `event.received`. `id` is what
+makes a repeat count once. The connector's `request` action calls the store's own API (`baseUrl`
+setting, bearer `apiToken`), as a generic HTTP action for flows.

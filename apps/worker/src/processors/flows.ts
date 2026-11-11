@@ -489,7 +489,13 @@ export async function startFlowsForEventTx(
     if (busy) continue;
     const trigger: Record<string, unknown> =
       event.type === 'integration_event'
-        ? { type: event.type, connector: event.connector, event: event.event, data: event.data }
+        ? {
+            type: event.type,
+            connector: event.connector,
+            event: event.event,
+            data: event.data,
+            ...(event.correlation ? { correlation: event.correlation } : {}),
+          }
         : event.type === 'tag_added'
           ? { type: event.type, tagId: event.tagId }
           : { type: 'manual' };
