@@ -1,6 +1,7 @@
 'use client';
 
 import type {
+  ConnectorDto,
   ContactFieldDto,
   FlowCondition,
   FlowDefinition,
@@ -9,6 +10,7 @@ import type {
   FlowSettings,
   FlowTrigger,
   FlowVariableOption,
+  IntegrationConnectionDto,
   MemberDto,
   PhoneNumberDto,
   TagDto,
@@ -43,6 +45,8 @@ export interface BuilderData {
   members: MemberDto[];
   fields: ContactFieldDto[];
   phones: PhoneNumberDto[];
+  connectors: ConnectorDto[];
+  connections: IntegrationConnectionDto[];
 }
 
 const END = '__end__';
@@ -916,24 +920,91 @@ function StepFields({
           </Section>
         </>
       );
-    case 'integration_action':
+    case 'integration_action': {
+      const apps = data.connectors.filter((c) => c.actions.length > 0);
+      const app = apps.find((c) => c.key === node.data.connector);
+      const action = app?.actions.find((x) => x.key === node.data.action);
+      const connections = data.connections.filter(
+        (c) => c.connectorKey === node.data.connector && c.status !== 'disconnected',
+      );
+      const savedAs = (output: string) =>
+        Object.entries(node.data.saveResponse).find(([, path]) => path === output)?.[0] ?? '';
       return (
         <>
-          <p className="text-sm text-muted-foreground">
-            Connected apps arrive with integrations. Until then this step takes its Failed exit.
-          </p>
-          <TextField
+          {apps.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              Connect an app under Integrations to use its actions here.
+            </p>
+          )}
+          <ChoiceField
             label="App"
-            value={node.data.connector}
-            onChange={(connector) => set(node, { connector })}
+            value={app ? app.key : ''}
+            placeholder="Choose an app"
+            onChange={(connector) =>
+              set(node, { connector, action: '', input: {}, saveResponse: {}, connectionId: null })
+            }
+            options={apps.map((c) => ({ value: c.key, label: c.name }))}
           />
-          <TextField
-            label="Action"
-            value={node.data.action}
-            onChange={(action) => set(node, { action })}
-          />
+          {app && (
+            <>
+              <ChoiceField
+                label="Connection"
+                value={node.data.connectionId ?? NONE}
+                onChange={(v) => set(node, { connectionId: v === NONE ? null : v })}
+                options={[
+                  { value: NONE, label: 'The first working one' },
+                  ...connections.map((c) => ({ value: c.id, label: c.name })),
+                ]}
+              />
+              <ChoiceField
+                label="Action"
+                value={action ? action.key : ''}
+                placeholder="Choose an action"
+                onChange={(key) => set(node, { action: key, input: {}, saveResponse: {} })}
+                options={app.actions.map((x) => ({ value: x.key, label: x.name }))}
+              />
+            </>
+          )}
+          {action?.input.map((f) => (
+            <VariableField
+              key={f.key}
+              label={f.required ? f.label : `${f.label} (optional)`}
+              value={node.data.input[f.key] ?? ''}
+              variables={variables}
+              maxLength={2000}
+              onChange={(v) => set(node, { input: { ...node.data.input, [f.key]: v } })}
+            />
+          ))}
+          {action && action.output.length > 0 && (
+            <Section title="Save from the result">
+              {action.output.map((output) => (
+                <TextField
+                  key={output}
+                  label={`Save ${output} as`}
+                  value={savedAs(output)}
+                  hint={
+                    savedAs(output)
+                      ? `Use it as {{vars.${savedAs(output)}}}`
+                      : 'Leave empty to not save it'
+                  }
+                  onChange={(v) => {
+                    const name = v
+                      .toLowerCase()
+                      .replace(/[^a-z0-9_]/g, '_')
+                      .slice(0, 40);
+                    const next = Object.fromEntries(
+                      Object.entries(node.data.saveResponse).filter(([, path]) => path !== output),
+                    );
+                    if (/^[a-z]/.test(name)) next[name] = output;
+                    set(node, { saveResponse: next });
+                  }}
+                />
+              ))}
+            </Section>
+          )}
         </>
       );
+    }
     case 'tag':
       return (
         <>
@@ -1265,15 +1336,35 @@ export function TriggerPanel({
       )}
       {t.type === 'integration_event' && (
         <>
-          <TextField
+          <ChoiceField
             label="App"
-            value={t.connector}
-            onChange={(connector) => onTrigger({ ...t, connector })}
+            value={data.connectors.some((c) => c.key === t.connector) ? t.connector : ''}
+            placeholder="Choose an app"
+            onChange={(connector) => {
+              const first = data.connectors.find((c) => c.key === connector)?.triggers[0]?.key;
+              onTrigger({ ...t, connector, event: first ?? t.event });
+            }}
+            options={data.connectors
+              .filter((c) => c.triggers.length > 0)
+              .map((c) => ({ value: c.key, label: c.name }))}
           />
-          <TextField
+          <ChoiceField
             label="Event"
-            value={t.event}
+            value={
+              data.connectors
+                .find((c) => c.key === t.connector)
+                ?.triggers.some((x) => x.key === t.event)
+                ? t.event
+                : ''
+            }
+            placeholder="Choose an event"
             onChange={(event) => onTrigger({ ...t, event })}
+            options={(data.connectors.find((c) => c.key === t.connector)?.triggers ?? []).map(
+              (x) => ({
+                value: x.key,
+                label: x.name,
+              }),
+            )}
           />
         </>
       )}

@@ -2,6 +2,7 @@ import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@ne
 import {
   type BillingEventJob,
   type FlowJob,
+  type IntegrationJob,
   type CampaignJob,
   type ContactJobQueueData,
   DEFAULT_JOB_OPTIONS,
@@ -29,6 +30,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   readonly campaigns: Queue<CampaignJob>;
   readonly billingEvents: Queue<BillingEventJob>;
   readonly flows: Queue<FlowJob>;
+  readonly integrations: Queue<IntegrationJob>;
 
   constructor(@Inject(API_ENV) env: ApiEnv) {
     const opts = {
@@ -47,6 +49,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
     this.campaigns = new Queue(QueueName.CAMPAIGNS, opts);
     this.billingEvents = new Queue(QueueName.BILLING_EVENTS, opts);
     this.flows = new Queue(QueueName.FLOWS, opts);
+    this.integrations = new Queue(QueueName.INTEGRATIONS, opts);
     this.contactJobs = new Queue(QueueName.CONTACT_JOBS, {
       ...opts,
       defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, attempts: 3 },
@@ -63,6 +66,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.campaigns.waitUntilReady(),
       this.billingEvents.waitUntilReady(),
       this.flows.waitUntilReady(),
+      this.integrations.waitUntilReady(),
     ]);
   }
 
@@ -74,6 +78,12 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   /** Job id = event id: a redelivery cannot queue the same event twice. */
   async enqueueBillingEvent(eventId: string): Promise<void> {
     await this.billingEvents.add('process', { eventId }, { jobId: eventId });
+  }
+
+  /** Integration work for the worker. An event's job id is its row id, so it is queued once. */
+  async enqueueIntegrationJob(job: IntegrationJob): Promise<void> {
+    const jobId = job.kind === 'event' ? `integration-event-${job.eventId}` : undefined;
+    await this.integrations.add(job.kind, job, { jobId });
   }
 
   /** Events that start flows: a tag added, a flow started by hand. */
@@ -118,6 +128,8 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.templateSync.close(),
       this.campaigns.close(),
       this.billingEvents.close(),
+      this.flows.close(),
+      this.integrations.close(),
     ]);
   }
 }

@@ -21,7 +21,14 @@ export const QueueName = {
   AUTOMATION: 'automation',
   /** Flow runs and the events that start them. */
   FLOWS: 'flows',
+  /** Integration events, actions run outside flows, token refresh, health checks and syncs. */
+  INTEGRATIONS: 'integrations',
 } as const;
+
+export type IntegrationJob =
+  /** An inbound event (webhook or sync) to map and act on. */
+  | { kind: 'event'; orgId: string; eventId: string }
+  | { kind: 'refresh' | 'health' | 'sync'; orgId: string; connectionId: string };
 
 /** Something outside a message that can start flows. */
 export type FlowEvent =

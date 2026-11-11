@@ -16,4 +16,5 @@ export * from './automation';
 export * from './flows';
 export * from './flow-simulator';
 export * from './flow-builder';
+export * from './integrations';
 export * from './realtime';

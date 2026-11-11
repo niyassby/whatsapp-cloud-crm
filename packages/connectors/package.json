@@ -15,6 +15,9 @@
     "clean": "rimraf dist .turbo"
   },
   "devDependencies": {
+    "vitest": "^5.1.0"
+  },
+  "dependencies": {
     "@wacrm/shared": "workspace:^"
   }
 }

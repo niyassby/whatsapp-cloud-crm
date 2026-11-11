@@ -16,6 +16,8 @@ export const apiEnvSchema = z.object({
   APP_NAME: z.string().default('WhatsApp CRM'),
   API_PORT: z.coerce.number().int().positive().default(4000),
   WEB_URL: z.url().default('http://localhost:3000'),
+  /** This API as providers reach it: webhook addresses and OAuth callbacks. A tunnel in development. */
+  API_PUBLIC_URL: z.url().default('http://localhost:4000'),
   /** Set when running behind a load balancer so request.ip is the client address. */
   TRUST_PROXY: booleanString.default(false),
 
@@ -64,6 +66,8 @@ export const apiEnvSchema = z.object({
   API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(600),
   /** Local testing only: lets webhooks reach private addresses. Refused in production. */
   WEBHOOK_ALLOW_PRIVATE_URLS: booleanString.default(false),
+  /** Registers the Demo Store connector, for trying integrations locally. Same value as the worker. */
+  INTEGRATIONS_DEMO: booleanString.default(false),
 
   /** A provider is only active when all of its values are set. Local fakes use the *_API_BASE. */
   STRIPE_SECRET_KEY: z.string().optional(),

@@ -7,6 +7,7 @@ import {
   buildHealth,
   type AutomationJob,
   type FlowJob,
+  type IntegrationJob,
   type BillingEventJob,
   type CampaignJob,
   type ContactJobQueueData,
@@ -43,6 +44,8 @@ import { markEventFailed, routeWebhookEvent } from './processors/webhook-events'
 import { processContactJob } from './processors/contact-jobs';
 import { checkSla, runInboxAutomation, slaDueConversations } from './processors/automation';
 import { flowDueRuns, processFlowJob } from './processors/flows';
+import { integrationDueWork, processIntegrationJob } from './processors/integrations';
+import { buildRegistry } from '@wacrm/connectors';
 import { createSafeHttp } from './safe-http';
 import { processBillingEvent } from './processors/billing';
 import { campaignTickTargets, runCampaignJob } from './processors/campaigns';
@@ -99,6 +102,10 @@ const outboundQueue = new Queue<OutboundJob>(QueueName.OUTBOUND, {
   defaultJobOptions: DEFAULT_JOB_OPTIONS,
 });
 const automationQueue = new Queue<AutomationJob>(QueueName.AUTOMATION, {
+  ...queueOpts,
+  defaultJobOptions: DEFAULT_JOB_OPTIONS,
+});
+const integrationQueue = new Queue<IntegrationJob>(QueueName.INTEGRATIONS, {
   ...queueOpts,
   defaultJobOptions: DEFAULT_JOB_OPTIONS,
 });
@@ -182,6 +189,15 @@ const deps: WorkerDeps = {
   },
   postWebhook: createWebhookPoster({ allowPrivate: env.WEBHOOK_ALLOW_PRIVATE_URLS }),
   httpRequest: createSafeHttp({ allowPrivate: env.WEBHOOK_ALLOW_PRIVATE_URLS }),
+  allowPrivateHttp: env.WEBHOOK_ALLOW_PRIVATE_URLS,
+  connectors: buildRegistry({ demo: env.INTEGRATIONS_DEMO }),
+  fetch: globalThis.fetch,
+  env: process.env,
+  enqueueIntegrationJob: async (job, delayMs) => {
+    // An event's job id is its row id, so a webhook redelivery cannot queue it twice.
+    const jobId = job.kind === 'event' ? `integration-event-${job.eventId}` : undefined;
+    await integrationQueue.add(job.kind, job, { jobId, delay: delayMs });
+  },
   defaultCurrency: env.WALLET_DEFAULT_CURRENCY,
 };
 
@@ -337,6 +353,17 @@ flowWorker.on('failed', (job, err) => {
   log.warn({ jobId: job?.id, err: err.message }, 'flow job attempt failed');
 });
 
+// Integrations: inbound events, refreshes, health checks and syncs. Its own queue, so a slow
+// provider cannot hold up messages.
+const integrationWorker = new Worker<IntegrationJob>(
+  QueueName.INTEGRATIONS,
+  (job) => processIntegrationJob(deps, job.data, { finalAttempt: isFinalAttempt(job) }),
+  { ...queueOpts, concurrency: 5 },
+);
+integrationWorker.on('failed', (job, err) => {
+  log.warn({ jobId: job?.id, err: err.message }, 'integration job attempt failed');
+});
+
 // Its own queue: a customer's slow endpoint cannot hold up anything else.
 const webhookDeliveryWorker = new Worker<WebhookDeliveryJob>(
   QueueName.WEBHOOK_DELIVERIES,
@@ -356,6 +383,22 @@ const maintenanceWorker = new Worker(
       for (const d of due) {
         await checkSla(deps, d.org_id, d.id).catch((err: unknown) =>
           log.warn({ err: String(err), conversationId: d.id }, 'SLA check failed'),
+        );
+      }
+      return;
+    }
+    if (job.name === 'integration-tick') {
+      // Tokens about to expire, hourly health checks and due syncs. Keyed per connection and
+      // kind, so a slow one is not queued again while it waits.
+      for (const due of await integrationDueWork(deps)) {
+        await integrationQueue.add(
+          due.kind,
+          { kind: due.kind, orgId: due.org_id, connectionId: due.id },
+          {
+            jobId: `integration-${due.kind}-${due.id}`,
+            removeOnComplete: true,
+            removeOnFail: true,
+          },
         );
       }
       return;
@@ -455,6 +498,9 @@ void maintenanceQueue
   .upsertJobScheduler('flow-tick', { every: 15_000 }, { name: 'flow-tick' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule the flow tick'));
 void maintenanceQueue
+  .upsertJobScheduler('integration-tick', { every: 60_000 }, { name: 'integration-tick' })
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule integrations'));
+void maintenanceQueue
   .upsertJobScheduler('outbound-sweep', { every: 60_000 }, { name: 'outbound-sweep' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule the sweep'));
 void maintenanceQueue
@@ -506,6 +552,8 @@ async function shutdown() {
     webhookDeliveryWorker.close(),
     automationWorker.close(),
     flowWorker.close(),
+    integrationWorker.close(),
+    integrationQueue.close(),
     flowQueue.close(),
     automationQueue.close(),
     outboundQueue.close(),

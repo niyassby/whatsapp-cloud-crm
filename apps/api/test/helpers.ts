@@ -1,6 +1,8 @@
 import type { PaymentProviders } from '@wacrm/billing';
 import { PAYMENT_PROVIDERS } from '../src/billing/billing.tokens';
 import 'reflect-metadata';
+import { buildRegistry, type ConnectorRegistry } from '@wacrm/connectors';
+import { CONNECTORS, INTEGRATIONS_FETCH } from '../src/integrations/integrations.tokens';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
@@ -21,6 +23,10 @@ export interface BuildOptions {
   env?: Record<string, string>;
   graph?: GraphConfig;
   payments?: PaymentProviders;
+  /** The connectors the app offers; the default has none but the demo when enabled. */
+  connectors?: ConnectorRegistry;
+  /** Fetch for OAuth token requests. */
+  fetch?: typeof fetch;
 }
 
 export interface TestApp {
@@ -60,6 +66,15 @@ export async function buildApp(extra: BuildOptions = {}): Promise<TestApp> {
     .useValue(extra.graph ?? { apiVersion: env.META_GRAPH_API_VERSION })
     .overrideProvider(PAYMENT_PROVIDERS)
     .useValue(extra.payments ?? {})
+    .overrideProvider(CONNECTORS)
+    .useValue(extra.connectors ?? buildRegistry())
+    .overrideProvider(INTEGRATIONS_FETCH)
+    .useValue(
+      extra.fetch ??
+        (async () => {
+          throw new Error('No fetch in this test');
+        }),
+    )
     .compile();
   const app = mod.createNestApplication<NestFastifyApplication>(createAdapter(env), NEST_OPTIONS);
   await configureApp(app, env);

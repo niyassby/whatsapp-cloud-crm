@@ -68,6 +68,7 @@ import { countryOfWaId } from '@wacrm/shared/server';
 import type { SendInteractiveInput } from '@wacrm/whatsapp';
 import type { WorkerDeps } from '../deps';
 import { chooseAgent } from './automation';
+import { runConnectorAction } from './integrations';
 
 const MINUTE_MS = 60_000;
 /** A run still `running` this long after its last change lost its job, and is picked up again. */
@@ -140,7 +141,7 @@ const noEffects = (): Effects => ({
 /** The result of a call outside the database, applied by the next transaction. */
 type External =
   | { kind: 'http'; ok: boolean; status: number; body: string; json: unknown; error?: string }
-  | { kind: 'integration'; ok: false; error: string }
+  | { kind: 'integration'; ok: boolean; data: Record<string, unknown>; error?: string }
   | { kind: 'ai'; handoff: true; reason: string };
 
 const EXTERNAL_TYPES = new Set(['http_request', 'integration_action', 'ai_reply']);
@@ -440,6 +441,70 @@ async function conversationFor(
   return created.id;
 }
 
+/**
+ * Start the flows an event triggers, inside the caller's transaction, so the caller can claim the
+ * event in the same commit. Returns the runs to advance once it commits.
+ */
+export async function startFlowsForEventTx(
+  tx: TenantTx,
+  orgId: string,
+  event: FlowEvent,
+): Promise<string[]> {
+  const contact = await tx.contact.findUnique({
+    where: { id: event.contactId },
+    select: { id: true, optInStatus: true, deletedAt: true, mergedIntoId: true },
+  });
+  if (!contact || contact.deletedAt || contact.mergedIntoId) return [];
+  if (contact.optInStatus === 'opted_out') return [];
+
+  const flows =
+    event.type === 'manual'
+      ? await activeFlows(tx, { id: event.flowId })
+      : await activeFlows(tx, { triggerType: event.type });
+  const matching = flows.filter((f) => {
+    if (event.type === 'manual') return true;
+    if (event.type === 'tag_added') {
+      return f.trigger.type === 'tag_added' && f.trigger.tagId === event.tagId;
+    }
+    return (
+      f.trigger.type === 'integration_event' &&
+      f.trigger.connector === event.connector &&
+      f.trigger.event === event.event
+    );
+  });
+  const runIds: string[] = [];
+  for (const flow of matching) {
+    const conversationId = await conversationFor(
+      tx,
+      orgId,
+      contact.id,
+      flow.definition.settings.phoneId,
+    );
+    if (!conversationId) continue;
+    await tx.$queryRaw`SELECT 1 FROM conversations WHERE id = ${conversationId}::uuid FOR UPDATE`;
+    // Events never interrupt a run that is under way.
+    const busy = await tx.flowRun.count({
+      where: { conversationId, status: { in: ACTIVE_FLOW_RUN_STATUSES } },
+    });
+    if (busy) continue;
+    const trigger: Record<string, unknown> =
+      event.type === 'integration_event'
+        ? { type: event.type, connector: event.connector, event: event.event, data: event.data }
+        : event.type === 'tag_added'
+          ? { type: event.type, tagId: event.tagId }
+          : { type: 'manual' };
+    const runId = await startRun(tx, {
+      orgId,
+      flow,
+      contactId: contact.id,
+      conversationId,
+      trigger,
+    });
+    if (runId) runIds.push(runId);
+  }
+  return runIds;
+}
+
 /** Start the flows an event triggers: a tag added, a connector event, or an explicit start. */
 export async function startFlowsForEvent(
   deps: WorkerDeps,
@@ -449,62 +514,11 @@ export async function startFlowsForEvent(
   const started = await withTenant(
     deps.db,
     { orgId },
-    async (tx) => {
-      const contact = await tx.contact.findUnique({
-        where: { id: event.contactId },
-        select: { id: true, optInStatus: true, deletedAt: true, mergedIntoId: true },
-      });
-      if (!contact || contact.deletedAt || contact.mergedIntoId) return [];
-      if (contact.optInStatus === 'opted_out') return [];
-
-      const flows =
-        event.type === 'manual'
-          ? await activeFlows(tx, { id: event.flowId })
-          : await activeFlows(tx, { triggerType: event.type });
-      const matching = flows.filter((f) => {
-        if (event.type === 'manual') return true;
-        if (event.type === 'tag_added') {
-          return f.trigger.type === 'tag_added' && f.trigger.tagId === event.tagId;
-        }
-        return (
-          f.trigger.type === 'integration_event' &&
-          f.trigger.connector === event.connector &&
-          f.trigger.event === event.event
-        );
-      });
-      const runIds: string[] = [];
-      for (const flow of matching) {
-        const conversationId = await conversationFor(
-          tx,
-          orgId,
-          contact.id,
-          flow.definition.settings.phoneId,
-        );
-        if (!conversationId) continue;
-        await tx.$queryRaw`SELECT 1 FROM conversations WHERE id = ${conversationId}::uuid FOR UPDATE`;
-        // Events never interrupt a run that is under way.
-        const busy = await tx.flowRun.count({
-          where: { conversationId, status: { in: ACTIVE_FLOW_RUN_STATUSES } },
-        });
-        if (busy) continue;
-        const trigger: Record<string, unknown> =
-          event.type === 'integration_event'
-            ? { type: event.type, connector: event.connector, event: event.event, data: event.data }
-            : event.type === 'tag_added'
-              ? { type: event.type, tagId: event.tagId }
-              : { type: 'manual' };
-        const runId = await startRun(tx, {
-          orgId,
-          flow,
-          contactId: contact.id,
-          conversationId,
-          trigger,
-        });
-        if (runId) runIds.push(runId);
-      }
-      return runIds;
+    (tx) => startFlowsForEventTx(tx, orgId, event),
+    {
+      timeout: 20_000,
+      maxWait: 10_000,
     },
-    { timeout: 20_000, maxWait: 10_000 },
   );
   for (const runId of started) await deps.enqueueFlowJob({ kind: 'advance', orgId, runId });
   return started;
@@ -927,7 +941,19 @@ async function execNode(ctx: StepCtx, external: External | null): Promise<Outcom
     }
     case 'integration_action': {
       const r = external?.kind === 'integration' ? external : null;
-      return { kind: 'go', handle: 'failure', detail: { error: r?.error ?? 'Did not run' } };
+      if (!r) throw new FlowNodeError('The action did not run');
+      const vars: Record<string, unknown> = {};
+      if (r.ok) {
+        for (const [name, path] of Object.entries(node.data.saveResponse)) {
+          vars[name] = readPath(r.data, path) ?? null;
+        }
+      }
+      return {
+        kind: 'go',
+        handle: r.ok ? 'success' : 'failure',
+        vars,
+        detail: r.ok ? { result: r.data } : { error: r.error },
+      };
     }
     case 'ai_reply': {
       const r = external?.kind === 'ai' ? external : null;
@@ -986,7 +1012,12 @@ async function execNode(ctx: StepCtx, external: External | null): Promise<Outcom
 
 const jsonEscape = (v: string) => JSON.stringify(v).slice(1, -1);
 
-async function runExternal(deps: WorkerDeps, node: FlowNode, scope: FlowScope): Promise<External> {
+async function runExternal(
+  deps: WorkerDeps,
+  node: FlowNode,
+  scope: FlowScope,
+  where: { orgId: string; runId: string },
+): Promise<External> {
   if (node.type === 'http_request') {
     const url = interpolate(node.data.url, scope, encodeURIComponent);
     if (!/^https:\/\//i.test(url)) {
@@ -1037,12 +1068,18 @@ async function runExternal(deps: WorkerDeps, node: FlowNode, scope: FlowScope): 
     }
   }
   if (node.type === 'integration_action') {
-    // TODO(3.4): the connector framework registers actions here.
-    return {
-      kind: 'integration',
-      ok: false,
-      error: `No connector called ${node.data.connector} is set up`,
-    };
+    const input: Record<string, string> = {};
+    for (const [k, v] of Object.entries(node.data.input)) input[k] = interpolate(v, scope).trim();
+    const r = await runConnectorAction(deps, where.orgId, {
+      connector: node.data.connector,
+      action: node.data.action,
+      input,
+      connectionId: node.data.connectionId,
+      source: { flowRun: where.runId, node: node.id },
+    });
+    return r.ok
+      ? { kind: 'integration', ok: true, data: r.data }
+      : { kind: 'integration', ok: false, data: {}, error: r.error };
   }
   // TODO(3.7): the AI assistant answers here.
   return { kind: 'ai', handoff: true, reason: 'AI replies are not set up for this workspace' };
@@ -1414,7 +1451,7 @@ export async function advanceRun(
       external = {
         steps: result.steps,
         nodeId: result.node.id,
-        result: await runExternal(deps, result.node, result.scope),
+        result: await runExternal(deps, result.node, result.scope, { orgId, runId }),
       };
     }
   }

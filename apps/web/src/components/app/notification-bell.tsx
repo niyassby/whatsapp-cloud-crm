@@ -89,6 +89,7 @@ export function NotificationBell() {
                 onSelect={() => {
                   if (!n.readAt) void markRead({ ids: [n.id] });
                   if (n.conversationId) router.push(`/inbox?c=${n.conversationId}`);
+                  else if (n.kind === 'integration_needs_reconnect') router.push('/integrations');
                 }}
               >
                 <span className={n.readAt ? 'text-sm' : 'text-sm font-semibold'}>{n.title}</span>

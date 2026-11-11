@@ -5,6 +5,7 @@ import {
   type SecretBox,
   totpAad,
   webhookSecretAad,
+  integrationCredentialsAad,
 } from '@wacrm/shared/server';
 
 /** Delete raw webhook payloads past retention. Returns how many rows went. */
@@ -48,12 +49,19 @@ export async function ensureMessagePartitions(db: DbClient, now = new Date()): P
 export async function reencryptSecrets(
   db: DbClient,
   box: SecretBox,
-): Promise<{ phoneNumbers: number; users: number; webhookEndpoints: number; failed: string[] }> {
+): Promise<{
+  phoneNumbers: number;
+  users: number;
+  webhookEndpoints: number;
+  integrations: number;
+  failed: string[];
+}> {
   const refresh = (value: string | null, aad: string) =>
     value && box.needsReencrypt(value) ? box.encrypt(box.decrypt(value, aad), aad) : null;
   let phoneNumbers = 0;
   let users = 0;
   let webhookEndpoints = 0;
+  let integrations = 0;
   const failed: string[] = [];
 
   const phones = await db.$queryRaw<{ id: string; org_id: string }[]>`
@@ -108,5 +116,20 @@ export async function reencryptSecrets(
     });
     await run.catch(() => failed.push(`webhook_endpoints:${id}`));
   }
-  return { phoneNumbers, users, webhookEndpoints, failed };
+  const connections = await db.$queryRaw<{ id: string; org_id: string }[]>`
+    SELECT * FROM secrets_list_integration_connections()`;
+  for (const { id, org_id: orgId } of connections) {
+    const run = withTenant(db, { orgId }, async (tx) => {
+      const row = await tx.integrationConnection.findUniqueOrThrow({
+        where: { id },
+        select: { credentialsEnc: true },
+      });
+      const credentialsEnc = refresh(row.credentialsEnc, integrationCredentialsAad(id));
+      if (!credentialsEnc) return;
+      await tx.integrationConnection.update({ where: { id }, data: { credentialsEnc } });
+      integrations++;
+    });
+    await run.catch(() => failed.push(`integration_connections:${id}`));
+  }
+  return { phoneNumbers, users, webhookEndpoints, integrations, failed };
 }

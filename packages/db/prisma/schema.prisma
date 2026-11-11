@@ -237,20 +237,23 @@ model Organization {
   billingCountry String?             @map("billing_country")
   taxId          String?             @map("tax_id")
 
-  subscription       Subscription?
-  walletTopups       WalletTopup[]
-  invoices           Invoice[]
-  billingEvents      BillingEvent[]
-  webhookEndpoints   WebhookEndpoint[]
-  webhookDeliveries  WebhookDelivery[]
-  automationSettings AutomationSettings?
-  autoReplyRules     AutoReplyRule[]
-  assignmentRules    AssignmentRule[]
-  notifications      Notification[]
-  flows              Flow[]
-  flowVersions       FlowVersion[]
-  flowRuns           FlowRun[]
-  flowRunSteps       FlowRunStep[]
+  subscription           Subscription?
+  walletTopups           WalletTopup[]
+  invoices               Invoice[]
+  billingEvents          BillingEvent[]
+  webhookEndpoints       WebhookEndpoint[]
+  webhookDeliveries      WebhookDelivery[]
+  automationSettings     AutomationSettings?
+  autoReplyRules         AutoReplyRule[]
+  assignmentRules        AssignmentRule[]
+  notifications          Notification[]
+  flows                  Flow[]
+  flowVersions           FlowVersion[]
+  flowRuns               FlowRun[]
+  flowRunSteps           FlowRunStep[]
+  integrationConnections IntegrationConnection[]
+  integrationEvents      IntegrationEvent[]
+  integrationEventClaims IntegrationEventClaim[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -1582,4 +1585,84 @@ model FlowRunStep {
   @@index([runId, id])
   @@index([orgId])
   @@map("flow_run_steps")
+}
+
+/// One account connected through a connector (packages/connectors).
+model IntegrationConnection {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  orgId            String    @map("org_id") @db.Uuid
+  /// The connector's key in the registry.
+  connectorKey     String    @map("connector_key")
+  name             String
+  /// connected, error, needs_reconnect or disconnected
+  status           String    @default("connected")
+  /// SecretBox ciphertext of a JSON object (API keys, OAuth tokens, webhook secret). AAD bound to the row.
+  credentialsEnc   String?   @map("credentials_enc")
+  /// Plain settings, such as a store address.
+  settings         Json      @default("{}")
+  /// The unguessable part of the webhook address. Requests are still checked by signature.
+  webhookToken     String?   @unique @map("webhook_token")
+  tokenExpiresAt   DateTime? @map("token_expires_at") @db.Timestamptz(3)
+  lastHealthAt     DateTime? @map("last_health_at") @db.Timestamptz(3)
+  lastError        String?   @map("last_error")
+  /// Copied from the connector when connecting, so the scheduler can find due syncs in SQL.
+  syncEveryMinutes Int?      @map("sync_every_minutes")
+  syncCursor       Json?     @map("sync_cursor")
+  lastSyncAt       DateTime? @map("last_sync_at") @db.Timestamptz(3)
+  createdById      String?   @map("created_by_id") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org    Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  events IntegrationEvent[]
+
+  @@index([orgId, connectorKey])
+  @@map("integration_connections")
+}
+
+/// Everything that came in from or went out to a connection, with its retry state.
+model IntegrationEvent {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  orgId         String    @map("org_id") @db.Uuid
+  connectionId  String    @map("connection_id") @db.Uuid
+  /// inbound or outbound
+  direction     String
+  /// Trigger key (inbound, once mapped) or action key (outbound).
+  type          String?
+  /// The provider's delivery or event id, or the body's hash. Redeliveries collapse onto one row.
+  dedupeKey     String    @map("dedupe_key")
+  /// received, processed, ignored, succeeded or failed
+  status        String
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime? @map("next_attempt_at") @db.Timestamptz(3)
+  payload       Json
+  result        Json?
+  error         String?
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org        Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  connection IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, direction, dedupeKey])
+  @@index([orgId, connectionId, id(sort: Desc)])
+  @@index([status, nextAttemptAt])
+  @@map("integration_events")
+}
+
+/// Each outside event (an order, a payment) acts once, however it arrives: by webhook, redelivery or sync.
+model IntegrationEventClaim {
+  connectionId String   @map("connection_id") @db.Uuid
+  /// The connector's own id for the event, such as `order.created:1001`.
+  externalId   String   @map("external_id")
+  orgId        String   @map("org_id") @db.Uuid
+  /// The inbound event that acted on it.
+  eventId      String   @map("event_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@id([connectionId, externalId])
+  @@index([orgId])
+  @@map("integration_event_claims")
 }

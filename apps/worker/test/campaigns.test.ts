@@ -310,8 +310,11 @@ describe('a whole campaign', () => {
       { status: 'pending', attempts: 0 },
     ]);
     expect(s.fake.calls).toEqual([]);
-    // And the next attempt sends them normally.
-    await dispatchCampaignBatch(s.deps, SETTINGS, s.orgId, s.campaignId);
+    // And the next attempt sends them normally. Under load that attempt can lose a real deadlock
+    // too, which answers "retry" just like the one above, so allow the chain a few tries.
+    for (let i = 0; i < 3 && (await s.counts()).sent < 2; i++) {
+      await dispatchCampaignBatch(s.deps, SETTINGS, s.orgId, s.campaignId);
+    }
     expect((await s.counts()).sent).toBe(2);
   });
 

@@ -319,3 +319,25 @@ export function variableOptions(def: FlowDefinition, fieldKeys: string[]): FlowV
   options.push({ token: '{{trigger.text}}', label: 'Message that started it', group: 'Trigger' });
   return options;
 }
+
+/** Variables an integration trigger's data offers, from its sample: {{trigger.data.order.id}}. */
+export function triggerDataOptions(
+  sample: Record<string, unknown>,
+  max = 40,
+): FlowVariableOption[] {
+  const out: FlowVariableOption[] = [];
+  const walk = (value: unknown, path: string[]) => {
+    if (out.length >= max || path.length > 4) return;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [k, v] of Object.entries(value)) walk(v, [...path, k]);
+      return;
+    }
+    out.push({
+      token: `{{trigger.data.${path.join('.')}}}`,
+      label: path.join('.'),
+      group: 'Trigger',
+    });
+  };
+  walk(sample, []);
+  return out;
+}

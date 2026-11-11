@@ -41,6 +41,11 @@ export const workerEnvSchema = z.object({
     .enum(['true', 'false', '1', '0'])
     .transform((v) => v === 'true' || v === '1')
     .default(false),
+  /** Registers the Demo Store connector, for trying integrations locally. Same value as the API. */
+  INTEGRATIONS_DEMO: z
+    .enum(['true', 'false', '1', '0'])
+    .transform((v) => v === 'true' || v === '1')
+    .default(false),
   /** The worker asks providers for current subscription state. Same values as the API. */
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),

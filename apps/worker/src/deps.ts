@@ -1,9 +1,11 @@
 import type { PaymentProviders } from '@wacrm/billing';
+import type { ConnectorRegistry } from '@wacrm/connectors';
 import type { DbClient } from '@wacrm/db';
 import type {
   AutomationJob,
   CampaignJob,
   FlowJob,
+  IntegrationJob,
   OutboundJob,
   MediaDownloadJob,
   RealtimePublisher,
@@ -35,8 +37,17 @@ export interface WorkerDeps {
   payments: PaymentProviders;
   secrets: SecretBox;
   postWebhook: WebhookPoster;
-  /** Flow HTTP steps. Same address checks as webhooks. */
+  /** Flow HTTP steps and connectors. Same address checks as webhooks. */
   httpRequest: SafeHttp;
+  /** Plain http and private addresses allowed: local tests only, refused in production. */
+  allowPrivateHttp: boolean;
+  /** The connectors this installation offers (packages/connectors). */
+  connectors: ConnectorRegistry;
+  /** For OAuth token requests to the provider a connector names. */
+  fetch: typeof fetch;
+  /** Where connectors' OAuth app credentials are read from. */
+  env: Record<string, string | undefined>;
+  enqueueIntegrationJob: (job: IntegrationJob, delayMs?: number) => Promise<void>;
   /** For a workspace whose first paid send comes from a drip. */
   defaultCurrency: string;
 }

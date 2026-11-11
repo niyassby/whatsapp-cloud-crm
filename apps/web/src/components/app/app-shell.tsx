@@ -6,6 +6,7 @@ import {
   FileText,
   Inbox,
   Megaphone,
+  Plug,
   MessageCircle,
   Settings,
   Users,
@@ -21,6 +22,7 @@ import { cn } from '@/lib/utils';
 import { LowBalanceBanner } from './low-balance-banner';
 import { NoOrg } from './no-org';
 import { NotificationBell } from './notification-bell';
+import { ReconnectBanner } from './reconnect-banner';
 import { OrgSwitcher } from './org-switcher';
 import { TrialBanner } from './trial-banner';
 import { UserMenu } from './user-menu';
@@ -49,6 +51,12 @@ const NAV: {
     permission: Permission.CAMPAIGNS_MANAGE,
   },
   { href: '/flows', label: 'Flows', icon: Workflow, permission: Permission.FLOWS_MANAGE },
+  {
+    href: '/integrations',
+    label: 'Integrations',
+    icon: Plug,
+    permission: Permission.INTEGRATIONS_MANAGE,
+  },
   { href: '/wallet', label: 'Wallet', icon: Wallet, permission: Permission.WALLET_READ },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
@@ -109,6 +117,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         {me.data && !me.data.user.emailVerified && <VerifyEmailBanner email={me.data.user.email} />}
         <TrialBanner />
         <LowBalanceBanner />
+        <ReconnectBanner />
         <main className="min-h-0 flex-1 overflow-auto p-6">
           {me.isPending ? (
             <Skeleton className="h-40 w-full" />

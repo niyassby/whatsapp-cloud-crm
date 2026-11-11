@@ -300,6 +300,7 @@ export const NOTIFICATION_KINDS = [
   'conversation_assigned',
   'sla_breached',
   'sla_escalated',
+  'integration_needs_reconnect',
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

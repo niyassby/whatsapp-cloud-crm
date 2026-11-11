@@ -5,6 +5,7 @@ import type {
   AutomationJob,
   CampaignJob,
   FlowJob,
+  IntegrationJob,
   OutboundJob,
   MediaDownloadJob,
   RealtimePublisher,
@@ -13,6 +14,7 @@ import type {
 } from '@wacrm/shared';
 import { MemoryStorage, SecretBox } from '@wacrm/shared/server';
 import { WhatsAppClientFactory, type WhatsAppError, type WhatsAppGateway } from '@wacrm/whatsapp';
+import { buildRegistry } from '@wacrm/connectors';
 import type { WorkerDeps } from '../src/deps';
 
 export const urls = testDbUrls('wacrm_worker_test');
@@ -98,6 +100,7 @@ export function buildDeps(client: DbClient) {
   const outbound: OutboundJob[] = [];
   const automation: AutomationJob[] = [];
   const flowJobs: { job: FlowJob; delayMs?: number }[] = [];
+  const integrationJobs: { job: IntegrationJob; delayMs?: number }[] = [];
   const webhooks: { url: string; headers: Record<string, string>; body: string }[] = [];
   let webhookResponse: () => { status: number; body: string } = () => ({ status: 200, body: 'ok' });
   const fake = fakeGateway();
@@ -133,6 +136,15 @@ export function buildDeps(client: DbClient) {
     httpRequest: async () => {
       throw new Error('No HTTP in this test');
     },
+    allowPrivateHttp: false,
+    connectors: buildRegistry({ demo: true }),
+    fetch: (async () => {
+      throw new Error('No fetch in this test');
+    }) as unknown as typeof fetch,
+    env: {},
+    enqueueIntegrationJob: async (job, delayMs) => {
+      integrationJobs.push({ job, delayMs });
+    },
     secrets: new SecretBox(randomBytes(32).toString('base64')),
     postWebhook: async (url, headers, body) => {
       webhooks.push({ url, headers, body });
@@ -152,6 +164,7 @@ export function buildDeps(client: DbClient) {
     outbound,
     automation,
     flowJobs,
+    integrationJobs,
     respondToWebhooks: (fn: () => { status: number; body: string }) => {
       webhookResponse = fn;
     },

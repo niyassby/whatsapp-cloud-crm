@@ -92,6 +92,9 @@ importers:
       '@wacrm/billing':
         specifier: workspace:^
         version: link:../../packages/billing
+      '@wacrm/connectors':
+        specifier: workspace:^
+        version: link:../../packages/connectors
       '@wacrm/db':
         specifier: workspace:^
         version: link:../../packages/db
@@ -253,6 +256,9 @@ importers:
       '@wacrm/billing':
         specifier: workspace:^
         version: link:../../packages/billing
+      '@wacrm/connectors':
+        specifier: workspace:^
+        version: link:../../packages/connectors
       '@wacrm/db':
         specifier: workspace:^
         version: link:../../packages/db
@@ -293,10 +299,14 @@ importers:
         version: 5.1.0(@types/node@20.19.43)(vite@8.3.5(@types/node@20.19.43)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
   packages/connectors:
-    devDependencies:
+    dependencies:
       '@wacrm/shared':
         specifier: workspace:^
         version: link:../shared
+    devDependencies:
+      vitest:
+        specifier: ^5.1.0
+        version: 5.1.0(@types/node@20.19.43)(vite@8.3.5(@types/node@20.19.43)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
   packages/db:
     dependencies:

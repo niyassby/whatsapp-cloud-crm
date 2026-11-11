@@ -23,6 +23,7 @@
     "@node-rs/argon2": "^2.2.2",
     "@socket.io/redis-adapter": "^8.3.0",
     "@wacrm/billing": "workspace:^",
+    "@wacrm/connectors": "workspace:^",
     "@wacrm/db": "workspace:^",
     "@wacrm/shared": "workspace:^",
     "@wacrm/whatsapp": "workspace:^",

@@ -20,8 +20,10 @@ import {
   moveNode,
   newNode,
   nodeHandles,
+  Permission,
   removeNode,
   updateNode,
+  triggerDataOptions,
   variableOptions,
 } from '@wacrm/shared';
 import {
@@ -50,7 +52,8 @@ import {
 import { api } from '@/lib/api';
 import { useContactFields, useTags } from '@/lib/contacts';
 import { flowKeys } from '@/lib/flows';
-import { usePhoneNumbers, useMembers } from '@/lib/queries';
+import { useConnections, useConnectors } from '@/lib/integrations';
+import { useCan, usePhoneNumbers, useMembers } from '@/lib/queries';
 import { useTemplates } from '@/lib/templates';
 import { cn } from '@/lib/utils';
 import { type BuilderData, StepPanel, TriggerPanel } from './node-form';
@@ -69,16 +72,20 @@ function useBuilderData(): BuilderData {
   const members = useMembers();
   const fields = useContactFields();
   const phones = usePhoneNumbers();
+  const canIntegrate = useCan(Permission.INTEGRATIONS_MANAGE);
+  const connectors = useConnectors(canIntegrate);
+  const connections = useConnections(canIntegrate);
   return {
     templates: templates.data?.pages.flatMap((p) => p.items) ?? [],
     tags: tags.data ?? [],
     members: members.data ?? [],
     fields: fields.data ?? [],
     phones: phones.data ?? [],
+    connectors: connectors.data ?? [],
+    connections: connections.data ?? [],
   };
 }
 
-/** Where a new step goes: under the selected step, else under the lowest one. */
 /**
  * Where a new step goes: under the selected step, else under the lowest one, moved right past any
  * step already there, so two steps added under one parent sit side by side instead of stacked.
@@ -401,14 +408,18 @@ function Builder({
   }, [def, save, onSaveState]);
 
   const issues = useMemo(() => flowIssues(def), [def]);
-  const variables = useMemo(
-    () =>
-      variableOptions(
-        def,
-        data.fields.map((f) => f.key),
-      ),
-    [def, data.fields],
-  );
+  const variables = useMemo(() => {
+    const base = variableOptions(
+      def,
+      data.fields.map((f) => f.key),
+    );
+    const t = def.trigger;
+    if (t.type !== 'integration_event') return base;
+    const sample =
+      data.connectors.find((c) => c.key === t.connector)?.triggers.find((x) => x.key === t.event)
+        ?.sample ?? {};
+    return [...base, ...triggerDataOptions(sample)];
+  }, [def, data.fields, data.connectors]);
   const node = def.nodes.find((n) => n.id === selected);
 
   const add = (type: FlowNodeType) =>

@@ -217,8 +217,10 @@ export const flowNodeSchema = z.discriminatedUnion('type', [
     ...nodeBase,
     type: z.literal('integration_action'),
     data: z.object({
-      /** Connector and action, filled in by the connector framework (3.4). */
+      /** A connector key and one of its actions (packages/connectors). */
       connector: z.string().trim().min(1).max(64),
+      /** Which connection to use. null: the workspace's first working one for the connector. */
+      connectionId: z.uuid().nullable().default(null),
       action: z.string().trim().min(1).max(64),
       input: z.record(z.string().max(64), z.string().max(2000)).default({}),
       saveResponse: z.record(flowVariableName, z.string().max(200)).default({}),

@@ -17,6 +17,7 @@ import { useAuthStore } from '@/lib/auth-store';
 import { contactKeys } from '@/lib/contacts';
 import { env } from '@/lib/env';
 import { applyConversationUpdate, inboxKeys, upsertMessage } from '@/lib/inbox';
+import { integrationKeys } from '@/lib/integrations';
 import { queryKeys, useMe } from '@/lib/queries';
 import { templateKeys } from '@/lib/templates';
 import { automationKeys } from '@/lib/automation';
@@ -129,6 +130,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     socket.on('conversation:updated', ({ conversation }) => {
       applyConversationUpdate(queryClient, conversation);
       refreshLists();
+    });
+    socket.on('integration:updated', ({ connectionId }) => {
+      void queryClient.invalidateQueries({ queryKey: integrationKeys.connections });
+      void queryClient.invalidateQueries({ queryKey: integrationKeys.connection(connectionId) });
+      void queryClient.invalidateQueries({ queryKey: integrationKeys.events(connectionId) });
     });
     socket.on('contact:updated', () => {
       void queryClient.invalidateQueries({ queryKey: contactKeys.all });
