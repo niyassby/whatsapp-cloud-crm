@@ -17,7 +17,8 @@ export default defineConfig({
     url: `${WEB_URL}/health`,
     // Migrations, imports and a production build come first; the build alone has taken 10 minutes here.
     timeout: 900_000,
-    reuseExistingServer: false,
+    // E2E_REUSE=1 uses a stack already started with `node e2e/support/start-stack.mjs`, to iterate quickly.
+    reuseExistingServer: process.env.E2E_REUSE === '1',
     stdout: 'pipe',
     gracefulShutdown: { signal: 'SIGTERM', timeout: 5000 },
   },

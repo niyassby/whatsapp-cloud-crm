@@ -12,3 +12,6 @@ packages/db/src/generated
 *.tsbuildinfo
 test-results
 playwright-report
+
+# Native dev services (pnpm services:up): binaries, data and logs
+.tools/
