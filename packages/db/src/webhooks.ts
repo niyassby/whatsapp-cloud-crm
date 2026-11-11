@@ -19,7 +19,21 @@ export async function emitWebhookEvent(
   const endpoints = await tx.webhookEndpoint.findMany({
     where: opts.endpointId
       ? { id: opts.endpointId }
-      : { orgId, active: true, events: { has: type } },
+      : {
+          orgId,
+          active: true,
+          events: { has: type },
+          // A subscription made with an API key lasts only as long as the key.
+          OR: [
+            { apiKeyId: null },
+            {
+              apiKey: {
+                revokedAt: null,
+                OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+              },
+            },
+          ],
+        },
     select: { id: true },
   });
   if (endpoints.length === 0) return 0;
@@ -61,6 +75,7 @@ export function webhookEndpointToDto(
     description: e.description,
     events: e.events as WebhookEventType[],
     active: e.active,
+    apiKeyId: e.apiKeyId,
     createdAt: e.createdAt.toISOString(),
   };
 }

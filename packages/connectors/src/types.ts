@@ -59,6 +59,11 @@ export interface ConnectorContext {
   settings: Record<string, string>;
   /** https only, no internal addresses, 10 seconds. The same guard as webhooks and flows. */
   http: (req: HttpRequest) => Promise<HttpResponse>;
+  /**
+   * Set when an action runs from a flow step: the same for a repeat of that step after a crash,
+   * so an action that creates something (a payment link) can make it once.
+   */
+  idempotencyKey?: string;
 }
 
 /** Thrown by an action or check. `retryable` lets a sync or event try again later. */
@@ -87,6 +92,11 @@ export interface ConnectorAction {
   /** Keys of the result, offered when saving into flow variables. */
   output?: string[];
   run(ctx: ConnectorContext, input: Record<string, string>): Promise<Record<string, unknown>>;
+  /**
+   * A key the run that took this action remembers, so a later event can stop it: a payment link
+   * gives `payment:<id>`, and paying it ends the run that is sending reminders.
+   */
+  correlation?(output: Record<string, unknown>): string | null;
 }
 
 /** Who an event is about, so a flow can start for that contact. */
@@ -143,6 +153,11 @@ export interface ConnectorWebhook {
    * signs every shop's webhooks with the app's client secret).
    */
   secretEnv?: string;
+  /**
+   * The provider makes the signing secret when `setup` registers the webhook (Stripe), and setup
+   * returns it. The framework then makes none of its own.
+   */
+  secretBySetup?: boolean;
   /** Check the request came from the provider, on the exact bytes it sent. */
   verify(req: InboundRequest, secret: string, settings: Record<string, string>): boolean;
   /** The provider's id for this delivery, if it sends one; otherwise the body's hash is used. */
@@ -177,6 +192,11 @@ export interface ConnectorSync {
   run(ctx: ConnectorContext, cursor: unknown): Promise<{ events: MappedEvent[]; cursor: unknown }>;
 }
 
+/** What setup learned that must be kept, such as a webhook signing secret the provider made. */
+export interface SetupResult {
+  credentials?: Record<string, string>;
+}
+
 export interface ConnectorDefinition {
   key: string;
   name: string;
@@ -195,7 +215,7 @@ export interface ConnectorDefinition {
    * Run after connecting and reconnecting, for example to register webhooks with the provider.
    * Must be safe to run again.
    */
-  setup?(ctx: ConnectorContext, opts: { webhookUrl: string | null }): Promise<void>;
+  setup?(ctx: ConnectorContext, opts: { webhookUrl: string | null }): Promise<void | SetupResult>;
   /** Clean and check settings before saving. Return an error message, or the cleaned settings. */
   normalizeSettings?(settings: Record<string, string>): Record<string, string> | string;
   appWebhook?: ConnectorAppWebhook;

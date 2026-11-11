@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -25,6 +26,11 @@ import {
   listTemplatesSchema,
   type ListTemplatesQuery,
   publicCampaignReportSchema,
+  publicHookEventSchema,
+  publicHookSampleParamsSchema,
+  publicHookSchema,
+  publicHookSubscribeSchema,
+  type PublicHookSubscribeParsed,
   publicCampaignSchema,
   publicContactSchema,
   publicConversationSchema,
@@ -59,6 +65,7 @@ import { CampaignsService } from '../campaigns/campaigns.service';
 import { requestMeta } from '../common/request-meta';
 import { zod } from '../common/zod.pipe';
 import { ContactsService } from '../contacts/contacts.service';
+import { DeveloperService } from '../developer/developer.service';
 import { InboxService } from '../inbox/inbox.service';
 import type { AuthContext } from '../tenancy/request-context';
 import { TemplatesService } from '../templates/templates.service';
@@ -395,4 +402,74 @@ export class PublicCampaignsController {
   ) {
     return toPublicCampaign(await this.campaigns.cancel(actor(auth, req), id));
   }
+}
+
+@ApiTags('Hooks')
+@ApiBearerAuth()
+@Controller('v1/hooks')
+export class PublicHooksController {
+  constructor(private readonly developer: DeveloperService) {}
+
+  @Get()
+  @ApiKeyRoute('hooks:manage')
+  @ApiOperation({
+    summary: 'List subscriptions',
+    description: 'Subscriptions made through the API. Also a cheap way to test a key.',
+  })
+  @Documented({ response: z.array(publicHookSchema) })
+  list() {
+    return this.developer.listHooks();
+  }
+
+  @Post()
+  @ApiKeyRoute('hooks:manage')
+  @ApiOperation({
+    summary: 'Subscribe to an event',
+    description:
+      'For Zapier, Make and similar REST hooks: each event of this type is POSTed to the URL, with ' +
+      'the same body, retries and X-Wacrm-Signature as dashboard webhooks. The subscription ' +
+      'lasts as long as the key; revoking the key removes it.',
+  })
+  @Documented({ body: publicHookSubscribeSchema, response: publicHookSchema, status: 201 })
+  subscribe(
+    @CurrentAuth() auth: AuthContext,
+    @Req() req: FastifyRequest,
+    @Body(zod(publicHookSubscribeSchema)) body: PublicHookSubscribeParsed,
+  ) {
+    return this.developer.subscribeHook(hookActor(auth, req), body);
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  @ApiKeyRoute('hooks:manage')
+  @ApiOperation({ summary: 'Unsubscribe', description: 'When a Zap or scenario is turned off.' })
+  @Documented({ params: idParam, response: z.null(), status: 204 })
+  async unsubscribe(
+    @CurrentAuth() auth: AuthContext,
+    @Req() req: FastifyRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
+    await this.developer.unsubscribeHook(hookActor(auth, req), id);
+  }
+
+  @Get('samples/:event')
+  @ApiKeyRoute('hooks:manage')
+  @ApiOperation({
+    summary: 'Sample events',
+    description:
+      'Up to three recent events of this type, newest first, or a documented sample when there ' +
+      'are none yet. Integration platforms use it to map fields and as a polling fallback.',
+  })
+  @Documented({ params: publicHookSampleParamsSchema, response: z.array(publicHookEventSchema) })
+  samples(
+    @Param(zod(publicHookSampleParamsSchema)) params: z.infer<typeof publicHookSampleParamsSchema>,
+  ) {
+    return this.developer.hookSamples(params.event);
+  }
+}
+
+function hookActor(auth: AuthContext, req: FastifyRequest) {
+  const { userId, orgId } = actor(auth, req);
+  if (!auth.apiKeyId) throw new AppError(ErrorCode.UNAUTHENTICATED, 'An API key is required');
+  return { userId, orgId, apiKeyId: auth.apiKeyId, meta: requestMeta(req) };
 }

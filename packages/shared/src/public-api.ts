@@ -18,6 +18,7 @@ export const API_SCOPES = [
   'campaigns:write',
   'tags:read',
   'tags:write',
+  'hooks:manage',
 ] as const;
 export type ApiScope = (typeof API_SCOPES)[number];
 
@@ -31,6 +32,7 @@ export const API_SCOPE_LABELS: Record<ApiScope, string> = {
   'campaigns:write': 'Create and control campaigns',
   'tags:read': 'Read tags',
   'tags:write': 'Create tags',
+  'hooks:manage': 'Subscribe to events (Zapier, Make)',
 };
 
 export const WEBHOOK_EVENTS = [
@@ -62,6 +64,8 @@ export const WEBHOOK_RETRY_DELAYS_SECONDS = [30, 120, 600, 1800, 7200, 21600, 43
 export const WEBHOOK_MAX_ATTEMPTS = WEBHOOK_RETRY_DELAYS_SECONDS.length + 1;
 
 export const MAX_WEBHOOK_ENDPOINTS = 10;
+/** Subscriptions made through the API (one per Zap or scenario), counted apart from the above. */
+export const MAX_API_HOOKS = 100;
 
 // ------------------------------------------------------------------ dashboard input
 
@@ -130,6 +134,8 @@ export interface WebhookEndpointDto {
   description: string | null;
   events: WebhookEventType[];
   active: boolean;
+  /** Set when an integration (Zapier, Make) subscribed with this API key. */
+  apiKeyId: string | null;
   createdAt: string;
 }
 
@@ -389,3 +395,96 @@ export const toPublicCampaignCounts = (c: CampaignCounts) => ({
   skipped: c.skipped,
   cancelled: c.cancelled,
 });
+
+// ------------------------------------------------------------------ hooks (Zapier, Make)
+
+/** REST hooks: an integration platform subscribes a URL to one event when a Zap is turned on. */
+export const publicHookSubscribeSchema = z.object({
+  url: webhookUrl.describe('Where to POST each event (https)'),
+  event: z.enum(WEBHOOK_EVENTS),
+});
+export type PublicHookSubscribeParsed = z.infer<typeof publicHookSubscribeSchema>;
+
+export const publicHookSchema = z.object({
+  id: z.uuid(),
+  url: z.string(),
+  event: z.enum(WEBHOOK_EVENTS),
+  createdAt: z.string(),
+});
+export type PublicHook = z.infer<typeof publicHookSchema>;
+
+export const publicHookSampleParamsSchema = z.object({ event: z.enum(WEBHOOK_EVENTS) });
+
+/** The body an endpoint receives: an envelope around the event's data. */
+export const publicHookEventSchema = z.object({
+  id: z.uuid().describe('Same across retries and replays: dedupe on it'),
+  type: z.enum(WEBHOOK_EVENTS),
+  createdAt: z.string(),
+  data: z.record(z.string(), z.unknown()),
+});
+
+const SAMPLE_CONTACT = { id: '0193b3c2-7a1e-7c55-9f0a-3c4d5e6f7a81', waId: '919800000000' };
+const SAMPLE_MESSAGE = {
+  id: '0193b3c2-7a1e-7c55-9f0a-3c4d5e6f7a82',
+  conversationId: '0193b3c2-7a1e-7c55-9f0a-3c4d5e6f7a83',
+  direction: 'inbound',
+  type: 'text',
+  status: 'received',
+  body: 'Hi, is my order on its way?',
+  errorCode: null,
+  errorMessage: null,
+  createdAt: '2026-11-11T10:00:00.000Z',
+};
+
+/** What each event's data looks like, for integration platforms to show before one happens. */
+export const WEBHOOK_EVENT_SAMPLES: Record<WebhookEventType, Record<string, unknown>> = {
+  'message.received': {
+    message: SAMPLE_MESSAGE,
+    contact: { ...SAMPLE_CONTACT, name: 'Asha Rao' },
+    phoneNumberId: '0193b3c2-7a1e-7c55-9f0a-3c4d5e6f7a84',
+  },
+  'message.status': {
+    message: { ...SAMPLE_MESSAGE, direction: 'outbound', status: 'delivered', body: 'On its way!' },
+  },
+  'contact.created': { ...SAMPLE_CONTACT, name: 'Asha Rao' },
+  'contact.opted_out': SAMPLE_CONTACT,
+  'campaign.completed': {
+    id: '0193b3c2-7a1e-7c55-9f0a-3c4d5e6f7a85',
+    counts: {
+      total: 120,
+      pending: 0,
+      sent: 4,
+      delivered: 70,
+      read: 40,
+      replied: 6,
+      failed: 2,
+      skipped: 4,
+      cancelled: 0,
+    },
+    costMicros: 58_000_000,
+  },
+  'campaign.paused': {
+    id: '0193b3c2-7a1e-7c55-9f0a-3c4d5e6f7a85',
+    name: 'Diwali offer',
+    code: 'manual',
+    reason: 'Paused by a team member.',
+  },
+  'template.status_changed': {
+    id: '0193b3c2-7a1e-7c55-9f0a-3c4d5e6f7a86',
+    name: 'order_update',
+    language: 'en',
+    status: 'approved',
+    previousStatus: 'pending',
+    reason: null,
+  },
+};
+
+/** A sample in the envelope endpoints receive. */
+export function sampleWebhookEvent(type: WebhookEventType) {
+  return {
+    id: '0193b3c2-7a1e-7c55-9f0a-000000000000',
+    type,
+    createdAt: '2026-11-11T10:00:00.000Z',
+    data: WEBHOOK_EVENT_SAMPLES[type],
+  };
+}

@@ -49,7 +49,12 @@ export function Documented(spec: {
   ];
   if (spec.body) decorators.push(ApiBody({ schema: jsonSchema(spec.body, 'input') }));
   for (const name of Object.keys(spec.params?.shape ?? {})) {
-    decorators.push(ApiParam({ name, schema: { type: 'string', format: 'uuid' } }));
+    decorators.push(
+      ApiParam({
+        name,
+        schema: jsonSchema(spec.params!.shape[name] as z.ZodType, 'input'),
+      }),
+    );
   }
   if (spec.query) {
     const schema = jsonSchema(spec.query, 'input');

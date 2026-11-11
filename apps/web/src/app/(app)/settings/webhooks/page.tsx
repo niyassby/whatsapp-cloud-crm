@@ -264,8 +264,19 @@ function Endpoint({
           <CardTitle className="flex items-center gap-2 text-sm break-all">
             {endpoint.url}
             {!endpoint.active && <Badge variant="outline">Off</Badge>}
+            {endpoint.apiKeyId && (
+              <Badge
+                variant="secondary"
+                title="Added by Zapier, Make or another app with an API key"
+              >
+                Via API key
+              </Badge>
+            )}
           </CardTitle>
-          <CardDescription>{endpoint.events.join(', ')}</CardDescription>
+          <CardDescription>
+            {endpoint.events.join(', ')}
+            {endpoint.apiKeyId && ' · revoking its API key removes it'}
+          </CardDescription>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => setShowLog((v) => !v)}>

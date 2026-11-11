@@ -16,7 +16,12 @@ import {
   type CursorPage,
   ErrorCode,
   type ListWebhookDeliveriesQuery,
+  MAX_API_HOOKS,
   MAX_WEBHOOK_ENDPOINTS,
+  type PublicHook,
+  type PublicHookSubscribeParsed,
+  sampleWebhookEvent,
+  type WebhookEventType,
   type UpdateWebhookEndpointInput,
   type WebhookDeliveryDto,
   type WebhookEndpointDto,
@@ -101,9 +106,105 @@ export class DeveloperService {
         metadata: { name: current.name },
         meta: actor.meta,
       });
+      // Zaps and scenarios subscribed with this key stop with it.
+      await tx.webhookEndpoint.deleteMany({ where: { apiKeyId: id } });
       return tx.apiKey.update({ where: { id }, data: { revokedAt: new Date() } });
     });
     return apiKeyToDto(row);
+  }
+
+  // ------------------------------------------------------------------ hooks (Zapier, Make)
+
+  /**
+   * A subscription made with an API key holding `hooks:manage`. It is an ordinary endpoint (same
+   * signing, retries, log and SSRF checks), tied to the key: it receives only while the key is
+   * live and is removed when the key is revoked. The secret is not returned; platforms that want
+   * to check signatures can rotate it from the dashboard.
+   */
+  async subscribeHook(
+    actor: DeveloperActor & { apiKeyId: string },
+    input: PublicHookSubscribeParsed,
+  ): Promise<PublicHook> {
+    this.assertUrl(input.url);
+    const id = randomUUID();
+    const row = await this.db.run(async (tx) => {
+      const count = await tx.webhookEndpoint.count({ where: { apiKeyId: { not: null } } });
+      if (count >= MAX_API_HOOKS) {
+        throw new AppError(
+          ErrorCode.VALIDATION_FAILED,
+          `A workspace can have up to ${MAX_API_HOOKS} subscriptions; turn off unused Zaps or scenarios`,
+        );
+      }
+      const created = await tx.webhookEndpoint.create({
+        data: {
+          id,
+          orgId: actor.orgId,
+          url: input.url,
+          description: 'Added through the API (Zapier, Make)',
+          events: [input.event],
+          secretEnc: this.secrets.encrypt(newSecret(), webhookSecretAad(id)),
+          createdById: actor.userId,
+          apiKeyId: actor.apiKeyId,
+        },
+      });
+      await this.audit.record(tx, actor.orgId, {
+        action: AuditAction.WEBHOOK_ENDPOINT_CREATED,
+        actorUserId: actor.userId,
+        targetType: 'webhook_endpoint',
+        targetId: id,
+        metadata: { url: input.url, events: [input.event], apiKeyId: actor.apiKeyId },
+        meta: actor.meta,
+      });
+      return created;
+    });
+    return toPublicHook(row);
+  }
+
+  /** Only subscriptions made through the API, so a key cannot touch the dashboard's endpoints. */
+  async listHooks(): Promise<PublicHook[]> {
+    const rows = await this.db.run((tx) =>
+      tx.webhookEndpoint.findMany({
+        where: { apiKeyId: { not: null } },
+        orderBy: { createdAt: 'desc' },
+        take: MAX_API_HOOKS,
+      }),
+    );
+    return rows.map(toPublicHook);
+  }
+
+  async unsubscribeHook(actor: DeveloperActor, id: string): Promise<void> {
+    await this.db.run(async (tx) => {
+      const current = await tx.webhookEndpoint.findFirst({
+        where: { id, apiKeyId: { not: null } },
+      });
+      if (!current) throw new AppError(ErrorCode.NOT_FOUND, 'Subscription not found');
+      await this.audit.record(tx, actor.orgId, {
+        action: AuditAction.WEBHOOK_ENDPOINT_DELETED,
+        actorUserId: actor.userId,
+        targetType: 'webhook_endpoint',
+        targetId: id,
+        metadata: { url: current.url, apiKeyId: current.apiKeyId },
+        meta: actor.meta,
+      });
+      await tx.webhookEndpoint.delete({ where: { id } });
+    });
+  }
+
+  /**
+   * Recent real events of a type, newest first, so a Zap can be mapped against actual data; a
+   * documented sample when there are none yet.
+   */
+  async hookSamples(type: WebhookEventType): Promise<unknown[]> {
+    const rows = await this.db.run((tx) =>
+      tx.webhookDelivery.findMany({
+        where: { eventType: type, replayOfId: null },
+        orderBy: { createdAt: 'desc' },
+        distinct: ['eventId'],
+        take: 3,
+        select: { payload: true },
+      }),
+    );
+    return rows.length ? rows.map((r) => r.payload) : [sampleWebhookEvent(type)];
   }
 
   // ------------------------------------------------------------------ webhook endpoints
@@ -128,7 +229,7 @@ export class DeveloperService {
     const id = randomUUID();
     const secret = newSecret();
     const row = await this.db.run(async (tx) => {
-      const count = await tx.webhookEndpoint.count();
+      const count = await tx.webhookEndpoint.count({ where: { apiKeyId: null } });
       if (count >= MAX_WEBHOOK_ENDPOINTS) {
         throw new AppError(
           ErrorCode.VALIDATION_FAILED,
@@ -293,4 +394,18 @@ export class DeveloperService {
     });
     return webhookDeliveryToDto(row);
   }
+}
+
+function toPublicHook(e: {
+  id: string;
+  url: string;
+  events: string[];
+  createdAt: Date;
+}): PublicHook {
+  return {
+    id: e.id,
+    url: e.url,
+    event: e.events[0] as WebhookEventType,
+    createdAt: e.createdAt.toISOString(),
+  };
 }

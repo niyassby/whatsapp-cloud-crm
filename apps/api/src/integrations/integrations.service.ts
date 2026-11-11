@@ -175,8 +175,11 @@ export class IntegrationsService {
 
   /** A fresh signing secret, when the connector takes webhooks and the person did not give one. */
   private withWebhookSecret(def: ConnectorDefinition, credentials: Record<string, string>) {
-    // No secret of our own when the provider signs with the app's (Shopify).
-    if (!def.webhook || def.webhook.secretEnv) return { credentials, generated: null };
+    // No secret of ours when the provider signs with the app's secret (Shopify) or makes one when
+    // setup registers the webhook (Stripe).
+    if (!def.webhook || def.webhook.secretEnv || def.webhook.secretBySetup) {
+      return { credentials, generated: null };
+    }
     const field = webhookSecretField(def);
     if (credentials[field]) return { credentials, generated: null };
     const secret = randomBytes(24).toString('base64url');

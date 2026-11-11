@@ -192,3 +192,43 @@ For any other system: `POST` JSON to the connection's webhook address, signed as
 A commerce event name keeps its trigger; anything else arrives as `event.received`. `id` is what
 makes a repeat count once. The connector's `request` action calls the store's own API (`baseUrl`
 setting, bearer `apiToken`), as a generic HTTP action for flows.
+
+## Payments, Sheets and HubSpot (Phase 3.6)
+
+### Payment links (Razorpay, Stripe)
+
+The business's own account, not the platform's billing. Both offer the action **Create a payment
+link** (amount as a decimal such as `499.00`, currency, what it is for, the customer's phone) and
+**Check a payment link**, and the triggers `payment.paid`, `payment.failed` and
+`payment.expired` with `{{trigger.data.payment.*}}` (`amount`, `currency`, `linkId`, `url`,
+`status`, `method`, `error`, `customer`).
+
+- **Reminders:** a flow makes the link, sends it, then waits and reminds. The action ties the run
+  to `payment:<connector>:<linkId>` (`correlation` on the action, stored in the run's
+  `trigger.correlations`). Paid or expired cancels that run, and a `payment.paid` flow can thank
+  the customer. A failed payment does not stop reminders, since the customer can try again.
+- **Once only:** a flow step passes `ctx.idempotencyKey` (`flow:<run>:<node>:<steps>`), the same
+  when the step repeats after a crash. Razorpay gets it as `reference_id` (a repeat finds the link
+  it made); Stripe as the `Idempotency-Key` header.
+- **Razorpay:** key id and secret. Razorpay has no API to register webhooks: in Dashboard >
+  Webhooks add the connection's webhook address and secret, with `payment_link.paid`,
+  `payment_link.expired`, `payment_link.cancelled` and `payment.failed`. Links are made with
+  Razorpay's own SMS and email notices off, since WhatsApp sends them.
+- **Stripe:** a secret or restricted key (Checkout Sessions and Webhook Endpoints: write) and the
+  page to show after paying. A link is a one-time Checkout Session (30 minutes to 24 hours). Setup
+  registers the webhook endpoint and keeps the signing secret Stripe returns
+  (`webhook.secretBySetup`; `setup` may return `{ credentials }`, which the worker merges in
+  under a row lock).
+
+### Google Sheets
+
+OAuth with `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (offline access, so it keeps working).
+Actions: **Add a row** (values separated by `|`, written RAW so nothing becomes a formula) and
+**Find a row** (by the heading in row 1, within the first 5,000 rows; saves `row.<Heading>`).
+
+### HubSpot
+
+OAuth with `HUBSPOT_CLIENT_ID` and `HUBSPOT_CLIENT_SECRET`, scopes `crm.objects.contacts.read`
+and `.write`. Actions: **Create or update a contact** (matched by email, then phone) and **Add a
+note to a contact** (by id, email or phone). To keep HubSpot in step, use flows: a new-contact
+trigger with the upsert action, a handoff or end step that adds a note.

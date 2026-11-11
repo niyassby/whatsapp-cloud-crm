@@ -95,8 +95,12 @@ describe('connectors', () => {
     expect(res.body.map((c: { key: string }) => c.key)).toEqual([
       'custom_store',
       'demo_store',
+      'google_sheets',
+      'hubspot',
       'oauthy',
+      'razorpay',
       'shopify',
+      'stripe',
       'woocommerce',
     ]);
     expect(res.body.find((c: { key: string }) => c.key === 'demo_store')).toMatchObject({

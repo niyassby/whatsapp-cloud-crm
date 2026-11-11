@@ -141,7 +141,13 @@ const noEffects = (): Effects => ({
 /** The result of a call outside the database, applied by the next transaction. */
 type External =
   | { kind: 'http'; ok: boolean; status: number; body: string; json: unknown; error?: string }
-  | { kind: 'integration'; ok: boolean; data: Record<string, unknown>; error?: string }
+  | {
+      kind: 'integration';
+      ok: boolean;
+      data: Record<string, unknown>;
+      error?: string;
+      correlation?: string;
+    }
   | { kind: 'ai'; handoff: true; reason: string };
 
 const EXTERNAL_TYPES = new Set(['http_request', 'integration_action', 'ai_reply']);
@@ -954,6 +960,22 @@ async function execNode(ctx: StepCtx, external: External | null): Promise<Outcom
           vars[name] = readPath(r.data, path) ?? null;
         }
       }
+      if (r.ok && r.correlation) {
+        // The run now answers to this key too: paying the link it made stops its reminders.
+        const trigger = (ctx.run.trigger ?? {}) as Record<string, unknown>;
+        const known = Array.isArray(trigger.correlations) ? (trigger.correlations as string[]) : [];
+        if (!known.includes(r.correlation)) {
+          await ctx.tx.flowRun.update({
+            where: { id: ctx.run.id },
+            data: {
+              trigger: {
+                ...trigger,
+                correlations: [...known, r.correlation].slice(-20),
+              } as Prisma.InputJsonValue,
+            },
+          });
+        }
+      }
       return {
         kind: 'go',
         handle: r.ok ? 'success' : 'failure',
@@ -1022,7 +1044,7 @@ async function runExternal(
   deps: WorkerDeps,
   node: FlowNode,
   scope: FlowScope,
-  where: { orgId: string; runId: string },
+  where: { orgId: string; runId: string; steps: number },
 ): Promise<External> {
   if (node.type === 'http_request') {
     const url = interpolate(node.data.url, scope, encodeURIComponent);
@@ -1082,9 +1104,16 @@ async function runExternal(
       input,
       connectionId: node.data.connectionId,
       source: { flowRun: where.runId, node: node.id },
+      // The same for a repeat of this step after a crash, and different on a loop back to it.
+      idempotencyKey: `flow:${where.runId}:${node.id}:${where.steps}`,
     });
     return r.ok
-      ? { kind: 'integration', ok: true, data: r.data }
+      ? {
+          kind: 'integration',
+          ok: true,
+          data: r.data,
+          ...(r.correlation ? { correlation: r.correlation } : {}),
+        }
       : { kind: 'integration', ok: false, data: {}, error: r.error };
   }
   // TODO(3.7): the AI assistant answers here.
@@ -1457,7 +1486,11 @@ export async function advanceRun(
       external = {
         steps: result.steps,
         nodeId: result.node.id,
-        result: await runExternal(deps, result.node, result.scope, { orgId, runId }),
+        result: await runExternal(deps, result.node, result.scope, {
+          orgId,
+          runId,
+          steps: result.steps,
+        }),
       };
     }
   }

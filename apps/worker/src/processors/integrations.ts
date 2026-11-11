@@ -114,12 +114,17 @@ function connectorHttp(deps: WorkerDeps): ConnectorContext['http'] {
   };
 }
 
-function contextFor(deps: WorkerDeps, conn: LoadedConnection): ConnectorContext {
+function contextFor(
+  deps: WorkerDeps,
+  conn: LoadedConnection,
+  idempotencyKey?: string,
+): ConnectorContext {
   return {
     connectionId: conn.id,
     credentials: conn.credentials,
     settings: conn.settings,
     http: connectorHttp(deps),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
   };
 }
 
@@ -273,10 +278,12 @@ export interface ActionRequest {
   connectionId: string | null;
   /** Where it was asked from, for the log. */
   source?: Record<string, unknown>;
+  /** Stable across a repeat of the same flow step, so the action can make things once. */
+  idempotencyKey?: string;
 }
 
 export type ActionResult =
-  | { ok: true; data: Record<string, unknown>; eventId: string }
+  | { ok: true; data: Record<string, unknown>; eventId: string; correlation?: string }
   | { ok: false; error: string; eventId: string | null };
 
 /** Run one connector action and log it. Never throws: failures come back as `ok: false`. */
@@ -333,10 +340,11 @@ export async function runConnectorAction(
         throw new ConnectorError(`${field.label} is empty`);
       }
     }
-    const data = await action.run(contextFor(deps, conn), req.input);
+    const data = await action.run(contextFor(deps, conn, req.idempotencyKey), req.input);
     await log('succeeded', data, null);
     deps.publisher.emit(orgId, 'integration:updated', { connectionId });
-    return { ok: true, data, eventId };
+    const correlation = action.correlation?.(data) ?? null;
+    return { ok: true, data, eventId, ...(correlation ? { correlation } : {}) };
   } catch (err) {
     if (err instanceof ConnectorError && err.opts.reconnect) {
       await needsReconnect(deps, orgId, connectionId, err.message).catch(() => undefined);
@@ -427,7 +435,10 @@ async function cancelCorrelatedRuns(
   const runs = await tx.flowRun.findMany({
     where: {
       status: { in: ['running', 'waiting'] },
-      OR: keys.map((k) => ({ trigger: { path: ['correlation'], equals: k } })),
+      OR: keys.flatMap((k) => [
+        { trigger: { path: ['correlation'], equals: k } },
+        { trigger: { path: ['correlations'], array_contains: [k] } },
+      ]),
     },
     select: { id: true, currentNodeId: true },
   });
@@ -816,7 +827,30 @@ export async function setupConnection(
     ? `${deps.apiPublicUrl.replace(/\/$/, '')}/integrations/hooks/${conn.webhookToken}`
     : null;
   try {
-    await def.setup(contextFor(deps, conn), { webhookUrl });
+    const learned = await def.setup(contextFor(deps, conn), { webhookUrl });
+    if (learned?.credentials && Object.keys(learned.credentials).length) {
+      await withTenant(deps.db, { orgId }, async (tx) => {
+        // Reviewed raw SQL: a row lock under RLS, so a token refresh cannot overwrite this.
+        await tx.$queryRaw`SELECT 1 FROM integration_connections WHERE id = ${connectionId}::uuid FOR UPDATE`;
+        const row = await tx.integrationConnection.findUniqueOrThrow({
+          where: { id: connectionId },
+          select: { credentialsEnc: true },
+        });
+        const credentials = {
+          ...decryptCredentials(deps, connectionId, row.credentialsEnc),
+          ...learned.credentials,
+        };
+        await tx.integrationConnection.update({
+          where: { id: connectionId },
+          data: {
+            credentialsEnc: deps.secrets.encrypt(
+              JSON.stringify(credentials),
+              integrationCredentialsAad(connectionId),
+            ),
+          },
+        });
+      });
+    }
     await setStatus(deps, orgId, connectionId, { lastError: null });
     return 'done';
   } catch (err) {

@@ -303,6 +303,18 @@ Setup for each store: `infra/connectors.md` (Built-in commerce connectors).
 - WooCommerce: statuses map to events once per order (`processing` paid, `completed` fulfilled, `cancelled`); a created order also emits `order.created`. Setup lists existing webhooks and adds only what is missing.
 - Tests: `packages/connectors/test/commerce.test.ts` (mapping, signatures, setup), `apps/worker/test/commerce.test.ts` (the acceptance: a Shopify order sends the confirmation template, its fulfillment the shipping update; abandoned cart cancel; consent; privacy; WooCommerce), `apps/api/test/integrations.test.ts` (Shopify OAuth on the named shop, app-secret signatures, privacy route).
 
+## Payments, Zapier and Make, Sheets, HubSpot (Phase 3.6)
+
+How to set each up: `infra/connectors.md` (Payments, Sheets and HubSpot), `infra/integrations-zapier-make.md`.
+
+- Payment links on the business's own account: `razorpay` (key pair; webhooks added by hand in the Razorpay dashboard with our address and secret) and `stripe` (secret or restricted key; one-time Checkout Sessions; `setup` registers the webhook endpoint and stores Stripe's signing secret). Shared shapes and helpers in `packages/connectors/src/payments.ts`: `Payment`, `PAYMENT_TRIGGERS` (`payment.paid`, `payment.failed`, `payment.expired`), `toMinorUnits` / `fromMinorUnits` (exact decimal strings, zero-decimal currencies), `paymentReference`, `paymentCorrelation`.
+- Reminders until paid: `ConnectorAction.correlation(output)` ties the run that made a link to `payment:<connector>:<linkId>`, appended to `flow_runs.trigger.correlations`. `cancelCorrelatedRuns` matches `trigger.correlation` or `trigger.correlations`, so a paid or expired event cancels the run waiting to remind, in the same transaction that starts the paid flow.
+- Repeat-safe actions: flow steps pass `ctx.idempotencyKey` = `flow:<runId>:<nodeId>:<steps>` (stable when a step repeats after a crash). Razorpay uses it as `reference_id` and fetches the existing link on a duplicate; Stripe as `Idempotency-Key`, with `expires_at` counted from a 10-minute slot so a repeat sends identical parameters.
+- Framework: `setup` may return `{ credentials }` (merged into the encrypted credentials under a row lock); `webhook.secretBySetup` stops the API generating a secret.
+- Google Sheets (`google_sheets`, `GOOGLE_CLIENT_ID` / `_SECRET`, offline access): add a row (RAW, so values never become formulas), find a row by heading. HubSpot (`hubspot`, `HUBSPOT_CLIENT_ID` / `_SECRET`): create or update a contact (email, then phone), add a note (association type 202). Both are actions only; sync is built with flows.
+- Zapier and Make: REST hooks on the public API. Scope `hooks:manage`; `GET|POST /v1/hooks`, `DELETE /v1/hooks/:id`, `GET /v1/hooks/samples/:event` (recent real events, else `WEBHOOK_EVENT_SAMPLES`). A subscription is a `webhook_endpoints` row with `api_key_id`: same signing, retries and SSRF checks; `emitWebhookEvent` skips it while its key is revoked or expired; revoking the key deletes it. Keys see and delete only API-made subscriptions; the dashboard shows them as "Via API key". `MAX_API_HOOKS` (100) apart from `MAX_WEBHOOK_ENDPOINTS`. Sample Zapier CLI app: `infra/zapier/index.js` (not built).
+- Tests: `packages/connectors/test/payments.test.ts` (amounts, Razorpay and Stripe requests, mapping, signatures, Stripe setup, Sheets, HubSpot), `apps/worker/test/payments.test.ts` (the acceptance: an order makes and sends a link; paying cancels the reminders and runs the thank-you flow; an unpaid link reminds; a failed link takes the failure exit; Stripe setup stores its secret), `apps/api/test/public-api.test.ts` (hooks: scope, delivery, samples, isolation, expiry, revoke).
+
 ## Troubleshooting
 
 - Local services run without Docker on the development PC (`infra/native-setup.md`): PostgreSQL 18 as a Windows service on 5433, Memurai (Redis) on 6379, and SeaweedFS and Mailpit from `.tools/` via `pnpm services:up`. If a test or the app cannot reach one, run `pnpm services:status`; logs are in `.tools/logs`.
@@ -333,6 +345,7 @@ Validate with Zod at startup. Never commit real secrets. Keep `.env.example` cur
 - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`: API and worker both need them, and a provider exists only with all its values. `STRIPE_API_BASE`, `RAZORPAY_API_BASE` for local fakes only (refused in production)
 - `BILLING_SELLER_NAME` (defaults to `APP_NAME`), `BILLING_SELLER_ADDRESS`, `BILLING_SELLER_TAX_ID`: printed on invoices
 - `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET` (API and worker): the Shopify app; the secret also verifies Shopify webhooks
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `HUBSPOT_CLIENT_ID`, `HUBSPOT_CLIENT_SECRET` (API and worker): the Google Sheets and HubSpot OAuth apps. A connector is offered as available only with both set
 - `API_PUBLIC_URL` (default http://localhost:4000): this API as providers reach it, for integration webhooks and OAuth callbacks. `INTEGRATIONS_DEMO` (API and worker) adds the Demo Store connector. OAuth connectors read their own client id and secret variables (see `infra/connectors.md`)
 - `SENTRY_DSN`
 
@@ -389,7 +402,7 @@ Mark as phases complete.
 
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
 - [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 campaigns and dashboard DONE; 2.5 billing code DONE, real sandbox payments not verified; 2.6 public API and webhooks DONE. Gate NOT passed until real sandbox payments are run: wallet concurrency, webhook idempotency, campaign load and OpenAPI all pass). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
-- [ ] Section 3: Automation, integrations, AI (3.1 rules and routing DONE; 3.2 flow engine DONE; 3.3 flow builder DONE; 3.4 connector framework DONE; 3.5 commerce connectors code DONE, not checked against a real Shopify dev store; 3.6 and 3.7 to do). Started with the Section 2 gate still open (no sandbox payments run), by the project owner's decision (2026-11-09).
+- [ ] Section 3: Automation, integrations, AI (3.1 rules and routing DONE; 3.2 flow engine DONE; 3.3 flow builder DONE; 3.4 connector framework DONE; 3.5 commerce connectors code DONE, not checked against a real Shopify dev store; 3.6 payments, Zapier/Make, Sheets, HubSpot code DONE, payment links not run in a real sandbox; 3.7 to do). Started with the Section 2 gate still open (no sandbox payments run), by the project owner's decision (2026-11-09).
 - [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 to 4.5)
 
 ## Decisions log
@@ -515,7 +528,16 @@ Add one line per decision: date, decision, reason.
 - 2026-11-11: Checkout consent only moves a contact from unknown to opted in. Reason: an opt-out on WhatsApp outranks a checkbox in a store, and the import rule is the same.
 - 2026-11-11: Shopify privacy requests notify owners and admins instead of deleting. Reason: the workspace is the controller of its WhatsApp history, and personal data erasure is not built yet; uninstall and shop redact do act at once.
 
+- 2026-11-11: Payment links use the business's own Razorpay or Stripe account through connectors, separate from platform billing in `packages/billing`. Reason: the money goes to the business, and its keys stay in its connection; billing is ours.
+- 2026-11-11: Stripe payment links are one-time Checkout Sessions, not Stripe Payment Links. Reason: Payment Links are reusable and cannot be tied to one customer or one flow run; a session can, and expires on its own.
+- 2026-11-11: Reminders until paid are flow steps cancelled by the paid event (an action adds a correlation to the run), not a scheduler of their own. Reason: the 3.5 abandoned-cart mechanism already does this durably, and the business words and times its reminders.
+- 2026-11-11: API keys may add webhook endpoints, but only with the separate `hooks:manage` scope, visible in the dashboard and ending with the key. This narrows the 2026-11-07 decision. Reason: Zapier and Make subscribe by REST hooks with the customer's key; a leaked key without that scope still cannot redirect events.
+- 2026-11-11: Google Sheets and HubSpot are actions, used from flows; no background sync. Reason: what to sync and when is the business's choice, and flows already give triggers, retries and a log.
+
 ## Known gaps / TODO
+
+- Phase 3.6 not verified against live services: a Razorpay and a Stripe test-mode payment link paid end to end (needs test keys in the connection and a tunnel for webhooks), Google and HubSpot OAuth apps, and the Zapier app pushed. Razorpay `payment.failed` is only matched when the link's notes reach its payments; check this in the sandbox. This is the Section 3 gate's payment item, together with the Section 2 sandbox payments.
+- Payments: no partial payments, refunds or currency conversion. Reminders are flow steps the business builds; there is no ready-made template. HubSpot has no inbound sync (HubSpot changes do not reach the CRM). Sheets lookups read at most 5,000 rows.
 
 - Phase 3.5 not verified against a real Shopify dev store or WooCommerce site: needs a Partner app, its keys in `.env`, and a tunnel for `API_PUBLIC_URL`. Payloads follow the docs. Confirm Admin API version `2026-07` is offered. Shopify's protected customer data approval is needed before a public listing.
 - Shopify customer redact and data requests only notify; nothing erases or exports automatically yet (ties to the personal data erasure gap). No order-level events for refunds or edits. WooCommerce has no abandoned carts (no core webhook for them).
@@ -552,7 +574,7 @@ Add one line per decision: date, decision, reason.
 - `@nestjs/swagger` pulls in `swagger-ui-dist`, whose `@scarf/scarf` postinstall sends install analytics. Set `SCARF_ANALYTICS=false` in CI and deploy builds if that is unwanted.
 - Rules and routing: notifications are in-app only, with no email or push. The SLA ignores business hours. No holidays in business hours, and one span per day in the settings screen (the API takes up to four). Auto-reply rules cannot be limited to one number from the screen yet (the API takes it).
 - Flows: the simulator answers HTTP steps by hand and does not check the 24-hour window, the wallet or consent. List steps with more than one section are edited as JSON. No undo in the builder yet. `integration_action` always fails and `ai_reply` always hands off until 3.4 and 3.7. Tags added by CSV import do not start flows. Tag triggers are queued after commit, so a Redis outage at that moment loses the trigger. Runs and their history are kept forever; add retention before launch.
-- Integrations: no built-in connectors until 3.5 (only the Demo Store behind `INTEGRATIONS_DEMO`). Failed outbound actions are logged but not retried outside a flow. Events and claims are kept forever; add retention before launch. Per-connection rate limits are not enforced. Webhooks need `API_PUBLIC_URL` reachable by the provider (a tunnel in development).
+- Integrations: failed outbound actions are logged but not retried outside a flow. Events and claims are kept forever; add retention before launch. Per-connection rate limits are not enforced. Webhooks need `API_PUBLIC_URL` reachable by the provider (a tunnel in development).
 - Real rate cards are not loaded. `sample-rate-cards.csv` is not Meta's pricing. Before charging anyone: build a CSV from Meta's current rate card with your margin, and run `pnpm rates:import`. Check how Meta's market groups map to countries.
 - Meta bills by its own rules, such as volume tiers, which flat per-country rates do not model. Reconcile against Meta's invoices.
 - No platform-admin screen for rate cards or manual credits: CLI only until Section 4.

@@ -100,7 +100,7 @@ async function workspace(opts: { numbers?: number } = {}) {
 
 const call = (
   key: string | undefined,
-  method: 'GET' | 'POST' | 'PATCH',
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   url: string,
   body?: object,
 ) =>
@@ -591,6 +591,9 @@ describe('OpenAPI', () => {
         '/v1/templates',
         '/v1/campaigns',
         '/v1/tags',
+        '/v1/hooks',
+        '/v1/hooks/{id}',
+        '/v1/hooks/samples/{event}',
       ]),
     );
     // Nothing from the dashboard's own API.
@@ -722,5 +725,104 @@ describe('webhook endpoints', () => {
     await s.client.post(`/webhook-endpoints/${body.id}/test`);
     expect((await s.client.delete(`/webhook-endpoints/${body.id}`)).status).toBe(204);
     expect(await owner.webhookDelivery.count({ where: { endpointId: body.id } })).toBe(0);
+  });
+});
+
+describe('hooks for Zapier and Make', () => {
+  const deliveriesTo = (endpointId: string) =>
+    owner.webhookDelivery.findMany({ where: { endpointId }, select: { eventType: true } });
+
+  it('subscribes with the hooks scope, delivers events, and unsubscribes', async () => {
+    const s = await workspace();
+    const { key: plain } = await s.makeKey(['contacts:write']);
+    expect((await call(plain, 'GET', '/v1/hooks')).status).toBe(403);
+
+    const { key } = await s.makeKey(['hooks:manage', 'contacts:write']);
+    const sub = await call(key, 'POST', '/v1/hooks', {
+      url: 'https://hooks.zapier.com/hooks/standard/1/abc',
+      event: 'contact.created',
+    });
+    expect(sub.status).toBe(201);
+    expect(sub.body).toEqual({
+      id: expect.any(String),
+      url: 'https://hooks.zapier.com/hooks/standard/1/abc',
+      event: 'contact.created',
+      createdAt: expect.any(String),
+    });
+    expect(JSON.stringify(sub.body)).not.toContain('whsec_');
+    expect((await call(key, 'GET', '/v1/hooks')).body).toEqual([sub.body]);
+
+    // The dashboard shows it, marked as made with a key.
+    const listed = await s.client.get('/webhook-endpoints');
+    expect(listed.body).toEqual([
+      expect.objectContaining({ id: sub.body.id, apiKeyId: expect.any(String) }),
+    ]);
+
+    // Before any event: a documented sample. After one: the real event.
+    const sample = await call(key, 'GET', '/v1/hooks/samples/contact.created');
+    expect(sample.body).toEqual([
+      expect.objectContaining({ type: 'contact.created', data: expect.any(Object) }),
+    ]);
+    await call(key, 'POST', '/v1/contacts', { phone: '+919876500001', name: 'Asha' });
+    expect(await deliveriesTo(sub.body.id)).toEqual([{ eventType: 'contact.created' }]);
+    const real = await call(key, 'GET', '/v1/hooks/samples/contact.created');
+    expect(real.body[0].data).toMatchObject({ waId: '919876500001', name: 'Asha' });
+
+    expect((await call(key, 'DELETE', `/v1/hooks/${sub.body.id}`)).status).toBe(204);
+    expect((await call(key, 'GET', '/v1/hooks')).body).toEqual([]);
+  });
+
+  it('a key cannot touch dashboard endpoints, internal addresses or unknown events', async () => {
+    const s = await workspace();
+    const dash = await s.client.post('/webhook-endpoints', {
+      url: 'https://example.com/hook',
+      events: ['contact.created'],
+    });
+    const { key } = await s.makeKey(['hooks:manage']);
+    expect((await call(key, 'GET', '/v1/hooks')).body).toEqual([]);
+    expect((await call(key, 'DELETE', `/v1/hooks/${dash.body.id}`)).status).toBe(404);
+    expect(
+      (
+        await call(key, 'POST', '/v1/hooks', {
+          url: 'https://10.0.0.5/x',
+          event: 'contact.created',
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (await call(key, 'POST', '/v1/hooks', { url: 'https://example.com/x', event: 'nope' }))
+        .status,
+    ).toBe(400);
+    expect((await call(key, 'GET', '/v1/hooks/samples/nope')).status).toBe(400);
+    // Another workspace's key sees nothing.
+    const other = await workspace();
+    const { key: otherKey } = await other.makeKey(['hooks:manage']);
+    const mine = await call(key, 'POST', '/v1/hooks', {
+      url: 'https://example.com/z',
+      event: 'contact.created',
+    });
+    expect((await call(otherKey, 'DELETE', `/v1/hooks/${mine.body.id}`)).status).toBe(404);
+  });
+
+  it('subscriptions end with their key: an expired key gets nothing, a revoked one removes them', async () => {
+    const s = await workspace();
+    const made = await s.makeKey(['hooks:manage']);
+    const sub = await call(made.key, 'POST', '/v1/hooks', {
+      url: 'https://example.com/z',
+      event: 'contact.created',
+    });
+    await owner.apiKey.update({
+      where: { id: made.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    await s.client.post('/contacts', { phone: '+919876500002' });
+    expect(await deliveriesTo(sub.body.id)).toEqual([]);
+
+    await owner.apiKey.update({ where: { id: made.id }, data: { expiresAt: null } });
+    await s.client.post('/contacts', { phone: '+919876500003' });
+    expect(await deliveriesTo(sub.body.id)).toHaveLength(1);
+
+    expect((await s.client.delete(`/api-keys/${made.id}`)).status).toBe(200);
+    expect(await owner.webhookEndpoint.findUnique({ where: { id: sub.body.id } })).toBeNull();
   });
 });

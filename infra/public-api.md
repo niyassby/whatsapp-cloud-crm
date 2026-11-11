@@ -60,3 +60,10 @@ function isValid(secret, rawBody, header) {
 Failures are retried after 30 seconds, 2 minutes, 10 minutes, 30 minutes, 2, 6, 12 and 24 hours, then marked failed. The delivery log in Settings > Webhooks shows every attempt and can replay any finished delivery. Logs are kept for `WEBHOOK_RETENTION_DAYS`.
 
 Endpoints must be public HTTPS addresses. Private and internal addresses are refused, including names that resolve to them.
+
+## Zapier, Make and other automation platforms
+
+A key with the **Subscribe to events** scope (`hooks:manage`) can subscribe a URL to an event
+with `POST /v1/hooks` and remove it with `DELETE /v1/hooks/:id`; `GET /v1/hooks/samples/:event`
+returns recent events to map fields against. Deliveries are the same as above. Subscriptions show
+in Settings > Webhooks and end when the key is revoked. Details: `infra/integrations-zapier-make.md`.

@@ -341,6 +341,7 @@ model ApiKey {
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  hooks        WebhookEndpoint[]
 
   @@index([orgId])
   @@map("api_keys")
@@ -1340,14 +1341,19 @@ model WebhookEndpoint {
   secretEnc   String   @map("secret_enc")
   active      Boolean  @default(true)
   createdById String?  @map("created_by_id") @db.Uuid
+  /// Set when Zapier, Make or similar subscribed through the public API with this key. Such an
+  /// endpoint receives events only while the key is live, and goes when the key is revoked.
+  apiKeyId    String?  @map("api_key_id") @db.Uuid
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   org        Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
   createdBy  User?             @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  apiKey     ApiKey?           @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
   deliveries WebhookDelivery[]
 
   @@index([orgId])
+  @@index([apiKeyId])
   @@map("webhook_endpoints")
 }
 

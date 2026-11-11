@@ -374,7 +374,9 @@ describe('Custom store', () => {
 describe('registry', () => {
   it('offers the stores, and Shopify only once its app credentials are set', () => {
     const without = buildRegistry({ env: {} });
-    expect(without.list().map((c) => c.key)).toEqual(['custom_store', 'shopify', 'woocommerce']);
+    expect(without.list().map((c) => c.key)).toEqual(
+      expect.arrayContaining(['custom_store', 'shopify', 'woocommerce']),
+    );
     expect(without.toDto(shopify).available).toBe(false);
     const withApp = buildRegistry({ env: { SHOPIFY_CLIENT_ID: 'id', SHOPIFY_CLIENT_SECRET: 's' } });
     expect(withApp.toDto(shopify).available).toBe(true);
