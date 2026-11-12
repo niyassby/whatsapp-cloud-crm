@@ -14,6 +14,7 @@ import type {
 } from '@wacrm/shared';
 import { MemoryStorage, SecretBox } from '@wacrm/shared/server';
 import { WhatsAppClientFactory, type WhatsAppError, type WhatsAppGateway } from '@wacrm/whatsapp';
+import { FakeChatProvider, FakeEmbeddingProvider } from '@wacrm/ai';
 import { buildRegistry } from '@wacrm/connectors';
 import type { WorkerDeps } from '../src/deps';
 
@@ -151,6 +152,8 @@ export function buildDeps(client: DbClient) {
       webhooks.push({ url, headers, body });
       return webhookResponse();
     },
+    // Fake providers: deterministic, no network. AI features still need settings and a plan.
+    ai: { chat: new FakeChatProvider(), embeddings: new FakeEmbeddingProvider() },
     defaultCurrency: 'INR',
   };
   return {

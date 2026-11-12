@@ -32,6 +32,7 @@ export interface ServerToClientEvents {
   'billing:updated': (e: Record<string, never>) => void;
   'notification:new': (e: { userId: string }) => void;
   'integration:updated': (e: { connectionId: string }) => void;
+  'knowledge:updated': (e: { documentId: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -53,6 +54,7 @@ export interface TenantEventMap {
   /** To the org's room, carrying only who it is for. That person fetches it with their own access. */
   'notification:new': { userId: string };
   'integration:updated': { connectionId: string };
+  'knowledge:updated': { documentId: string };
 }
 
 /** Publish to everyone in an org. API: Socket.IO server. Worker: Redis emitter. */

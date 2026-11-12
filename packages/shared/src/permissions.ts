@@ -36,6 +36,8 @@ export const Permission = {
   AUTOMATION_MANAGE: 'automation:manage',
   FLOWS_MANAGE: 'flows:manage',
   INTEGRATIONS_MANAGE: 'integrations:manage',
+  /** AI settings and the knowledge base. Using AI in the inbox only needs INBOX_REPLY. */
+  AI_MANAGE: 'ai:manage',
 } as const;
 export type Permission = (typeof Permission)[keyof typeof Permission];
 

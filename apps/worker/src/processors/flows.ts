@@ -9,15 +9,20 @@
  * those steps are at least once.
  */
 import { randomUUID } from 'node:crypto';
+import { type KnowledgeReply, knowledgeReply } from '@wacrm/ai';
 import {
+  chargeAi,
   chargeMessage,
   conversationInclude,
   conversationToDto,
+  getAiSettings,
+  hasFeature,
   messageInclude,
   messageToDto,
   Prisma,
   type TenantTx,
   withTenant,
+  writeAiLog,
 } from '@wacrm/db';
 import {
   ACTIVE_FLOW_RUN_STATUSES,
@@ -148,7 +153,7 @@ type External =
       error?: string;
       correlation?: string;
     }
-  | { kind: 'ai'; handoff: true; reason: string };
+  | { kind: 'ai'; reason: string | null; reply: KnowledgeReply | null };
 
 const EXTERNAL_TYPES = new Set(['http_request', 'integration_action', 'ai_reply']);
 
@@ -983,10 +988,8 @@ async function execNode(ctx: StepCtx, external: External | null): Promise<Outcom
         detail: r.ok ? { result: r.data } : { error: r.error },
       };
     }
-    case 'ai_reply': {
-      const r = external?.kind === 'ai' ? external : null;
-      return { kind: 'go', handle: 'handoff', detail: { reason: r?.reason ?? 'Did not run' } };
-    }
+    case 'ai_reply':
+      return aiStep(ctx, node, external?.kind === 'ai' ? external : null);
     case 'tag': {
       const tag = await ctx.tx.tag.findUnique({ where: { id: node.data.tagId } });
       if (!tag) throw new FlowNodeError('The tag no longer exists');
@@ -1116,8 +1119,146 @@ async function runExternal(
         }
       : { kind: 'integration', ok: false, data: {}, error: r.error };
   }
-  // TODO(3.7): the AI assistant answers here.
-  return { kind: 'ai', handoff: true, reason: 'AI replies are not set up for this workspace' };
+  return askAssistant(deps, node, where);
+}
+
+/** The AI step's call: the knowledge base and the model, between two transactions. */
+async function askAssistant(
+  deps: WorkerDeps,
+  node: FlowNode,
+  where: { orgId: string; runId: string },
+): Promise<External> {
+  const off = (reason: string): External => ({ kind: 'ai', reason, reply: null });
+  if (node.type !== 'ai_reply') return off('Not an AI step');
+  if (!deps.ai.chat) return off('AI is not set up on this installation');
+  const state = await withTenant(deps.db, { orgId: where.orgId }, async (tx) => ({
+    run: await tx.flowRun.findUnique({
+      where: { id: where.runId },
+      select: { conversationId: true },
+    }),
+    settings: await getAiSettings(tx),
+    planned: await hasFeature(tx, where.orgId, 'ai'),
+  }));
+  if (!state.planned) return off("AI is not included in this workspace's plan");
+  if (!state.settings.enabled) return off('AI is turned off for this workspace');
+  if (!state.run?.conversationId) return off('There is no conversation to answer');
+  try {
+    const reply = await knowledgeReply(deps.db, deps.ai, {
+      orgId: where.orgId,
+      conversationId: state.run.conversationId,
+      instructions: [state.settings.instructions, node.data.instructions],
+    });
+    return { kind: 'ai', reason: null, reply };
+  } catch (err) {
+    // Money, prices and provider failures all end in the team's hands, never in a retry loop.
+    return off(err instanceof Error ? err.message : 'The assistant failed');
+  }
+}
+
+const pct = (n: number) => `${Math.round(n * 100)}%`;
+
+/**
+ * Answer or hand over. An answer is sent only when it is confident enough, the workspace allows
+ * automatic replies and the window is open; otherwise a confident-enough or not draft is kept
+ * as a note for the team. The log entry, the charge and any message commit with the step.
+ */
+async function aiStep(
+  ctx: StepCtx,
+  node: Extract<FlowNode, { type: 'ai_reply' }>,
+  r: Extract<External, { kind: 'ai' }> | null,
+): Promise<Outcome> {
+  if (!r) throw new FlowNodeError('The AI step did not run');
+  const reply = r.reply;
+  if (!reply) {
+    return {
+      kind: 'go',
+      handle: 'handoff',
+      vars: { ai_answer: '', ai_confidence: 0 },
+      detail: { reason: r.reason },
+    };
+  }
+  const settings = await getAiSettings(ctx.tx);
+  const threshold = Math.max(node.data.minConfidence, settings.minConfidence);
+  const logId = randomUUID();
+  let cost = 0;
+  let chargeError: string | null = null;
+  try {
+    cost = await chargeAi(ctx.tx, { orgId: ctx.orgId, logId, usage: reply.usage });
+  } catch (err) {
+    // Checked before writing anything, so the transaction is still usable.
+    if (!(err instanceof AppError)) throw err;
+    chargeError = err.message;
+  }
+  const conv = conversationOf(ctx);
+  const windowOpen = Boolean(conv.windowExpiresAt && conv.windowExpiresAt > ctx.now);
+  const confident =
+    !reply.refused && Boolean(reply.answer) && reply.confidence >= threshold && !chargeError;
+  const send = confident && settings.autoReply && windowOpen;
+  const reason = send
+    ? null
+    : reply.refused
+      ? 'The assistant declined to answer'
+      : !reply.answer
+        ? (reply.handoffReason ?? 'The knowledge base does not cover this')
+        : reply.confidence < threshold
+          ? `Not confident enough (${pct(reply.confidence)}, needs ${pct(threshold)})${reply.handoffReason ? `: ${reply.handoffReason}` : ''}`
+          : (chargeError ??
+            (!settings.autoReply
+              ? 'Automatic AI replies are off, so the answer was saved for the team'
+              : 'The 24-hour window has closed'));
+
+  let messageId: string | null = null;
+  if (send) {
+    messageId = await sendFreeForm(ctx, {
+      type: 'text',
+      body: reply.answer,
+      content: { ai: { logId, confidence: reply.confidence } },
+    });
+  } else if (reply.answer) {
+    // A draft for whoever picks the conversation up. Notes never leave the workspace.
+    const sources = reply.sources.map((s) => s.title).join(', ');
+    await ctx.tx.message.create({
+      data: {
+        id: randomUUID(),
+        createdAt: new Date(ctx.clock++),
+        orgId: ctx.orgId,
+        conversationId: conv.id,
+        direction: 'internal',
+        type: 'note',
+        status: 'sent',
+        body: `AI suggestion, not sent (${pct(reply.confidence)} sure${sources ? `; from ${sources}` : ''}):
+${reply.answer}
+
+Why: ${reason}`,
+        content: { ai: { logId } } as Prisma.InputJsonValue,
+      },
+    });
+    ctx.effects.conversationId = conv.id;
+  }
+  await writeAiLog(ctx.tx, {
+    id: logId,
+    orgId: ctx.orgId,
+    kind: 'flow_reply',
+    status: send ? 'answered' : reply.refused ? 'refused' : 'handoff',
+    model: reply.model,
+    conversationId: conv.id,
+    flowRunId: ctx.run.id,
+    input: reply.question,
+    output: reply.answer,
+    confidence: reply.confidence,
+    sources: reply.sources,
+    sent: send,
+    inputTokens: reply.usage.inputTokens,
+    outputTokens: reply.usage.outputTokens,
+    costMicros: cost,
+    error: chargeError,
+  });
+  return {
+    kind: 'go',
+    handle: send ? 'answered' : 'handoff',
+    vars: { ai_answer: reply.answer, ai_confidence: reply.confidence },
+    detail: { logId, confidence: reply.confidence, sent: send, messageId, reason },
+  };
 }
 
 // ------------------------------------------------------------------ one step

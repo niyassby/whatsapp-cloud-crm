@@ -254,6 +254,10 @@ model Organization {
   integrationConnections IntegrationConnection[]
   integrationEvents      IntegrationEvent[]
   integrationEventClaims IntegrationEventClaim[]
+  aiSettings             AiSettings?
+  knowledgeDocuments     KnowledgeDocument[]
+  knowledgeChunks        KnowledgeChunk[]
+  aiLogs                 AiLog[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -339,8 +343,8 @@ model ApiKey {
   revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(3)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  organization Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy    User?             @relation(fields: [createdById], references: [id], onDelete: SetNull)
   hooks        WebhookEndpoint[]
 
   @@index([orgId])
@@ -1671,4 +1675,102 @@ model IntegrationEventClaim {
   @@id([connectionId, externalId])
   @@index([orgId])
   @@map("integration_event_claims")
+}
+
+// ------------------------------------------------------------------ AI (Phase 3.7)
+
+/// One per workspace; missing means AI is off. Nothing is sent without auto_reply.
+model AiSettings {
+  orgId         String   @id @map("org_id") @db.Uuid
+  enabled       Boolean  @default(false)
+  inboxAssist   Boolean  @default(true) @map("inbox_assist")
+  autoReply     Boolean  @default(false) @map("auto_reply")
+  minConfidence Float    @default(0.7) @map("min_confidence")
+  instructions  String   @default("")
+  updatedById   String?  @map("updated_by_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@map("ai_settings")
+}
+
+/// A knowledge base document. Its text is kept in object storage; the passages are below.
+/// Deleted documents are soft-deleted and their passages removed.
+model KnowledgeDocument {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  orgId          String    @map("org_id") @db.Uuid
+  title          String
+  /// text | upload
+  source         String
+  mimeType       String?   @map("mime_type")
+  sizeBytes      Int       @default(0) @map("size_bytes")
+  fileKey        String    @map("file_key")
+  /// pending | indexing | ready | failed
+  status         String    @default("pending")
+  error          String?
+  chunkCount     Int       @default(0) @map("chunk_count")
+  embeddingModel String?   @map("embedding_model")
+  createdById    String?   @map("created_by_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  org    Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  chunks KnowledgeChunk[]
+
+  @@index([orgId, createdAt])
+  @@map("knowledge_documents")
+}
+
+/// One passage and its embedding. Searched with exact cosine distance within one workspace.
+model KnowledgeChunk {
+  id             String                      @id @default(uuid(7)) @db.Uuid
+  orgId          String                      @map("org_id") @db.Uuid
+  documentId     String                      @map("document_id") @db.Uuid
+  ordinal        Int
+  content        String
+  tokens         Int
+  embedding      Unsupported("vector(1024)")
+  embeddingModel String                      @map("embedding_model")
+  createdAt      DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  org      Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, embeddingModel])
+  @@index([documentId])
+  @@map("knowledge_chunks")
+}
+
+/// Every AI call: what it was given, what it said, what it cost, whether it was sent.
+/// Append-only.
+model AiLog {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  orgId          String   @map("org_id") @db.Uuid
+  /// suggestion | summary | rewrite | flow_reply | indexing
+  kind           String
+  /// answered | handoff | refused | failed
+  status         String
+  model          String
+  conversationId String?  @map("conversation_id") @db.Uuid
+  flowRunId      String?  @map("flow_run_id") @db.Uuid
+  userId         String?  @map("user_id") @db.Uuid
+  input          String
+  output         String
+  confidence     Float?
+  sources        Json     @default("[]")
+  sent           Boolean  @default(false)
+  inputTokens    Int      @map("input_tokens")
+  outputTokens   Int      @map("output_tokens")
+  costMicros     BigInt   @default(0) @map("cost_micros")
+  error          String?
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, createdAt])
+  @@index([orgId, kind, createdAt])
+  @@map("ai_logs")
 }

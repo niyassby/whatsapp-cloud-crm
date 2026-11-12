@@ -183,7 +183,9 @@ function Usage() {
             <TableBody>
               {data.rows.map((r) => (
                 <TableRow key={r.category}>
-                  <TableCell className="capitalize">{r.category}</TableCell>
+                  <TableCell className={AI_RATE_LABELS[r.category] ? undefined : 'capitalize'}>
+                    {AI_RATE_LABELS[r.category] ?? r.category}
+                  </TableCell>
                   <TableCell className="text-right">{r.messages.toLocaleString()}</TableCell>
                   <TableCell className="text-right">
                     {formatMoney(r.costMicros, data.currency)}
@@ -205,6 +207,13 @@ function Usage() {
   );
 }
 
+/** AI usage is priced per million tokens, not per message. */
+const AI_RATE_LABELS: Record<string, string> = {
+  ai_input: 'AI, text read (per million tokens)',
+  ai_output: 'AI, text written (per million tokens)',
+  ai_embedding: 'AI, knowledge base (per million tokens)',
+};
+
 function Rates({ currency }: { currency: string }) {
   const rates = useRates();
   if (!rates.data?.length) return null;
@@ -213,7 +222,8 @@ function Rates({ currency }: { currency: string }) {
       <CardHeader>
         <CardTitle>Current prices</CardTitle>
         <CardDescription>
-          Per message. Utility templates inside a 24-hour window and replies to customers are free.
+          Per message unless shown otherwise. Utility templates inside a 24-hour window and replies
+          to customers are free.
         </CardDescription>
       </CardHeader>
       <CardContent className="max-h-72 overflow-y-auto">

@@ -16,6 +16,7 @@ import { api, ApiError, apiUpload } from '@/lib/api';
 import { handleApiError } from '@/lib/forms';
 import { inboxKeys, isWindowOpen, upsertMessage, useCannedReplies } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
+import { AiMenu } from './ai-menu';
 import { TemplateDialog } from './template-dialog';
 
 /** Re-renders when the window closes, so the composer locks without needing a new event. */
@@ -245,6 +246,12 @@ export function Composer({ conversation }: { conversation: ConversationDto }) {
               </Button>
             </>
           )}
+          <AiMenu
+            conversationId={conversation.id}
+            draft={text}
+            disabled={locked}
+            onText={(value) => setText(value)}
+          />
           <textarea
             value={text}
             onChange={(e) => onInput(e.target.value)}

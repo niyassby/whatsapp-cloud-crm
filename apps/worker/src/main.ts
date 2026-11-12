@@ -1,12 +1,14 @@
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
+import { createAiProviders } from '@wacrm/ai';
 import { createPaymentProviders } from '@wacrm/billing';
 import { createPrismaClient, withTenant } from '@wacrm/db';
 import {
   buildHealth,
   type AutomationJob,
   type FlowJob,
+  type AiJob,
   type IntegrationJob,
   type BillingEventJob,
   type CampaignJob,
@@ -45,6 +47,7 @@ import { processContactJob } from './processors/contact-jobs';
 import { checkSla, runInboxAutomation, slaDueConversations } from './processors/automation';
 import { flowDueRuns, processFlowJob } from './processors/flows';
 import { integrationDueWork, processIntegrationJob } from './processors/integrations';
+import { processAiJob } from './processors/ai';
 import { buildRegistry } from '@wacrm/connectors';
 import { createSafeHttp } from './safe-http';
 import { processBillingEvent } from './processors/billing';
@@ -106,6 +109,10 @@ const automationQueue = new Queue<AutomationJob>(QueueName.AUTOMATION, {
   defaultJobOptions: DEFAULT_JOB_OPTIONS,
 });
 const integrationQueue = new Queue<IntegrationJob>(QueueName.INTEGRATIONS, {
+  ...queueOpts,
+  defaultJobOptions: DEFAULT_JOB_OPTIONS,
+});
+const aiQueue = new Queue<AiJob>(QueueName.AI, {
   ...queueOpts,
   defaultJobOptions: DEFAULT_JOB_OPTIONS,
 });
@@ -199,6 +206,7 @@ const deps: WorkerDeps = {
     const jobId = job.kind === 'event' ? `integration-event-${job.eventId}` : undefined;
     await integrationQueue.add(job.kind, job, { jobId, delay: delayMs });
   },
+  ai: createAiProviders(process.env),
   defaultCurrency: env.WALLET_DEFAULT_CURRENCY,
 };
 
@@ -363,6 +371,16 @@ const integrationWorker = new Worker<IntegrationJob>(
 );
 integrationWorker.on('failed', (job, err) => {
   log.warn({ jobId: job?.id, err: err.message }, 'integration job attempt failed');
+});
+
+// Knowledge base indexing. Few at once: each embeds a whole document.
+const aiWorker = new Worker<AiJob>(
+  QueueName.AI,
+  (job) => processAiJob(deps, job.data, { finalAttempt: isFinalAttempt(job) }),
+  { ...queueOpts, concurrency: 2 },
+);
+aiWorker.on('failed', (job, err) => {
+  log.warn({ jobId: job?.id, err: err.message }, 'ai job attempt failed');
 });
 
 // Its own queue: a customer's slow endpoint cannot hold up anything else.
@@ -555,6 +573,8 @@ async function shutdown() {
     flowWorker.close(),
     integrationWorker.close(),
     integrationQueue.close(),
+    aiWorker.close(),
+    aiQueue.close(),
     flowQueue.close(),
     automationQueue.close(),
     outboundQueue.close(),

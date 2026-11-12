@@ -47,8 +47,22 @@ Memory: Postgres idles at about 50 to 100 MB. To make it smaller still, set
 `shared_buffers = 64MB` in `C:\Program Files\PostgreSQL\16\data\postgresql.conf` and restart the
 `postgresql-x64-<version>` service.
 
-**pgvector** (needed only from phase 3.7, the AI knowledge base) does not come with the Windows
-installer. Phase 3.7 will set it up, or use a hosted Postgres that has it.
+**pgvector** (the AI knowledge base, from phase 3.7) does not come with the Windows installer.
+Build it from the official source with Visual Studio 2022 (the "Desktop development with C++"
+workload), in an "x64 Native Tools Command Prompt for VS 2022" opened as administrator:
+
+```bat
+git clone --branch v0.8.7 https://github.com/pgvector/pgvector.git
+cd pgvector
+set "PGROOT=C:\Program Files\PostgreSQL\18"
+nmake /F Makefile.win
+nmake /F Makefile.win install
+```
+
+The migrations run `CREATE EXTENSION IF NOT EXISTS vector`; check with
+`SELECT default_version FROM pg_available_extensions WHERE name = 'vector'`. After a PostgreSQL
+major upgrade, build it again against the new version. Hosted Postgres (Neon, RDS) offers
+pgvector as an extension to enable.
 
 ## 2. Redis (once)
 

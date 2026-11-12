@@ -13,13 +13,13 @@ const ITEMS: { href: string; label: string; permission?: Permission }[] = [
   { href: '/settings/whatsapp', label: 'WhatsApp', permission: Permission.WHATSAPP_MANAGE },
   { href: '/settings/inbox', label: 'Inbox', permission: Permission.INBOX_ASSIGN },
   { href: '/settings/automation', label: 'Automation', permission: Permission.AUTOMATION_MANAGE },
+  { href: '/settings/ai', label: 'AI assistant', permission: Permission.AI_MANAGE },
   { href: '/settings/contacts', label: 'Contacts', permission: Permission.CONTACTS_MANAGE },
   { href: '/settings/billing', label: 'Billing', permission: Permission.BILLING_READ },
   { href: '/settings/api-keys', label: 'API keys', permission: Permission.API_KEYS_MANAGE },
   { href: '/settings/webhooks', label: 'Webhooks', permission: Permission.API_KEYS_MANAGE },
   { href: '/settings/security', label: 'Security' },
   { href: '/settings/audit', label: 'Audit log', permission: Permission.AUDIT_READ },
-  // Later phases: API keys, billing, integrations.
 ];
 
 export default function SettingsLayout({ children }: { children: ReactNode }) {

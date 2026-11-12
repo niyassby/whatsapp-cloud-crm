@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@socket.io/redis-emitter": "^5.1.0",
+    "@wacrm/ai": "workspace:^",
     "@wacrm/billing": "workspace:^",
     "@wacrm/connectors": "workspace:^",
     "@wacrm/db": "workspace:^",

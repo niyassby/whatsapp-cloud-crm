@@ -22,6 +22,7 @@
     "@nestjs/websockets": "12.3.2",
     "@node-rs/argon2": "^2.2.2",
     "@socket.io/redis-adapter": "^8.3.0",
+    "@wacrm/ai": "workspace:^",
     "@wacrm/billing": "workspace:^",
     "@wacrm/connectors": "workspace:^",
     "@wacrm/db": "workspace:^",

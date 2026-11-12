@@ -23,7 +23,11 @@ export const QueueName = {
   FLOWS: 'flows',
   /** Integration events, actions run outside flows, token refresh, health checks and syncs. */
   INTEGRATIONS: 'integrations',
+  /** Knowledge base indexing (embedding). Its own queue: a big document cannot delay messages. */
+  AI: 'ai',
 } as const;
+
+export type AiJob = { kind: 'index'; orgId: string; documentId: string };
 
 export type IntegrationJob =
   /** An inbound event (webhook or sync) to map and act on. */

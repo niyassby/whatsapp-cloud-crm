@@ -41,6 +41,9 @@ const env = {
   META_GRAPH_BASE_URL: `http://127.0.0.1:${PORTS.graph}`,
   WEBHOOK_ALLOW_PRIVATE_URLS: 'true',
   INTEGRATIONS_DEMO: 'true',
+  // Deterministic AI with no network: hashed word vectors and answers from the best passage.
+  AI_PROVIDER: 'fake',
+  AI_EMBEDDINGS_PROVIDER: 'fake',
   API_PUBLIC_URL: API_URL,
   STRIPE_SECRET_KEY: 'sk_test_e2e',
   STRIPE_WEBHOOK_SECRET,

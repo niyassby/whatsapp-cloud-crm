@@ -1,3 +1,4 @@
+import type { AiProviders } from '@wacrm/ai';
 import type { PaymentProviders } from '@wacrm/billing';
 import type { ConnectorRegistry } from '@wacrm/connectors';
 import type { DbClient } from '@wacrm/db';
@@ -50,6 +51,8 @@ export interface WorkerDeps {
   /** Where connectors' OAuth app credentials are read from. */
   env: Record<string, string | undefined>;
   enqueueIntegrationJob: (job: IntegrationJob, delayMs?: number) => Promise<void>;
+  /** Chat and embedding providers; either can be null when not configured. */
+  ai: AiProviders;
   /** For a workspace whose first paid send comes from a drip. */
   defaultCurrency: string;
 }

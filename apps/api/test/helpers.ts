@@ -3,6 +3,8 @@ import { PAYMENT_PROVIDERS } from '../src/billing/billing.tokens';
 import 'reflect-metadata';
 import { buildRegistry, type ConnectorRegistry } from '@wacrm/connectors';
 import { CONNECTORS, INTEGRATIONS_FETCH } from '../src/integrations/integrations.tokens';
+import { type AiProviders, FakeChatProvider, FakeEmbeddingProvider } from '@wacrm/ai';
+import { AI_PROVIDERS } from '../src/ai/ai.tokens';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
@@ -27,6 +29,8 @@ export interface BuildOptions {
   connectors?: ConnectorRegistry;
   /** Fetch for OAuth token requests. */
   fetch?: typeof fetch;
+  /** AI providers; the deterministic fakes by default. */
+  ai?: AiProviders;
 }
 
 export interface TestApp {
@@ -68,6 +72,8 @@ export async function buildApp(extra: BuildOptions = {}): Promise<TestApp> {
     .useValue(extra.payments ?? {})
     .overrideProvider(CONNECTORS)
     .useValue(extra.connectors ?? buildRegistry())
+    .overrideProvider(AI_PROVIDERS)
+    .useValue(extra.ai ?? { chat: new FakeChatProvider(), embeddings: new FakeEmbeddingProvider() })
     .overrideProvider(INTEGRATIONS_FETCH)
     .useValue(
       extra.fetch ??

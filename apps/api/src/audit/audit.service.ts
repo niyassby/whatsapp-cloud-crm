@@ -43,6 +43,7 @@ export const AuditAction = {
   AUTOMATION_CHANGED: 'automation.changed',
   FLOW_CHANGED: 'flow.changed',
   INTEGRATION_CHANGED: 'integration.changed',
+  AI_CHANGED: 'ai.changed',
   API_KEY_CREATED: 'api_key.created',
   API_KEY_REVOKED: 'api_key.revoked',
   WEBHOOK_ENDPOINT_CREATED: 'webhook_endpoint.created',

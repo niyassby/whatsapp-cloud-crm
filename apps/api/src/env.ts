@@ -69,6 +69,18 @@ export const apiEnvSchema = z.object({
   /** Registers the Demo Store connector, for trying integrations locally. Same value as the worker. */
   INTEGRATIONS_DEMO: booleanString.default(false),
 
+  /** AI (both API and worker). Unset: AI features are unavailable. `fake` is for local runs and tests. */
+  AI_PROVIDER: z.enum(['anthropic', 'fake']).optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  /** Defaults to claude-opus-5-5. */
+  AI_MODEL: z.string().optional(),
+  /** Embeddings for the knowledge base: voyage, openai (any OpenAI-compatible endpoint) or fake. */
+  AI_EMBEDDINGS_PROVIDER: z.enum(['voyage', 'openai', 'fake']).optional(),
+  AI_EMBEDDINGS_MODEL: z.string().optional(),
+  VOYAGE_API_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: z.url().optional(),
+
   /** A provider is only active when all of its values are set. Local fakes use the *_API_BASE. */
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),

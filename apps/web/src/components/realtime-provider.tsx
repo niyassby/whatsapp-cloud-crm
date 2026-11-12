@@ -18,6 +18,7 @@ import { contactKeys } from '@/lib/contacts';
 import { env } from '@/lib/env';
 import { applyConversationUpdate, inboxKeys, upsertMessage } from '@/lib/inbox';
 import { integrationKeys } from '@/lib/integrations';
+import { aiKeys } from '@/lib/ai';
 import { queryKeys, useMe } from '@/lib/queries';
 import { templateKeys } from '@/lib/templates';
 import { automationKeys } from '@/lib/automation';
@@ -135,6 +136,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: integrationKeys.connections });
       void queryClient.invalidateQueries({ queryKey: integrationKeys.connection(connectionId) });
       void queryClient.invalidateQueries({ queryKey: integrationKeys.events(connectionId) });
+    });
+    socket.on('knowledge:updated', () => {
+      void queryClient.invalidateQueries({ queryKey: aiKeys.knowledge });
+      // Reading a document is charged and logged.
+      void queryClient.invalidateQueries({ queryKey: aiKeys.log });
     });
     socket.on('contact:updated', () => {
       void queryClient.invalidateQueries({ queryKey: contactKeys.all });

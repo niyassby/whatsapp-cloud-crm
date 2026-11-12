@@ -41,6 +41,18 @@ export const workerEnvSchema = z.object({
     .enum(['true', 'false', '1', '0'])
     .transform((v) => v === 'true' || v === '1')
     .default(false),
+
+  /** AI (both API and worker). Unset: AI features are unavailable. `fake` is for local runs and tests. */
+  AI_PROVIDER: z.enum(['anthropic', 'fake']).optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  /** Defaults to claude-opus-5-5. */
+  AI_MODEL: z.string().optional(),
+  /** Embeddings for the knowledge base: voyage, openai (any OpenAI-compatible endpoint) or fake. */
+  AI_EMBEDDINGS_PROVIDER: z.enum(['voyage', 'openai', 'fake']).optional(),
+  AI_EMBEDDINGS_MODEL: z.string().optional(),
+  VOYAGE_API_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: z.url().optional(),
   /** The API as providers reach it, for webhook addresses registered by connectors. Same value as the API. */
   API_PUBLIC_URL: z.url().default('http://localhost:4000'),
   /** Registers the Demo Store connector, for trying integrations locally. Same value as the API. */

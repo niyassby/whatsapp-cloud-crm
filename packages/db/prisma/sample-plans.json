@@ -33,7 +33,7 @@
       "seats": 10,
       "numbers": 3,
       "contacts": 25000,
-      "features": ["campaigns", "drips", "public_api", "flows", "integrations"],
+      "features": ["campaigns", "drips", "public_api", "flows", "integrations", "ai"],
       "isTrial": true,
       "sortOrder": 2,
       "prices": [
@@ -60,7 +60,7 @@
       "seats": null,
       "numbers": null,
       "contacts": null,
-      "features": ["campaigns", "drips", "public_api", "flows", "integrations"],
+      "features": ["campaigns", "drips", "public_api", "flows", "integrations", "ai"],
       "sortOrder": 3,
       "prices": [
         {

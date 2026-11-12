@@ -75,6 +75,11 @@ export const ErrorCode = {
   INTEGRATION_NOT_AVAILABLE: 'INTEGRATION_NOT_AVAILABLE',
   INTEGRATION_INVALID: 'INTEGRATION_INVALID',
   INTEGRATION_SIGNATURE_INVALID: 'INTEGRATION_SIGNATURE_INVALID',
+  /** No AI provider is configured on this installation, or the workspace has AI turned off. */
+  AI_NOT_AVAILABLE: 'AI_NOT_AVAILABLE',
+  /** The AI provider failed or declined; nothing was charged. */
+  AI_PROVIDER_ERROR: 'AI_PROVIDER_ERROR',
+  KNOWLEDGE_INVALID: 'KNOWLEDGE_INVALID',
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -130,6 +135,9 @@ export const errorHttpStatus: Record<ErrorCode, number> = {
   INTEGRATION_NOT_AVAILABLE: 409,
   INTEGRATION_INVALID: 400,
   INTEGRATION_SIGNATURE_INVALID: 401,
+  AI_NOT_AVAILABLE: 409,
+  AI_PROVIDER_ERROR: 502,
+  KNOWLEDGE_INVALID: 400,
 };
 
 /** Typed application error carrying a stable code. */

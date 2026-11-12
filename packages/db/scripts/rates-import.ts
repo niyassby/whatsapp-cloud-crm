@@ -9,9 +9,17 @@
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { decimalToMicros, RATE_ANY_COUNTRY, RATE_CATEGORIES } from '@wacrm/shared';
+import {
+  AI_RATE_CATEGORIES,
+  decimalToMicros,
+  RATE_ANY_COUNTRY,
+  RATE_CATEGORIES,
+} from '@wacrm/shared';
 import { config as loadDotenv } from 'dotenv';
 import { createPrismaClient } from '../src/client';
+
+/** Message categories are priced per message; AI categories per million tokens. */
+const CATEGORIES: string[] = [...RATE_CATEGORIES, ...Object.values(AI_RATE_CATEGORIES)];
 
 loadDotenv({ path: path.resolve(__dirname, '../../../.env'), quiet: true });
 
@@ -39,8 +47,8 @@ export function parseRateCsv(text: string): RateRow[] {
     if (country !== RATE_ANY_COUNTRY && !/^[A-Z]{2}$/.test(country ?? '')) {
       throw new Error(`Row ${row}: country must be a two-letter code or *`);
     }
-    if (!(RATE_CATEGORIES as readonly string[]).includes(category ?? '')) {
-      throw new Error(`Row ${row}: category must be one of ${RATE_CATEGORIES.join(', ')}`);
+    if (!CATEGORIES.includes(category ?? '')) {
+      throw new Error(`Row ${row}: category must be one of ${CATEGORIES.join(', ')}`);
     }
     if (!/^[A-Z]{3}$/.test(currency ?? '')) throw new Error(`Row ${row}: bad currency`);
     const micros = decimalToMicros(rate ?? '');
