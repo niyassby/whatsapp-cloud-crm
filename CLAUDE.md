@@ -581,7 +581,7 @@ Add one line per decision: date, decision, reason.
 - Imports and exports hold the whole file in memory (50 MB cap on imports). Exports of very large lists should move to multipart upload.
 - No automatic duplicate detection: people choose contacts to merge. Numbers are normalized, so the same number cannot exist twice unless a webhook stored it differently.
 - No START keyword: a customer who opted out can only be opted back in by a person recording proof.
-- E2E import and export tests skip in CI, which has no S3 service.
+- E2E import and export tests, and the AI knowledge base spec, skip in CI, which has no S3 service.
 - Settings > WhatsApp shows the raw event type; friendlier labels can wait for the inbox.
 
 - Campaigns: variables come from the template's mapping or CSV columns, with no per-campaign mapping screen yet (the API accepts one). Tier limits in `messaging_tier_limits` come from Meta's published tiers and need checking against current limits. A real campaign has not run against Meta.

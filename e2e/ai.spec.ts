@@ -6,6 +6,9 @@
 import { expect, type Page, test } from '@playwright/test';
 import { createWorkspace, customerSays, logIn, openConversation } from './support/helpers';
 
+// Knowledge text is kept in object storage.
+test.skip(Boolean(process.env.CI), 'CI has no S3 service');
+
 let ws: Awaited<ReturnType<typeof createWorkspace>>;
 let owner: Page;
 
