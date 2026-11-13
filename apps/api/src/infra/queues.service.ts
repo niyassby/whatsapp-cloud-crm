@@ -1,6 +1,7 @@
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import {
   type AiJob,
+  type AutomationJob,
   type BillingEventJob,
   type FlowJob,
   type IntegrationJob,
@@ -33,6 +34,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   readonly flows: Queue<FlowJob>;
   readonly integrations: Queue<IntegrationJob>;
   readonly ai: Queue<AiJob>;
+  readonly automation: Queue<AutomationJob>;
 
   constructor(@Inject(API_ENV) env: ApiEnv) {
     const opts = {
@@ -53,6 +55,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
     this.flows = new Queue(QueueName.FLOWS, opts);
     this.integrations = new Queue(QueueName.INTEGRATIONS, opts);
     this.ai = new Queue(QueueName.AI, opts);
+    this.automation = new Queue(QueueName.AUTOMATION, opts);
     this.contactJobs = new Queue(QueueName.CONTACT_JOBS, {
       ...opts,
       defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, attempts: 3 },
@@ -71,6 +74,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.flows.waitUntilReady(),
       this.integrations.waitUntilReady(),
       this.ai.waitUntilReady(),
+      this.automation.waitUntilReady(),
     ]);
   }
 
@@ -88,6 +92,11 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   async enqueueIntegrationJob(job: IntegrationJob): Promise<void> {
     const jobId = job.kind === 'event' ? `integration-event-${job.eventId}` : undefined;
     await this.integrations.add(job.kind, job, { jobId });
+  }
+
+  /** Rules and flows for a message the API saved itself (website chat). Keyed like the worker. */
+  async enqueueAutomation(job: AutomationJob): Promise<void> {
+    await this.automation.add('run', job, { jobId: `auto-${job.messageId}` });
   }
 
   /** Index a knowledge document (also after an edit or a reindex request). */
@@ -140,6 +149,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.flows.close(),
       this.integrations.close(),
       this.ai.close(),
+      this.automation.close(),
     ]);
   }
 }

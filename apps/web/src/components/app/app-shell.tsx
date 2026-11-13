@@ -19,6 +19,7 @@ import type { ReactNode } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useMe } from '@/lib/queries';
 import { cn } from '@/lib/utils';
+import { CallBar } from '@/components/inbox/call-bar';
 import { ImpersonationBanner } from './impersonation-banner';
 import { LowBalanceBanner } from './low-balance-banner';
 import { NoOrg } from './no-org';
@@ -128,6 +129,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         {me.data && !me.data.user.emailVerified && !me.data.impersonation && (
           <VerifyEmailBanner email={me.data.user.email} />
         )}
+        {usable && <CallBar />}
         {usable && <TrialBanner />}
         {usable && <LowBalanceBanner />}
         {usable && <ReconnectBanner />}

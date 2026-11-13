@@ -12,6 +12,13 @@ export const PLAN_FEATURES = [
   'flows',
   'integrations',
   'ai',
+  'webchat',
+  'instagram',
+  'qr_codes',
+  'catalog',
+  'ad_attribution',
+  'groups',
+  'calling',
 ] as const;
 export type PlanFeature = (typeof PLAN_FEATURES)[number];
 
@@ -22,6 +29,13 @@ export const PLAN_FEATURE_LABELS: Record<PlanFeature, string> = {
   flows: 'Chatbot flows',
   integrations: 'Integrations',
   ai: 'AI assistant and knowledge base',
+  webchat: 'Website chat widget',
+  instagram: 'Instagram messages',
+  qr_codes: 'QR codes and short links',
+  catalog: 'Catalog and product messages',
+  ad_attribution: 'Click-to-WhatsApp ad reports',
+  groups: 'WhatsApp groups',
+  calling: 'WhatsApp calling',
 };
 
 /** Where a workspace lands when a trial or subscription ends. */

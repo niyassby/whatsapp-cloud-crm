@@ -523,7 +523,8 @@ export function renderedText(rendered: RenderedTemplate): string {
 
 export interface ContactForTemplate {
   name: string | null;
-  waId: string;
+  /** Null for someone known only on Instagram or website chat. */
+  waId: string | null;
   email: string | null;
   customFields: Record<string, FieldValue>;
 }
@@ -541,7 +542,7 @@ export function resolveVariable(source: VariableSource | undefined, c: ContactFo
     case 'name':
       return c.name ?? '';
     case 'phone':
-      return `+${c.waId}`;
+      return c.waId ? `+${c.waId}` : '';
     case 'email':
       return c.email ?? '';
   }

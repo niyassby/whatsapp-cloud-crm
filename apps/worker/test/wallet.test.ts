@@ -1,6 +1,13 @@
 /** Refunds in the send and status paths. */
 import { randomUUID } from 'node:crypto';
-import { creditWallet, debitWallet, type DbClient, ensureWallet, withTenant } from '@wacrm/db';
+import {
+  creditWallet,
+  debitWallet,
+  type DbClient,
+  ensureWallet,
+  withTenant,
+  whatsappChannelId,
+} from '@wacrm/db';
 import { messageDebitKey } from '@wacrm/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { processMessagesChange } from '../src/processors/inbound';
@@ -30,7 +37,12 @@ async function charged(opts: { status?: 'queued' | 'sending' | 'sent' } = {}) {
       data: { orgId, waId: '919876543210', optInStatus: 'opted_in' },
     });
     const conversation = await tx.conversation.create({
-      data: { orgId, phoneId: number.id, contactId: contact.id },
+      data: {
+        orgId,
+        phoneId: number.id,
+        channelId: await whatsappChannelId(tx, number.id),
+        contactId: contact.id,
+      },
     });
     await debitWallet(tx, {
       orgId,

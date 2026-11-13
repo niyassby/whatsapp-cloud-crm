@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { withTenant } from '@wacrm/db';
+import { withTenant, whatsappChannelId } from '@wacrm/db';
 import { createPrismaClient, type DbClient } from '@wacrm/db';
 import { QueueName } from '@wacrm/shared';
 import { Queue } from 'bullmq';
@@ -319,12 +319,19 @@ describe('merge', () => {
         ),
       );
       const target = await tx.conversation.create({
-        data: { orgId, phoneId: phones[0]!.id, contactId: primary.id, unreadCount: 1 },
+        data: {
+          orgId,
+          phoneId: phones[0]!.id,
+          channelId: await whatsappChannelId(tx, phones[0]!.id),
+          contactId: primary.id,
+          unreadCount: 1,
+        },
       });
       const source = await tx.conversation.create({
         data: {
           orgId,
           phoneId: phones[0]!.id,
+          channelId: await whatsappChannelId(tx, phones[0]!.id),
           contactId: dup.id,
           unreadCount: 2,
           windowExpiresAt: open,
@@ -333,10 +340,21 @@ describe('merge', () => {
         },
       });
       const moved = await tx.conversation.create({
-        data: { orgId, phoneId: phones[1]!.id, contactId: dup.id, windowExpiresAt: open },
+        data: {
+          orgId,
+          phoneId: phones[1]!.id,
+          channelId: await whatsappChannelId(tx, phones[1]!.id),
+          contactId: dup.id,
+          windowExpiresAt: open,
+        },
       });
       await tx.conversation.create({
-        data: { orgId, phoneId: phones[1]!.id, contactId: other.id },
+        data: {
+          orgId,
+          phoneId: phones[1]!.id,
+          channelId: await whatsappChannelId(tx, phones[1]!.id),
+          contactId: other.id,
+        },
       });
       await tx.message.create({
         data: {

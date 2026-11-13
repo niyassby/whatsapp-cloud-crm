@@ -30,6 +30,11 @@ export const workerEnvSchema = z.object({
     .regex(/^v\d+\.\d+$/)
     .default('v25.0'),
   META_GRAPH_BASE_URL: z.url().optional(),
+  /** Instagram messaging: the Instagram app of the Meta app (App Dashboard > Instagram). */
+  INSTAGRAM_APP_ID: z.string().min(1).optional(),
+  INSTAGRAM_APP_SECRET: z.string().min(1).optional(),
+  /** Local fakes only: one base for Instagram login, token exchange and Graph. Refused in production. */
+  INSTAGRAM_BASE_URL: z.url().optional(),
   /** Cloud API default throughput per number. Config, since Meta raises it for some numbers. */
   OUTBOUND_MPS_PER_NUMBER: z.coerce.number().int().positive().default(80),
   /** Lower than the line above, so inbox replies always find room on a busy number. */

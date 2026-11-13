@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import type { MediaUrlDto, MessageDto } from '@wacrm/shared';
-import { AlertCircle, Check, CheckCheck, Clock, FileText, Lock } from 'lucide-react';
+import { AlertCircle, Check, CheckCheck, Clock, FileText, Lock, Phone } from 'lucide-react';
 import { api } from '@/lib/api';
 import { timeLabel } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
@@ -84,6 +84,15 @@ function MediaPreview({ message }: { message: MessageDto }) {
   );
 }
 
+const TYPE_LABELS: Record<string, string> = {
+  call: 'Call',
+  order: 'Order',
+  product: 'Product',
+  product_list: 'Products',
+  catalog: 'Catalog',
+  call_permission_request: 'Call permission request',
+};
+
 export function MessageBubble({ message }: { message: MessageDto }) {
   const isNote = message.direction === 'internal';
   const isOutbound = message.direction === 'outbound';
@@ -118,6 +127,31 @@ export function MessageBubble({ message }: { message: MessageDto }) {
         {message.media && <MediaPreview message={message} />}
         {message.type === 'template' && (
           <p className="mb-0.5 text-xs font-medium uppercase tracking-wide opacity-60">Template</p>
+        )}
+        {TYPE_LABELS[message.type] && (
+          <p className="mb-0.5 flex items-center gap-1 text-xs font-medium uppercase tracking-wide opacity-60">
+            {message.type === 'call' ? <Phone className="size-3" aria-hidden /> : null}
+            {TYPE_LABELS[message.type]}
+          </p>
+        )}
+        {message.detail?.kind === 'order' && (
+          <div className="mb-1 text-sm" data-testid="order-detail">
+            <ul className="list-inside list-disc">
+              {message.detail.items.map((i) => (
+                <li key={i.retailerId}>
+                  {i.quantity} x {i.retailerId} at {i.price} {i.currency}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1 font-medium">
+              Total {message.detail.total} {message.detail.currency}
+            </p>
+          </div>
+        )}
+        {message.detail?.kind === 'products' && (
+          <p className="text-xs opacity-70">
+            {message.detail.count} product{message.detail.count === 1 ? '' : 's'}
+          </p>
         )}
         {message.body && (
           <p className={cn('whitespace-pre-wrap break-words text-sm', isReaction && 'text-2xl')}>

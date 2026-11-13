@@ -7,11 +7,13 @@ import {
   withTenant,
 } from '@wacrm/db';
 import type { WorkerDeps } from '../deps';
+import { processCallsChange, processGroupChange, processInstagramEvent } from './channels';
 import { processMessagesChange } from './inbound';
 
 interface EventRow {
   id: string;
   org_id: string | null;
+  provider: string;
   waba_id: string | null;
   phone_number_id: string | null;
   field: string | null;
@@ -134,6 +136,7 @@ export async function routeWebhookEvent(deps: WorkerDeps, eventId: string): Prom
   >`SELECT * FROM webhook_event_load(${eventId}::uuid)`;
   if (!event) return 'missing'; // purged by retention
   if (event.status !== 'received') return 'skipped';
+  if (event.provider === 'instagram') return routeInstagramEvent(deps, event);
 
   // Keep an earlier routing decision, so history stays with the org it belonged to.
   const [route] = event.org_id
@@ -147,9 +150,28 @@ export async function routeWebhookEvent(deps: WorkerDeps, eventId: string): Prom
 
   await withTenant(db, { orgId: route.org_id }, (tx) => applyAccountEvent(tx, route.org_id, event));
   if (event.field === 'messages') await processMessagesChange(deps, route.org_id, event.payload);
+  if (event.field === 'calls') await processCallsChange(deps, route.org_id, event.payload);
+  if (event.field?.startsWith('group_')) {
+    await processGroupChange(deps, route.org_id, event.field, event.payload);
+  }
   if (event.field && TEMPLATE_WEBHOOK_FIELDS.has(event.field) && event.waba_id) {
     await applyTemplateChange(deps, route.org_id, event, event.field, event.waba_id);
   }
   await markEvent(db, eventId, 'processed', route.org_id, null);
+  return 'processed';
+}
+
+/** Instagram events name the account, which names the channel and so the workspace. */
+async function routeInstagramEvent(deps: WorkerDeps, event: EventRow): Promise<RouteOutcome> {
+  const { db } = deps;
+  // Reviewed raw SQL: a definer function, since no workspace is known until the account is.
+  const [route] = await db.$queryRaw<{ org_id: string; channel_id: string }[]>`
+    SELECT org_id, channel_id FROM channel_route_lookup('instagram'::"ChannelKind", ${event.waba_id})`;
+  if (!route || (event.org_id && event.org_id !== route.org_id)) {
+    await markEvent(db, event.id, 'ignored', null, 'No connected Instagram account for this event');
+    return 'ignored';
+  }
+  await processInstagramEvent(deps, route.org_id, route.channel_id, event.payload);
+  await markEvent(db, event.id, 'processed', route.org_id, null);
   return 'processed';
 }

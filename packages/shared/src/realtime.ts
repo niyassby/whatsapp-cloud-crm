@@ -1,5 +1,7 @@
 import type { ContactJobDto } from './contacts';
 import type { ConversationDto, MessageDto } from './inbox';
+import type { WebchatMessageDto } from './channels';
+import type { CallDto } from './wa-modules';
 
 /** Socket.IO rooms. Every tenant event goes to one org room, so it cannot reach another org. */
 export const orgRoom = (orgId: string) => `org:${orgId}`;
@@ -33,6 +35,8 @@ export interface ServerToClientEvents {
   'notification:new': (e: { userId: string }) => void;
   'integration:updated': (e: { connectionId: string }) => void;
   'knowledge:updated': (e: { documentId: string }) => void;
+  'call:updated': (e: { call: CallDto; offer?: string; answer?: string }) => void;
+  'channel:updated': (e: { channelId: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -55,9 +59,14 @@ export interface TenantEventMap {
   'notification:new': { userId: string };
   'integration:updated': { connectionId: string };
   'knowledge:updated': { documentId: string };
+  /** offer: an inbound call's SDP. answer: Meta's answer to a call an agent started. */
+  'call:updated': { call: CallDto; offer?: string; answer?: string };
+  'channel:updated': { channelId: string };
 }
 
 /** Publish to everyone in an org. API: Socket.IO server. Worker: Redis emitter. */
 export interface RealtimePublisher {
   emit<E extends keyof TenantEventMap>(orgId: string, event: E, payload: TenantEventMap[E]): void;
+  /** To the website visitor in this conversation, on the /webchat namespace. */
+  emitVisitor(conversationId: string, message: WebchatMessageDto): void;
 }

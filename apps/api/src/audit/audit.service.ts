@@ -65,6 +65,11 @@ export const AuditAction = {
   CLIENT_DELETED: 'partner.client_deleted',
   WALLET_CREDITED: 'wallet.credited',
   PLAN_SET: 'billing.plan_set',
+  CHANNEL_CHANGED: 'channel.changed',
+  QR_CODE_CHANGED: 'qr_code.changed',
+  GROUP_CHANGED: 'group.changed',
+  CALLING_CHANGED: 'calling.changed',
+  CATALOG_SYNCED: 'catalog.synced',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 

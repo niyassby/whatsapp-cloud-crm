@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createPrismaClient, type DbClient } from '../src/client';
 import { withDbContext, withTenant } from '../src/tenant';
+export { whatsappChannelId } from '../src/channels';
 import { TEST_DATABASE_URL, TEST_DIRECT_URL } from './urls';
 
 /** Owner connection: used only to build fixtures, never to assert isolation. */

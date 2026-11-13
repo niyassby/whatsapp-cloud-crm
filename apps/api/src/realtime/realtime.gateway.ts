@@ -19,6 +19,9 @@ import {
   SOCKET_PATH,
   type TenantEventMap,
   userRoom,
+  WEBCHAT_NAMESPACE,
+  type WebchatMessageDto,
+  webchatRoom,
 } from '@wacrm/shared';
 import type { Server, Socket } from 'socket.io';
 import { AuthenticatorService } from '../auth/authenticator.service';
@@ -143,6 +146,12 @@ export class RealtimeGateway
   emit<E extends keyof TenantEventMap>(orgId: string, event: E, payload: TenantEventMap[E]): void {
     const room = this.server.to(orgRoom(orgId));
     (room.emit as (e: string, p: unknown) => boolean)(event, payload);
+  }
+
+  /** To the website visitor of this conversation, on their own namespace. */
+  emitVisitor(conversationId: string, message: WebchatMessageDto): void {
+    const visitors = this.server.of(WEBCHAT_NAMESPACE) as unknown as Server;
+    visitors.to(webchatRoom(conversationId)).emit('message:new', { message });
   }
 
   // ------------------------------------------------------------------ revocation

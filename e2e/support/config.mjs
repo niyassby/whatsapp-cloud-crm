@@ -10,3 +10,7 @@ export const QUEUE_PREFIX = 'wacrm-e2e';
 /** Sending to this number makes the fake Meta report a delivery failure. */
 export const FAILING_RECIPIENT = '919800000099';
 export const FAILURE_TEXT = 'Message undeliverable';
+/** Signs fake Instagram webhooks. Fake value. */
+export const IG_APP_SECRET = 'e2e-instagram-secret';
+/** The fake Instagram professional account. */
+export const IG_ACCOUNT_ID = '17841499999990001';

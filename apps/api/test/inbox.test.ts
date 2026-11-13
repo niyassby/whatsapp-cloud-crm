@@ -7,6 +7,7 @@ import {
   type DbClient,
   ensureWallet,
   withTenant,
+  whatsappChannelId,
 } from '@wacrm/db';
 import { ErrorCode } from '@wacrm/shared';
 import { phoneTokenAad, SecretBox } from '@wacrm/shared/server';
@@ -161,6 +162,7 @@ async function seedConversation(
       data: {
         orgId,
         phoneId: phone.id,
+        channelId: await whatsappChannelId(tx, phone.id),
         contactId: contact.id,
         lastMessageAt: opts.at ?? new Date(),
         lastMessagePreview: 'Hello',
@@ -185,7 +187,7 @@ async function templateId(org: Org, conversationId: string, name: string) {
       select: { phone: { select: { wabaAccountId: true } } },
     });
     return tx.messageTemplate.findFirst({
-      where: { name, wabaAccountId: c.phone.wabaAccountId },
+      where: { name, wabaAccountId: c.phone!.wabaAccountId },
       select: { id: true },
     });
   });

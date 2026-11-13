@@ -2,18 +2,26 @@
 import { Whatsapp, type WhatsappResponse } from 'wapi-cloud';
 import { type GatewayResult, mapError, result } from './errors';
 import type {
+  CallingSettings,
+  CallPermission,
+  CreateGroupGatewayInput,
   CreatedTemplate,
   CreateTemplateInput,
   DeleteTemplateInput,
   DownloadedMedia,
+  GroupInfo,
+  GroupJoinRequest,
   ListTemplatesInput,
   MediaInfo,
   MessageTemplate,
   PhoneCredentials,
   PhoneInfo,
+  ProductPage,
+  QrCodeInfo,
   SendInteractiveInput,
   SendMediaInput,
   SendOpts,
+  SendProductsGatewayInput,
   SendTemplateInput,
   SendTextInput,
   SentMessage,
@@ -233,4 +241,228 @@ export class WapiCloudGateway implements WhatsAppGateway {
   async register(pin: string) {
     return convert(await this.sdk.phoneNumbers.register({ pin }), (d) => d);
   }
+
+  // ---------------------------------------------------------------- QR codes and short links
+
+  async createQrCode(prefilledMessage: string): Promise<GatewayResult<QrCodeInfo>> {
+    return convert(await this.sdk.qrCodes.create({ prefilledMessage }), toQr);
+  }
+
+  async updateQrCode(code: string, prefilledMessage: string): Promise<GatewayResult<QrCodeInfo>> {
+    return convert(await this.sdk.qrCodes.update(code, { prefilledMessage }), toQr);
+  }
+
+  async deleteQrCode(code: string) {
+    return convert(await this.sdk.qrCodes.delete(code), (d) => ({ success: d.success }));
+  }
+
+  // ---------------------------------------------------------------- catalog
+
+  async getConnectedCatalog() {
+    const res = await this.sdk.catalogs.listConnectedToWaba(this.wabaId);
+    return convert(res, (d) => {
+      const first = d.data[0];
+      return first ? { id: first.id, name: first.name } : null;
+    });
+  }
+
+  async listProducts(catalogId: string, after?: string): Promise<GatewayResult<ProductPage>> {
+    const res = await this.sdk.products.list(catalogId, { limit: 100, after });
+    return convert(res, (d) => ({
+      items: d.items.map((p) => ({
+        retailerId: p.retailer_id,
+        name: p.name,
+        description: p.description ?? null,
+        price: p.price ?? null,
+        currency: p.currency ?? null,
+        imageUrl: p.image_url ?? null,
+        availability: p.availability ?? null,
+      })),
+      nextCursor: d.pageInfo.hasNext ? d.pageInfo.nextCursor : undefined,
+    }));
+  }
+
+  async sendProducts(to: string, input: SendProductsGatewayInput, opts?: SendOpts) {
+    const m = this.sdk.messages;
+    const o = sdkOpts(opts);
+    if (input.kind === 'product') {
+      const res = await m.sendProduct(
+        to,
+        { catalogId: input.catalogId, productRetailerId: input.retailerId, body: input.body },
+        o,
+      );
+      return convert(res, sent);
+    }
+    if (input.kind === 'product_list') {
+      const res = await m.sendProductList(
+        to,
+        {
+          catalogId: input.catalogId,
+          header: input.header,
+          body: input.body,
+          sections: input.sections.map((s) => ({
+            title: s.title,
+            productRetailerIds: s.retailerIds,
+          })),
+        },
+        o,
+      );
+      return convert(res, sent);
+    }
+    const res = await m.sendCatalog(
+      to,
+      { body: input.body, thumbnailProductRetailerId: input.thumbnailRetailerId },
+      o,
+    );
+    return convert(res, sent);
+  }
+
+  // ---------------------------------------------------------------- groups
+
+  async createGroup(input: CreateGroupGatewayInput) {
+    const res = await this.sdk.groups.create({
+      subject: input.subject,
+      description: input.description,
+      joinApprovalMode: input.joinApprovalMode,
+    });
+    return convert(res, (d) => ({ groupId: typeof d.id === 'string' ? d.id : null }));
+  }
+
+  async getGroup(groupId: string): Promise<GatewayResult<GroupInfo>> {
+    const res = await this.sdk.groups.get(groupId, [
+      'subject',
+      'description',
+      'total_participant_count',
+      'join_approval_mode',
+    ]);
+    return convert(res, (g) => ({
+      id: g.id,
+      subject: g.subject ?? null,
+      description: g.description ?? null,
+      participantCount: g.total_participant_count ?? null,
+      joinApprovalMode: g.join_approval_mode ?? null,
+    }));
+  }
+
+  async getGroupInviteLink(groupId: string) {
+    return convert(await this.sdk.groups.getInviteLink(groupId), (d) => ({
+      inviteLink: d.invite_link,
+    }));
+  }
+
+  async listGroupJoinRequests(groupId: string): Promise<GatewayResult<GroupJoinRequest[]>> {
+    return convert(await this.sdk.groups.listJoinRequests(groupId), (d) =>
+      d.data.map((r) => ({
+        id: r.join_request_id,
+        waId: r.wa_id ?? null,
+        requestedAt: new Date(Number(r.creation_timestamp) * 1000),
+      })),
+    );
+  }
+
+  async answerGroupJoinRequests(groupId: string, input: { approve: string[]; reject: string[] }) {
+    if (input.approve.length) {
+      const res = await this.sdk.groups.approveJoinRequests(groupId, input.approve);
+      if (res.error) return convert(res, () => ({ success: false }));
+    }
+    if (input.reject.length) {
+      const res = await this.sdk.groups.rejectJoinRequests(groupId, input.reject);
+      if (res.error) return convert(res, () => ({ success: false }));
+    }
+    return result.ok({ success: true });
+  }
+
+  async removeGroupParticipants(groupId: string, users: string[]) {
+    return convert(await this.sdk.groups.removeParticipants(groupId, users), (d) => ({
+      success: d.success !== false,
+    }));
+  }
+
+  async deleteGroup(groupId: string) {
+    return convert(await this.sdk.groups.delete(groupId), (d) => ({
+      success: d.success !== false,
+    }));
+  }
+
+  async sendGroupText(groupId: string, body: string, opts?: SendOpts) {
+    const res = await this.sdk.messages.sendText(
+      groupId,
+      { body },
+      { ...sdkOpts(opts), recipientType: 'group' },
+    );
+    return convert(res, sent);
+  }
+
+  // ---------------------------------------------------------------- calling
+
+  async getCallingSettings(): Promise<GatewayResult<CallingSettings>> {
+    return convert(await this.sdk.calls.getSettings(), (s) => ({
+      enabled: s.status === 'ENABLED',
+      iconVisible: s.call_icon_visibility !== 'DISABLE_ALL',
+      callbackPermission: s.callback_permission_status === 'ENABLED',
+    }));
+  }
+
+  async updateCallingSettings(settings: CallingSettings) {
+    const res = await this.sdk.calls.updateSettings({
+      status: settings.enabled ? 'ENABLED' : 'DISABLED',
+      call_icon_visibility: settings.iconVisible ? 'DEFAULT' : 'DISABLE_ALL',
+      callback_permission_status: settings.callbackPermission ? 'ENABLED' : 'DISABLED',
+    });
+    return convert(res, (d) => ({ success: d.success }));
+  }
+
+  async getCallPermission(waId: string): Promise<GatewayResult<CallPermission>> {
+    return convert(await this.sdk.calls.getPermission(waId), (p) => ({
+      status: p.permission.status,
+      canCall: p.actions.some((a) => a.action_name === 'start_call' && a.can_perform_action),
+      canRequest: p.actions.some(
+        (a) => a.action_name === 'send_call_permission_request' && a.can_perform_action,
+      ),
+    }));
+  }
+
+  async sendCallPermissionRequest(to: string, body: string, opts?: SendOpts) {
+    const res = await this.sdk.messages.sendCallPermissionRequest(
+      to,
+      { bodyText: body },
+      sdkOpts(opts),
+    );
+    return convert(res, sent);
+  }
+
+  async connectCall(to: string, sdpOffer: string, callbackData?: string) {
+    const res = await this.sdk.calls.connect(
+      to,
+      { sdp: sdpOffer, sdpType: 'offer' },
+      { bizOpaqueCallbackData: callbackData },
+    );
+    return convert(res, (d) => ({ callId: d.calls[0]?.id ?? '' }));
+  }
+
+  async acceptCall(callId: string, sdpAnswer: string) {
+    const session = { sdpType: 'answer' as const, sdp: sdpAnswer };
+    // Pre-accept lets media start as soon as the call is accepted.
+    const pre = await this.sdk.calls.preAccept(callId, session);
+    if (pre.error) return convert(pre, (d) => ({ success: d.success }));
+    return convert(await this.sdk.calls.accept(callId, session), (d) => ({ success: d.success }));
+  }
+
+  async rejectCall(callId: string) {
+    return convert(await this.sdk.calls.reject(callId), (d) => ({ success: d.success }));
+  }
+
+  async terminateCall(callId: string) {
+    return convert(await this.sdk.calls.terminate(callId), (d) => ({ success: d.success }));
+  }
 }
+
+const toQr = (q: {
+  code: string;
+  prefilled_message: string;
+  deep_link_url: string;
+}): QrCodeInfo => ({
+  code: q.code,
+  prefilledMessage: q.prefilled_message,
+  deepLinkUrl: q.deep_link_url,
+});

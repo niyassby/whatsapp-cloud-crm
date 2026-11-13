@@ -6,6 +6,7 @@ import {
   creditWallet,
   ensureWallet,
   withTenant,
+  whatsappChannelId,
 } from '@wacrm/db';
 import { API_SCOPES, type ApiScope, ErrorCode } from '@wacrm/shared';
 import { phoneTokenAad, SecretBox, webhookSecretAad } from '@wacrm/shared/server';
@@ -449,6 +450,7 @@ describe('sending', () => {
         data: {
           orgId: s.orgId,
           phoneId: s.phoneId,
+          channelId: await whatsappChannelId(tx, s.phoneId),
           contactId: contact.id,
           windowExpiresAt: new Date(Date.now() + 3_600_000),
         },

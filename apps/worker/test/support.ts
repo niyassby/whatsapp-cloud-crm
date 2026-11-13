@@ -11,6 +11,7 @@ import type {
   RealtimePublisher,
   TemplateSyncJob,
   TenantEventMap,
+  WebchatMessageDto,
 } from '@wacrm/shared';
 import { MemoryStorage, SecretBox } from '@wacrm/shared/server';
 import { WhatsAppClientFactory, type WhatsAppError, type WhatsAppGateway } from '@wacrm/whatsapp';
@@ -31,6 +32,10 @@ export class RecordingPublisher implements RealtimePublisher {
   }
   of(event: keyof TenantEventMap) {
     return this.events.filter((e) => e.event === event);
+  }
+  visitor: { conversationId: string; message: WebchatMessageDto }[] = [];
+  emitVisitor(conversationId: string, message: WebchatMessageDto) {
+    this.visitor.push({ conversationId, message });
   }
 }
 
@@ -155,6 +160,7 @@ export function buildDeps(client: DbClient) {
     // Fake providers: deterministic, no network. AI features still need settings and a plan.
     ai: { chat: new FakeChatProvider(), embeddings: new FakeEmbeddingProvider() },
     defaultCurrency: 'INR',
+    instagram: null,
   };
   return {
     deps,

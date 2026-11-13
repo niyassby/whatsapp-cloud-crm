@@ -430,6 +430,13 @@ model Organization {
   aiLogs                 AiLog[]
   partnerClient          PartnerClient?
   impersonations         ImpersonationSession[]
+  channels               Channel[]
+  contactIdentities      ContactIdentity[]
+  adReferrals            AdReferral[]
+  qrCodes                QrCode[]
+  catalogProducts        CatalogProduct[]
+  waGroups               WaGroup[]
+  calls                  Call[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -634,10 +641,13 @@ model WabaAccount {
   createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt           DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  connectedBy  User?             @relation(fields: [connectedById], references: [id], onDelete: SetNull)
-  phoneNumbers PhoneNumber[]
-  templates    MessageTemplate[]
+  organization    Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  connectedBy     User?             @relation(fields: [connectedById], references: [id], onDelete: SetNull)
+  phoneNumbers    PhoneNumber[]
+  templates       MessageTemplate[]
+  /// The product catalog connected to this WABA, found when the catalog is synced.
+  catalogId       String?           @map("catalog_id")
+  catalogSyncedAt DateTime?         @map("catalog_synced_at") @db.Timestamptz(3)
 
   @@unique([orgId, wabaId])
   @@index([metaUserId])
@@ -676,6 +686,9 @@ model PhoneNumber {
   campaigns          Campaign[]
   dripSequences      DripSequence[]
   campaignRecipients CampaignRecipient[]
+  channel            Channel?
+  qrCodes            QrCode[]
+  groups             WaGroup[]
 
   @@unique([orgId, phoneNumberId])
   @@index([wabaAccountId])
@@ -725,8 +738,8 @@ model DataDeletionRequest {
 model Contact {
   id             String             @id @default(uuid(7)) @db.Uuid
   orgId          String             @map("org_id") @db.Uuid
-  /// E.164 digits without the plus.
-  waId           String             @map("wa_id")
+  /// E.164 digits without the plus. Null for someone known only on another channel.
+  waId           String?            @map("wa_id")
   name           String?
   email          String?
   /// Values validated against contact_fields by the service.
@@ -754,6 +767,9 @@ model Contact {
   tags               ContactTag[]
   notes              ContactNote[]
   consentEvents      ContactConsentEvent[]
+  identities         ContactIdentity[]
+  adReferrals        AdReferral[]
+  calls              Call[]
 
   @@unique([orgId, waId])
   @@index([orgId, createdAt(sort: Desc), id(sort: Desc)])
@@ -893,7 +909,10 @@ model ContactJob {
 model Conversation {
   id                 String             @id @default(uuid(7)) @db.Uuid
   orgId              String             @map("org_id") @db.Uuid
-  phoneId            String             @map("phone_id") @db.Uuid
+  /// The channel the conversation happens on. One conversation per channel and contact.
+  channelId          String             @map("channel_id") @db.Uuid
+  /// Set for WhatsApp conversations only.
+  phoneId            String?            @map("phone_id") @db.Uuid
   contactId          String             @map("contact_id") @db.Uuid
   status             ConversationStatus @default(open)
   assigneeId         String?            @map("assignee_id") @db.Uuid
@@ -906,7 +925,8 @@ model Conversation {
   updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   organization       Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  phone              PhoneNumber         @relation(fields: [phoneId], references: [id], onDelete: Cascade)
+  channel            Channel             @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  phone              PhoneNumber?        @relation(fields: [phoneId], references: [id], onDelete: Cascade)
   contact            Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
   assignee           User?               @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
   messages           Message[]
@@ -918,8 +938,14 @@ model Conversation {
   slaDueAt           DateTime?           @map("sla_due_at") @db.Timestamptz(3)
   /// 0 within the SLA, 1 breached, 2 escalated.
   slaStage           Int                 @default(0) @map("sla_stage")
+  /// The ad the latest click-to-chat referral came from, shown on the conversation.
+  adSourceId         String?             @map("ad_source_id")
+  adHeadline         String?             @map("ad_headline")
+  adReferrals        AdReferral[]
+  calls              Call[]
 
-  @@unique([orgId, phoneId, contactId])
+  @@unique([orgId, channelId, contactId])
+  @@index([orgId, phoneId, contactId])
   @@index([orgId, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([orgId, assigneeId])
   @@index([slaDueAt])
@@ -1954,4 +1980,203 @@ model AiLog {
   @@index([orgId, createdAt])
   @@index([orgId, kind, createdAt])
   @@map("ai_logs")
+}
+
+// ------------------------------------------------------------------ channels (Phase 4.2)
+
+enum ChannelKind {
+  whatsapp
+  instagram
+  webchat
+}
+
+enum ChannelStatus {
+  active
+  disconnected
+}
+
+/// Where conversations happen. A WhatsApp channel wraps one phone number; Instagram is one
+/// professional account; web chat is one widget. credentials_enc is SecretBox ciphertext bound to
+/// this row (channelCredentialsAad) and never leaves the API or worker.
+model Channel {
+  id             String        @id @default(uuid(7)) @db.Uuid
+  orgId          String        @map("org_id") @db.Uuid
+  kind           ChannelKind
+  name           String
+  status         ChannelStatus @default(active)
+  /// WhatsApp only.
+  phoneId        String?       @unique @map("phone_id") @db.Uuid
+  /// Instagram: the professional account id. Web chat: the public widget key.
+  externalId     String?       @map("external_id")
+  /// Display and behaviour settings (web chat colour, greeting, allowed sites; Instagram username).
+  config         Json          @default("{}")
+  credentialsEnc String?       @map("credentials_enc")
+  tokenExpiresAt DateTime?     @map("token_expires_at") @db.Timestamptz(3)
+  connectedById  String?       @map("connected_by_id") @db.Uuid
+  disconnectedAt DateTime?     @map("disconnected_at") @db.Timestamptz(3)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization  Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  phone         PhoneNumber?      @relation(fields: [phoneId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  identities    ContactIdentity[]
+
+  @@index([orgId, kind])
+  @@index([kind, externalId])
+  @@map("channels")
+}
+
+/// How a contact is known on a channel with no phone number: an Instagram-scoped id, or a web
+/// chat visitor id. WhatsApp contacts are found by wa_id instead.
+model ContactIdentity {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  orgId      String   @map("org_id") @db.Uuid
+  contactId  String   @map("contact_id") @db.Uuid
+  channelId  String   @map("channel_id") @db.Uuid
+  externalId String   @map("external_id")
+  /// Instagram username, when known.
+  handle     String?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, externalId])
+  @@index([orgId, contactId])
+  @@map("contact_identities")
+}
+
+/// One per inbound message that came from a click-to-chat ad. Append-only.
+model AdReferral {
+  id               String      @id @default(uuid(7)) @db.Uuid
+  orgId            String      @map("org_id") @db.Uuid
+  conversationId   String      @map("conversation_id") @db.Uuid
+  contactId        String      @map("contact_id") @db.Uuid
+  channelKind      ChannelKind @map("channel_kind")
+  /// ad or post
+  sourceType       String?     @map("source_type")
+  sourceId         String?     @map("source_id")
+  sourceUrl        String?     @map("source_url")
+  headline         String?
+  body             String?
+  mediaType        String?     @map("media_type")
+  /// Click id Meta gives for conversions reporting.
+  clickId          String?     @map("click_id")
+  /// The contact did not exist before this message: the ad brought someone new.
+  newContact       Boolean     @default(false) @map("new_contact")
+  messageId        String      @map("message_id") @db.Uuid
+  messageCreatedAt DateTime    @map("message_created_at") @db.Timestamptz(3)
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, messageId])
+  @@index([orgId, createdAt])
+  @@index([orgId, sourceId, createdAt])
+  @@map("ad_referrals")
+}
+
+/// A WhatsApp QR code and short link (wa.me/message/...) that opens a chat with a message filled in.
+model QrCode {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  orgId            String    @map("org_id") @db.Uuid
+  phoneId          String    @map("phone_id") @db.Uuid
+  /// Meta's code, the last part of the short link.
+  code             String
+  name             String
+  prefilledMessage String    @map("prefilled_message")
+  deepLinkUrl      String    @map("deep_link_url")
+  createdById      String?   @map("created_by_id") @db.Uuid
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  phone        PhoneNumber  @relation(fields: [phoneId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, code])
+  @@index([orgId, createdAt])
+  @@map("qr_codes")
+}
+
+/// The local copy of a WABA's catalog, for the product picker. Meta is the authority.
+model CatalogProduct {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  orgId        String   @map("org_id") @db.Uuid
+  catalogId    String   @map("catalog_id")
+  /// The business's own SKU: what product messages name.
+  retailerId   String   @map("retailer_id")
+  name         String
+  description  String?
+  /// As Meta formats it, for example "₹499.00".
+  price        String?
+  currency     String?
+  imageUrl     String?  @map("image_url")
+  availability String?
+  syncedAt     DateTime @map("synced_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, catalogId, retailerId])
+  @@map("catalog_products")
+}
+
+/// A WhatsApp group run by one of the workspace's numbers. group_id may arrive by webhook.
+model WaGroup {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  orgId            String    @map("org_id") @db.Uuid
+  phoneId          String    @map("phone_id") @db.Uuid
+  groupId          String?   @map("group_id")
+  subject          String
+  description      String?
+  joinApprovalMode String    @default("approval_required") @map("join_approval_mode")
+  inviteLink       String?   @map("invite_link")
+  participantCount Int?      @map("participant_count")
+  /// pending (created, waiting for Meta), active, deleted
+  status           String    @default("pending")
+  createdById      String?   @map("created_by_id") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  phone        PhoneNumber  @relation(fields: [phoneId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, groupId])
+  @@index([orgId, createdAt])
+  @@map("wa_groups")
+}
+
+/// A WhatsApp voice call. Signalling only: media flows between Meta and the agent's browser.
+model Call {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  orgId            String    @map("org_id") @db.Uuid
+  conversationId   String    @map("conversation_id") @db.Uuid
+  contactId        String    @map("contact_id") @db.Uuid
+  metaCallId       String    @map("meta_call_id")
+  /// inbound or outbound
+  direction        String
+  /// ringing, connected, ended, missed, rejected, failed
+  status           String
+  answeredById     String?   @map("answered_by_id") @db.Uuid
+  startedAt        DateTime  @map("started_at") @db.Timestamptz(3)
+  connectedAt      DateTime? @map("connected_at") @db.Timestamptz(3)
+  endedAt          DateTime? @map("ended_at") @db.Timestamptz(3)
+  durationSec      Int?      @map("duration_sec")
+  /// The timeline entry in the conversation.
+  messageId        String    @map("message_id") @db.Uuid
+  messageCreatedAt DateTime  @map("message_created_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, metaCallId])
+  @@index([orgId, startedAt])
+  @@map("calls")
 }

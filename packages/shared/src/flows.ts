@@ -531,6 +531,7 @@ export interface FlowScope {
   contact: {
     id: string;
     name: string | null;
+    /** Empty for someone known only on Instagram or website chat. */
     phone: string;
     email: string | null;
     fields: Record<string, string | number | boolean>;
@@ -572,7 +573,7 @@ function lookup(scope: FlowScope, path: string): unknown {
   const [root, ...rest] = path.split('.');
   const tail = rest.join('.');
   if (root === 'contact') {
-    if (tail === 'phone') return `+${scope.contact.phone}`;
+    if (tail === 'phone') return scope.contact.phone ? `+${scope.contact.phone}` : '';
     if (tail.startsWith('fields.')) return readPath(scope.contact.fields, tail.slice(7));
     return readPath(scope.contact, tail);
   }
@@ -838,7 +839,7 @@ export interface FlowRunDto {
   flowId: string;
   version: number;
   status: FlowRunStatus;
-  contact: { id: string; name: string | null; waId: string };
+  contact: { id: string; name: string | null; waId: string | null };
   conversationId: string | null;
   currentNodeId: string | null;
   variables: Record<string, unknown>;

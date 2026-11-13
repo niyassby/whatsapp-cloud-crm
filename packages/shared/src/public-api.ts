@@ -164,7 +164,12 @@ export interface WebhookDeliveryDto {
 
 export const publicContactSchema = z.object({
   id: z.uuid(),
-  waId: z.string().describe('The number in E.164 digits, with no plus'),
+  waId: z
+    .string()
+    .nullable()
+    .describe(
+      'The number in E.164 digits, with no plus. Null for someone known only on Instagram or website chat',
+    ),
   name: z.string().nullable(),
   email: z.string().nullable(),
   customFields: z.record(z.string(), z.unknown()),
@@ -193,8 +198,9 @@ export type PublicMessage = z.infer<typeof publicMessageSchema>;
 export const publicConversationSchema = z.object({
   id: z.uuid(),
   status: z.string(),
-  contact: z.object({ id: z.uuid(), name: z.string().nullable(), waId: z.string() }),
-  phoneNumberId: z.uuid(),
+  contact: z.object({ id: z.uuid(), name: z.string().nullable(), waId: z.string().nullable() }),
+  channel: z.enum(['whatsapp', 'instagram', 'webchat']),
+  phoneNumberId: z.uuid().nullable().describe('WhatsApp conversations only'),
   lastMessageAt: z.string().nullable(),
   windowExpiresAt: z
     .string()
@@ -354,7 +360,8 @@ export const toPublicConversation = (c: ConversationDto): PublicConversation => 
   id: c.id,
   status: c.status,
   contact: { id: c.contact.id, name: c.contact.name, waId: c.contact.waId },
-  phoneNumberId: c.phoneNumber.id,
+  channel: c.channel.kind,
+  phoneNumberId: c.phoneNumber?.id ?? null,
   lastMessageAt: c.lastMessageAt,
   windowExpiresAt: c.windowExpiresAt,
   unreadCount: c.unreadCount,

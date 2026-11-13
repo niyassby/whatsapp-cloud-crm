@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chargeMessage, type Prisma, withTenant } from '@wacrm/db';
+import { chargeMessage, type Prisma, withTenant, whatsappChannelId } from '@wacrm/db';
 import {
   AppError,
   buildSendComponents,
@@ -176,12 +176,14 @@ export async function runDripBatch(
         });
         if (moved.count === 0) return false;
 
+        const channelId = await whatsappChannelId(tx, sequence.phoneId);
         const conversation = await tx.conversation.upsert({
           where: {
-            orgId_phoneId_contactId: { orgId, phoneId: sequence.phoneId, contactId: contact.id },
+            orgId_channelId_contactId: { orgId, channelId, contactId: contact.id },
           },
           create: {
             orgId,
+            channelId,
             phoneId: sequence.phoneId,
             contactId: contact.id,
             status: 'closed',

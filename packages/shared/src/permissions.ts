@@ -38,6 +38,10 @@ export const Permission = {
   INTEGRATIONS_MANAGE: 'integrations:manage',
   /** AI settings and the knowledge base. Using AI in the inbox only needs INBOX_REPLY. */
   AI_MANAGE: 'ai:manage',
+  /** Website chat and Instagram channels, QR codes, the catalog and groups. */
+  CHANNELS_MANAGE: 'channels:manage',
+  /** Start and answer WhatsApp calls. Agents too, like replying. */
+  CALLS_HANDLE: 'calls:handle',
 } as const;
 export type Permission = (typeof Permission)[keyof typeof Permission];
 
@@ -51,6 +55,7 @@ const AGENT: readonly Permission[] = [
   Permission.CONTACTS_READ,
   Permission.CONTACTS_WRITE,
   Permission.TEMPLATES_READ,
+  Permission.CALLS_HANDLE,
 ];
 
 const ADMIN_EXCLUDED: readonly Permission[] = [Permission.ORG_DELETE, Permission.BILLING_MANAGE];

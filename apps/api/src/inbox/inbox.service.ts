@@ -8,6 +8,7 @@ import {
   messageToDto,
   type Prisma,
   refundDebit,
+  replyWindowOpen,
   type TenantTx,
 } from '@wacrm/db';
 import {
@@ -36,7 +37,10 @@ import {
   Permission,
   renderedText,
   renderTemplate,
+  CHANNEL_CAPABILITIES,
+  CHANNEL_LABELS,
   type Role,
+  type SendProductsInput,
   type SendMessageParsed,
   type SendNoteInput,
   templateDefinitionSchema,
@@ -258,35 +262,73 @@ export class InboxService {
     };
   }
 
-  /** Checks shared by every outbound send. The server is the authority on the 24-hour window. */
-  private async loadForSend(id: string, needsWindow: boolean) {
+  /**
+   * Checks shared by every outbound send. The server is the authority on the reply window, and on
+   * what each channel can carry (templates, files and products are WhatsApp's).
+   */
+  async loadForSend(
+    id: string,
+    needsWindow: boolean,
+    needs?: 'templates' | 'media' | 'products' | 'calls',
+  ) {
     const conversation = await this.db.run((tx) =>
       tx.conversation.findUnique({
         where: { id },
         select: {
+          id: true,
           windowExpiresAt: true,
-          phone: { select: { phoneNumberId: true, status: true, wabaAccountId: true } },
+          channel: { select: { id: true, kind: true, status: true, name: true } },
+          phone: {
+            select: { id: true, phoneNumberId: true, status: true, wabaAccountId: true },
+          },
           contact: {
-            select: { optInStatus: true, name: true, waId: true, email: true, customFields: true },
+            select: {
+              id: true,
+              optInStatus: true,
+              name: true,
+              waId: true,
+              email: true,
+              customFields: true,
+            },
           },
         },
       }),
     );
     if (!conversation) throw new AppError(ErrorCode.NOT_FOUND, 'Conversation not found');
-    if (conversation.phone.status !== 'connected') {
-      throw new AppError(ErrorCode.NUMBER_NOT_CONNECTED, 'This WhatsApp number is not connected');
+    const { channel } = conversation;
+    if (
+      channel.status !== 'active' ||
+      (conversation.phone && conversation.phone.status !== 'connected')
+    ) {
+      throw new AppError(
+        ErrorCode.NUMBER_NOT_CONNECTED,
+        `This ${CHANNEL_LABELS[channel.kind]} channel is not connected`,
+      );
     }
-    if (needsWindow) {
-      const open = conversation.windowExpiresAt && conversation.windowExpiresAt > new Date();
-      if (!open) {
-        throw new AppError(
-          ErrorCode.WINDOW_CLOSED,
-          'The 24-hour window has closed. Send an approved template instead.',
-          { windowExpiresAt: conversation.windowExpiresAt?.toISOString() ?? null },
-        );
-      }
+    if (needs && !CHANNEL_CAPABILITIES[channel.kind][needs]) {
+      throw new AppError(
+        ErrorCode.VALIDATION_FAILED,
+        `This cannot be sent on ${CHANNEL_LABELS[channel.kind]}`,
+        { channel: channel.kind },
+      );
+    }
+    if (needsWindow && !replyWindowOpen(channel.kind, conversation.windowExpiresAt)) {
+      throw new AppError(
+        ErrorCode.WINDOW_CLOSED,
+        channel.kind === 'whatsapp'
+          ? 'The 24-hour window has closed. Send an approved template instead.'
+          : 'The 24-hour window has closed. You can reply when the customer writes again.',
+        { windowExpiresAt: conversation.windowExpiresAt?.toISOString() ?? null },
+      );
     }
     return conversation;
+  }
+
+  /** The number of a WhatsApp conversation, after loadForSend checked the channel can do this. */
+  private whatsappPhone<T>(phone: T | null): T {
+    if (!phone)
+      throw new AppError(ErrorCode.VALIDATION_FAILED, 'This needs a WhatsApp conversation');
+    return phone;
   }
 
   async sendMessage(
@@ -303,7 +345,9 @@ export class InboxService {
       });
     }
 
-    const { phone, contact, windowExpiresAt } = await this.loadForSend(conversationId, false);
+    const loaded = await this.loadForSend(conversationId, false, 'templates');
+    const { contact, windowExpiresAt } = loaded;
+    const phone = this.whatsappPhone(loaded.phone);
     const template = await this.db.run((tx) =>
       tx.messageTemplate.findFirst({
         where: { id: input.templateId, wabaAccountId: phone.wabaAccountId },
@@ -370,7 +414,7 @@ export class InboxService {
       } as unknown as Prisma.InputJsonValue,
       charge: {
         category: template.category,
-        waId: contact.waId,
+        waId: contact.waId ?? '',
         windowOpen: isOpen(windowExpiresAt),
       },
       ...(mediaHeader && template.headerMediaKey
@@ -403,7 +447,7 @@ export class InboxService {
       const mb = Math.round(rule.maxBytes / (1024 * 1024));
       throw new AppError(ErrorCode.MEDIA_NOT_ALLOWED, `This file is over the ${mb} MB limit`);
     }
-    await this.loadForSend(conversationId, true);
+    await this.loadForSend(conversationId, true, 'media');
 
     const messageId = randomUUID();
     const key = mediaKey(actor.orgId, messageId);
@@ -419,6 +463,49 @@ export class InboxService {
         size: file.bytes.length,
         filename: file.filename?.slice(0, 200) ?? null,
       },
+    });
+  }
+
+  /** One product, a list of products, or the whole catalog. Needs the 24-hour window. */
+  async sendProducts(
+    actor: InboxActor,
+    conversationId: string,
+    input: SendProductsInput,
+    catalogId: string,
+  ): Promise<MessageDto> {
+    await this.loadForSend(conversationId, true, 'products');
+    const products =
+      input.kind === 'product'
+        ? { kind: input.kind, catalogId, retailerId: input.retailerId, body: input.body }
+        : input.kind === 'product_list'
+          ? {
+              kind: input.kind,
+              catalogId,
+              header: input.header,
+              body: input.body,
+              sections: input.sections,
+            }
+          : { kind: input.kind, body: input.body, thumbnailRetailerId: input.thumbnailRetailerId };
+    return this.createOutbound(actor, conversationId, {
+      clientMessageId: input.clientMessageId,
+      type: input.kind,
+      body: input.kind === 'product' ? (input.body ?? null) : input.body,
+      content: { products } as Prisma.InputJsonValue,
+    });
+  }
+
+  /** Asks the customer to let the business call them. A free-form message: needs the window. */
+  async sendCallPermissionRequest(
+    actor: InboxActor,
+    conversationId: string,
+    clientMessageId: string,
+    body: string,
+  ): Promise<MessageDto> {
+    await this.loadForSend(conversationId, true, 'calls');
+    return this.createOutbound(actor, conversationId, {
+      clientMessageId,
+      type: 'call_permission_request',
+      body,
     });
   }
 
@@ -634,7 +721,10 @@ export class InboxService {
   // ------------------------------------------------------------------ templates
 
   async listTemplates(actor: InboxActor, conversationId: string): Promise<InboxTemplateDto[]> {
-    const { phone, contact, windowExpiresAt } = await this.loadForSend(conversationId, false);
+    const loaded = await this.loadForSend(conversationId, false);
+    if (!loaded.phone) return [];
+    const { phone, windowExpiresAt } = loaded;
+    const contact = { ...loaded.contact, waId: loaded.contact.waId ?? '' };
     return this.templates.forConversation(
       actor.orgId,
       phone.wabaAccountId,

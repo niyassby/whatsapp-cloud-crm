@@ -61,6 +61,11 @@ export const apiEnvSchema = z.object({
     .default('v25.0'),
   /** Point Graph calls at a local fake for end-to-end checks. Refused in production. */
   META_GRAPH_BASE_URL: z.url().optional(),
+  /** Instagram messaging: the Instagram app of the Meta app (App Dashboard > Instagram). */
+  INSTAGRAM_APP_ID: z.string().min(1).optional(),
+  INSTAGRAM_APP_SECRET: z.string().min(1).optional(),
+  /** Local fakes only: one base for Instagram login, token exchange and Graph. Refused in production. */
+  INSTAGRAM_BASE_URL: z.url().optional(),
 
   /** Requests per minute for each API key. */
   API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(600),
@@ -125,6 +130,9 @@ export const loadApiEnv = (source?: Record<string, string | undefined>): ApiEnv 
     ].filter(Boolean);
     if (env.META_GRAPH_BASE_URL) {
       throw new Error('META_GRAPH_BASE_URL must not be set in production');
+    }
+    if (env.INSTAGRAM_BASE_URL) {
+      throw new Error('INSTAGRAM_BASE_URL must not be set in production');
     }
     if (env.WEBHOOK_ALLOW_PRIVATE_URLS) {
       throw new Error('WEBHOOK_ALLOW_PRIVATE_URLS must not be set in production');

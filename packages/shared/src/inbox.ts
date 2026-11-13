@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ChannelKind } from './channels';
 import type { OptInStatus } from './contacts';
 import type { WhatsAppErrorCode } from './whatsapp';
 
@@ -99,14 +100,30 @@ export interface MessageDto {
     filename: string | null;
     size: number | null;
   } | null;
+  /** A few whitelisted facts for calls, orders and product messages. Never the raw content. */
+  detail: MessageDetail | null;
   createdAt: string;
 }
+
+export type MessageDetail =
+  | { kind: 'call'; status: string; direction: string; durationSec: number | null }
+  | {
+      kind: 'order';
+      items: { retailerId: string; quantity: number; price: number; currency: string }[];
+      total: number;
+      currency: string | null;
+    }
+  | { kind: 'products'; count: number };
 
 export interface ConversationDto {
   id: string;
   status: ConversationStatus;
-  contact: { id: string; name: string | null; waId: string; optInStatus: OptInStatus };
-  phoneNumber: { id: string; display: string | null; status: string };
+  contact: { id: string; name: string | null; waId: string | null; optInStatus: OptInStatus };
+  channel: { id: string; kind: ChannelKind; name: string; status: string };
+  /** WhatsApp conversations only. */
+  phoneNumber: { id: string; display: string | null; status: string } | null;
+  /** The click-to-chat ad that last brought this customer in. */
+  ad: { sourceId: string | null; headline: string | null } | null;
   assignee: { id: string; name: string } | null;
   labels: LabelDto[];
   lastMessageAt: string | null;
@@ -188,6 +205,11 @@ export function messagePreview(type: string, body: string | null): string {
     contacts: 'Contact',
     reaction: 'Reaction',
     order: 'Order',
+    call: 'Call',
+    product: 'Product',
+    product_list: 'Products',
+    catalog: 'Catalog',
+    call_permission_request: 'Call permission request',
   };
   return labels[type] ?? 'Message';
 }

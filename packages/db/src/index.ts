@@ -13,3 +13,4 @@ export * from './billing';
 export * from './webhooks';
 export * from './ai';
 export * from './partners';
+export * from './channels';

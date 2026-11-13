@@ -13,7 +13,7 @@ import type {
   TemplateSyncJob,
 } from '@wacrm/shared';
 import type { ObjectStorage, SecretBox } from '@wacrm/shared/server';
-import type { WhatsAppClientFactory } from '@wacrm/whatsapp';
+import type { InstagramClient, WhatsAppClientFactory } from '@wacrm/whatsapp';
 import type { WebhookPoster } from './processors/webhook-deliveries';
 import type { SafeHttp } from './safe-http';
 
@@ -53,6 +53,8 @@ export interface WorkerDeps {
   enqueueIntegrationJob: (job: IntegrationJob, delayMs?: number) => Promise<void>;
   /** Chat and embedding providers; either can be null when not configured. */
   ai: AiProviders;
+  /** Null when no Instagram app is configured on this installation. */
+  instagram: InstagramClient | null;
   /** For a workspace whose first paid send comes from a drip. */
   defaultCurrency: string;
 }

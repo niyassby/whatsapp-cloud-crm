@@ -12,6 +12,7 @@ import {
   ensureWallet,
   replaceChunks,
   withTenant,
+  whatsappChannelId,
 } from '@wacrm/db';
 import { ErrorCode } from '@wacrm/shared';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -91,7 +92,12 @@ async function workspace(opts: { funds?: number } = {}) {
         data: { orgId, waId: `9198${String(Math.random()).slice(2, 10)}` },
       });
       const c = await tx.conversation.create({
-        data: { orgId, phoneId: phone.id, contactId: contact.id },
+        data: {
+          orgId,
+          phoneId: phone.id,
+          channelId: await whatsappChannelId(tx, phone.id),
+          contactId: contact.id,
+        },
       });
       await tx.message.create({
         data: {

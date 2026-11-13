@@ -11,6 +11,12 @@ const ITEMS: { href: string; label: string; permission?: Permission }[] = [
   { href: '/settings/general', label: 'General', permission: Permission.ORG_READ },
   { href: '/settings/team', label: 'Team', permission: Permission.TEAM_READ },
   { href: '/settings/whatsapp', label: 'WhatsApp', permission: Permission.WHATSAPP_MANAGE },
+  { href: '/settings/channels', label: 'Channels', permission: Permission.CHANNELS_MANAGE },
+  {
+    href: '/settings/whatsapp-tools',
+    label: 'WhatsApp tools',
+    permission: Permission.CHANNELS_MANAGE,
+  },
   { href: '/settings/inbox', label: 'Inbox', permission: Permission.INBOX_ASSIGN },
   { href: '/settings/automation', label: 'Automation', permission: Permission.AUTOMATION_MANAGE },
   { href: '/settings/ai', label: 'AI assistant', permission: Permission.AI_MANAGE },

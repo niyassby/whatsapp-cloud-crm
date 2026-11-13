@@ -45,7 +45,8 @@ async function notify(tx: TenantTx, orgId: string, notices: Notice[]): Promise<v
   });
 }
 
-const contactLabel = (c: { name: string | null; waId: string }) => c.name ?? `+${c.waId}`;
+const contactLabel = (c: { name: string | null; waId: string | null }) =>
+  c.name ?? (c.waId ? `+${c.waId}` : 'a website visitor');
 
 /** People who see the whole team's work: owners and admins, active in this workspace. */
 async function managers(tx: TenantTx, orgId: string): Promise<string[]> {
@@ -94,7 +95,8 @@ export async function chooseAgent(
   tx: TenantTx,
   input: {
     orgId: string;
-    phoneId: string;
+    /** Null on channels other than WhatsApp: rules limited to numbers do not apply there. */
+    phoneId: string | null;
     tagIds: string[];
     text: string | null;
     defaultAssignment: DefaultAssignment;
@@ -110,7 +112,9 @@ export async function chooseAgent(
 
   for (const rule of rules) {
     if (rule.tagIds.length && !rule.tagIds.some((t) => input.tagIds.includes(t))) continue;
-    if (rule.phoneIds.length && !rule.phoneIds.includes(input.phoneId)) continue;
+    if (rule.phoneIds.length && (!input.phoneId || !rule.phoneIds.includes(input.phoneId))) {
+      continue;
+    }
     if (
       rule.keywords.length &&
       !matchesRule({ matchType: 'contains', keywords: rule.keywords, pattern: null }, input.text)
@@ -237,7 +241,8 @@ export async function runInboxAutomation(
       const replies: { kind: AutomationKind; text: string; ruleId?: string }[] = [];
       // Someone who said STOP gets nothing automatic, not even an acknowledgement.
       const canReply =
-        contact.optInStatus !== 'opted_out' && conversation.phone.status === 'connected';
+        contact.optInStatus !== 'opted_out' &&
+        (conversation.phone ? conversation.phone.status === 'connected' : true);
       if (canReply) {
         // Reviewed raw SQL: bound parameters under RLS. created_at bounds the partitions read.
         const countSince = async (since: Date, kind?: AutomationKind) => {
@@ -262,7 +267,13 @@ export async function runInboxAutomation(
           replies.push({ kind: 'welcome', text: settings.welcomeMessage });
         }
         const rules = await tx.autoReplyRule.findMany({
-          where: { active: true, OR: [{ phoneId: null }, { phoneId: conversation.phoneId }] },
+          where: {
+            active: true,
+            OR: [
+              { phoneId: null },
+              ...(conversation.phoneId ? [{ phoneId: conversation.phoneId }] : []),
+            ],
+          },
           orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
         });
         const rule = rules.find((r) =>

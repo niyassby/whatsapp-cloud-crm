@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import { assertWithinLimit, emitWebhookEvent, type TenantTx } from '@wacrm/db';
+import { assertWithinLimit, emitWebhookEvent, type TenantTx, whatsappChannelId } from '@wacrm/db';
 import {
   AppError,
   type ConversationDto,
@@ -103,12 +103,13 @@ export class PublicApiService {
       }
       const contactId = contact.mergedIntoId ?? contact.id;
 
+      const channelId = await whatsappChannelId(tx, phone.id);
       const conversation = await tx.conversation.upsert({
         where: {
-          orgId_phoneId_contactId: { orgId: actor.orgId, phoneId: phone.id, contactId },
+          orgId_channelId_contactId: { orgId: actor.orgId, channelId, contactId },
         },
         // Closed until they reply, as with a broadcast: this is not yet something for an agent.
-        create: { orgId: actor.orgId, phoneId: phone.id, contactId, status: 'closed' },
+        create: { orgId: actor.orgId, channelId, phoneId: phone.id, contactId, status: 'closed' },
         update: {},
         select: { id: true },
       });

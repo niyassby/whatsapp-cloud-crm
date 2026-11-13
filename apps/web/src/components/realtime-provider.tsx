@@ -14,6 +14,7 @@ import { io, type Socket } from 'socket.io-client';
 import { create } from 'zustand';
 import { refreshSession } from '@/lib/api';
 import { activeToken, useAuthStore } from '@/lib/auth-store';
+import { useCalls } from '@/lib/calls';
 import { contactKeys } from '@/lib/contacts';
 import { env } from '@/lib/env';
 import { applyConversationUpdate, inboxKeys, upsertMessage } from '@/lib/inbox';
@@ -179,6 +180,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       if (userId === useMeStoreUserId(queryClient)) {
         void queryClient.invalidateQueries({ queryKey: automationKeys.notifications });
       }
+    });
+    socket.on('call:updated', (e) => useCalls.getState().onUpdate(e));
+    socket.on('channel:updated', () => {
+      void queryClient.invalidateQueries({ queryKey: ['channels'] });
+      void queryClient.invalidateQueries({ queryKey: ['groups'] });
     });
     socket.on('billing:updated', () => {
       void queryClient.invalidateQueries({ queryKey: billingKeys.all });

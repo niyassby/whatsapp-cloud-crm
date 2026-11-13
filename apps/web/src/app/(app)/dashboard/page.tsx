@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import Link from 'next/link';
 import { useDashboard } from '@/lib/campaigns';
 
 const percent = (rate: number | null) => (rate === null ? '—' : `${(rate * 100).toFixed(1)}%`);
@@ -49,6 +50,12 @@ export default function DashboardPage() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h1 className="text-xl font-semibold">Dashboard</h1>
+            <Link
+              href="/dashboard/ads"
+              className="text-sm text-primary underline-offset-4 hover:underline"
+            >
+              Ad attribution
+            </Link>
             {data && <p className="text-sm text-muted-foreground">Days shown in {data.timezone}</p>}
           </div>
           <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>

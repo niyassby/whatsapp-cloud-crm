@@ -1,0 +1,577 @@
+'use client';
+
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  type CallingSettingsDto,
+  type CatalogDto,
+  type GroupDto,
+  type GroupJoinRequestDto,
+  Permission,
+  type PhoneNumberDto,
+  type QrCodeDto,
+} from '@wacrm/shared';
+import { type FormEvent, useState } from 'react';
+import { toast } from 'sonner';
+import { FormField } from '@/components/form-field';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { api } from '@/lib/api';
+import { handleApiError } from '@/lib/forms';
+import { useCan, usePhoneNumbers } from '@/lib/queries';
+
+/** Run a change and say what happened; errors (including "not on your plan") become toasts. */
+async function act<T>(fn: () => Promise<T>, done?: string): Promise<T | undefined> {
+  try {
+    const result = await fn();
+    if (done) toast.success(done);
+    return result;
+  } catch (err) {
+    handleApiError(err);
+    return undefined;
+  }
+}
+
+function NumberPicker({
+  value,
+  onChange,
+  numbers,
+}: {
+  value: string;
+  onChange: (id: string) => void;
+  numbers: PhoneNumberDto[];
+}) {
+  return (
+    <div className="grid gap-1.5">
+      <Label htmlFor="tool-number">Number</Label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger id="tool-number" className="w-64">
+          <SelectValue placeholder="Choose a number" />
+        </SelectTrigger>
+        <SelectContent>
+          {numbers.map((n) => (
+            <SelectItem key={n.id} value={n.id}>
+              {n.displayPhoneNumber ?? n.id}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ QR codes
+
+function QrCodes({ phoneId }: { phoneId: string }) {
+  const queryClient = useQueryClient();
+  const codes = useQuery({ queryKey: ['qr-codes'], queryFn: () => api<QrCodeDto[]>('/qr-codes') });
+  const [name, setName] = useState('');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const create = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    const rows = await act(() =>
+      api<QrCodeDto[]>('/qr-codes', {
+        method: 'POST',
+        body: { phoneId, name: name.trim(), prefilledMessage: message.trim() },
+      }),
+    );
+    if (rows) {
+      queryClient.setQueryData(['qr-codes'], rows);
+      setName('');
+      setMessage('');
+    }
+    setBusy(false);
+  };
+
+  const remove = async (qr: QrCodeDto) => {
+    if (!window.confirm(`Delete ${qr.name}? Its link and QR code stop working.`)) return;
+    await act(() => api(`/qr-codes/${qr.id}`, { method: 'DELETE' }), 'Deleted');
+    await queryClient.invalidateQueries({ queryKey: ['qr-codes'] });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>QR codes and short links</CardTitle>
+        <CardDescription>
+          A code or link opens a chat with your number, with a message filled in. Chats that start
+          with that exact message are counted here.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <form
+          className="grid gap-3 sm:grid-cols-[1fr_2fr_auto] sm:items-end"
+          onSubmit={(e) => void create(e)}
+        >
+          <FormField
+            label="Name"
+            name="qr-name"
+            value={name}
+            maxLength={80}
+            placeholder="Shop counter"
+            onChange={(e) => setName(e.target.value)}
+          />
+          <FormField
+            label="Message it starts with"
+            name="qr-message"
+            value={message}
+            maxLength={140}
+            placeholder="Hi, I want to order"
+            onChange={(e) => setMessage(e.target.value)}
+          />
+          <Button type="submit" disabled={busy || !phoneId || !name.trim() || !message.trim()}>
+            Create
+          </Button>
+        </form>
+        {codes.isPending ? (
+          <Skeleton className="h-24 w-full" />
+        ) : (
+          <ul className="grid gap-3 sm:grid-cols-2">
+            {codes.data?.map((qr) => (
+              <li
+                key={qr.id}
+                className="flex gap-3 rounded-md border p-3"
+                data-testid={`qr-${qr.name}`}
+              >
+                <div
+                  className="size-28 shrink-0 rounded bg-white p-1 [&_svg]:size-full"
+                  role="img"
+                  aria-label={`QR code for ${qr.name}`}
+                  // The SVG is generated by the API from Meta's link, not from user input.
+                  dangerouslySetInnerHTML={{ __html: qr.svg }}
+                />
+                <div className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
+                  <span className="font-medium">{qr.name}</span>
+                  <span className="truncate text-muted-foreground">
+                    &ldquo;{qr.prefilledMessage}&rdquo;
+                  </span>
+                  <a
+                    className="truncate text-primary underline-offset-4 hover:underline"
+                    href={qr.deepLinkUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {qr.deepLinkUrl}
+                  </a>
+                  <span>
+                    {qr.conversationsStarted} chat{qr.conversationsStarted === 1 ? '' : 's'} started
+                  </span>
+                  <span className="mt-auto flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        void navigator.clipboard
+                          .writeText(qr.deepLinkUrl)
+                          .then(() => toast.success('Link copied'))
+                      }
+                    >
+                      Copy link
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => void remove(qr)}>
+                      Delete
+                    </Button>
+                  </span>
+                </div>
+              </li>
+            ))}
+            {codes.data?.length === 0 && (
+              <li className="text-sm text-muted-foreground">No codes yet.</li>
+            )}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ------------------------------------------------------------------ catalog
+
+function Catalog({ phoneId }: { phoneId: string }) {
+  const queryClient = useQueryClient();
+  const key = ['catalog', phoneId];
+  const catalog = useQuery({
+    queryKey: key,
+    enabled: Boolean(phoneId),
+    queryFn: () => api<CatalogDto>(`/catalog?phoneId=${phoneId}`),
+  });
+  const [busy, setBusy] = useState(false);
+
+  const sync = async () => {
+    setBusy(true);
+    const data = await act(
+      () => api<CatalogDto>('/catalog/sync', { method: 'POST', body: { phoneId } }),
+      'Catalog synced',
+    );
+    if (data) queryClient.setQueryData(key, data);
+    setBusy(false);
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2">
+        <div className="flex flex-col gap-1">
+          <CardTitle>Catalog</CardTitle>
+          <CardDescription>
+            The catalog connected to this number in Commerce Manager. Agents pick from this copy
+            when sending products.
+          </CardDescription>
+        </div>
+        <Button onClick={() => void sync()} disabled={busy || !phoneId}>
+          Sync catalog
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {catalog.isPending ? (
+          <Skeleton className="h-24 w-full" />
+        ) : !catalog.data?.catalogId ? (
+          <p className="text-sm text-muted-foreground">
+            No catalog synced. Connect one to your WhatsApp account in Commerce Manager, then sync.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <p className="text-sm text-muted-foreground" data-testid="catalog-summary">
+              {catalog.data.products.length} products, synced{' '}
+              {catalog.data.syncedAt ? new Date(catalog.data.syncedAt).toLocaleString() : 'never'}.
+            </p>
+            <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {catalog.data.products.slice(0, 60).map((p) => (
+                <li key={p.retailerId} className="flex flex-col rounded-md border p-2 text-sm">
+                  <span className="truncate font-medium">{p.name}</span>
+                  <span className="text-muted-foreground">
+                    {p.price ?? 'No price'} · {p.retailerId}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ------------------------------------------------------------------ groups
+
+function GroupRow({ group }: { group: GroupDto }) {
+  const queryClient = useQueryClient();
+  const [requests, setRequests] = useState<GroupJoinRequestDto[] | null>(null);
+  const [announcement, setAnnouncement] = useState('');
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['groups'] });
+
+  const loadRequests = async () => {
+    const rows = await act(() => api<GroupJoinRequestDto[]>(`/groups/${group.id}/join-requests`));
+    if (rows) setRequests(rows);
+  };
+  const answer = async (id: string, approve: boolean) => {
+    const rows = await act(
+      () =>
+        api<GroupJoinRequestDto[]>(`/groups/${group.id}/join-requests`, {
+          method: 'POST',
+          body: approve ? { approve: [id] } : { reject: [id] },
+        }),
+      approve ? 'Approved' : 'Declined',
+    );
+    if (rows) setRequests(rows);
+  };
+
+  return (
+    <li className="flex flex-col gap-2 py-3" data-testid={`group-${group.subject}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">{group.subject}</span>
+        <Badge variant={group.status === 'active' ? 'secondary' : 'outline'}>
+          {group.status === 'pending' ? 'Being created' : 'Active'}
+        </Badge>
+        {group.participantCount !== null && (
+          <span className="text-sm text-muted-foreground">{group.participantCount} members</span>
+        )}
+        <span className="ml-auto flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              void act(() => api(`/groups/${group.id}/refresh`, { method: 'POST' })).then(refresh)
+            }
+          >
+            Refresh
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!group.groupId}
+            onClick={() => void loadRequests()}
+          >
+            Join requests
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (window.confirm(`Delete ${group.subject}? Everyone is removed from the group.`)) {
+                void act(() => api(`/groups/${group.id}`, { method: 'DELETE' }), 'Deleted').then(
+                  refresh,
+                );
+              }
+            }}
+          >
+            Delete
+          </Button>
+        </span>
+      </div>
+      {group.inviteLink && (
+        <span className="text-sm">
+          Invite link: <code className="rounded bg-muted px-1">{group.inviteLink}</code>
+        </span>
+      )}
+      {requests && (
+        <ul className="flex flex-col gap-1 rounded-md border p-2 text-sm">
+          {requests.length === 0 && <li className="text-muted-foreground">No one is waiting.</li>}
+          {requests.map((r) => (
+            <li key={r.id} className="flex items-center gap-2">
+              <span>{r.waId ? `+${r.waId}` : r.id}</span>
+              <span className="ml-auto flex gap-2">
+                <Button size="sm" onClick={() => void answer(r.id, true)}>
+                  Approve
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => void answer(r.id, false)}>
+                  Decline
+                </Button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {group.groupId && (
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void act(
+              () =>
+                api(`/groups/${group.id}/messages`, {
+                  method: 'POST',
+                  body: { body: announcement.trim() },
+                }),
+              'Sent to the group',
+            ).then((r) => r && setAnnouncement(''));
+          }}
+        >
+          <input
+            aria-label={`Message to ${group.subject}`}
+            className="h-9 flex-1 rounded-md border border-input bg-transparent px-3 text-sm"
+            placeholder="Send an announcement to the group"
+            value={announcement}
+            onChange={(e) => setAnnouncement(e.target.value)}
+          />
+          <Button type="submit" size="sm" disabled={!announcement.trim()}>
+            Send
+          </Button>
+        </form>
+      )}
+    </li>
+  );
+}
+
+function Groups({ phoneId }: { phoneId: string }) {
+  const queryClient = useQueryClient();
+  const groups = useQuery({ queryKey: ['groups'], queryFn: () => api<GroupDto[]>('/groups') });
+  const [subject, setSubject] = useState('');
+
+  const create = async (e: FormEvent) => {
+    e.preventDefault();
+    const created = await act(
+      () =>
+        api<GroupDto>('/groups', { method: 'POST', body: { phoneId, subject: subject.trim() } }),
+      'Group created',
+    );
+    if (created) {
+      setSubject('');
+      await queryClient.invalidateQueries({ queryKey: ['groups'] });
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Groups</CardTitle>
+        <CardDescription>
+          WhatsApp groups run by your number. People join with the invite link; you approve them
+          here.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <form className="flex items-end gap-2" onSubmit={(e) => void create(e)}>
+          <div className="flex-1">
+            <FormField
+              label="Group name"
+              name="group-subject"
+              maxLength={128}
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+            />
+          </div>
+          <Button type="submit" disabled={!phoneId || !subject.trim()}>
+            Create group
+          </Button>
+        </form>
+        {groups.isPending ? (
+          <Skeleton className="h-16 w-full" />
+        ) : (
+          <ul className="divide-y">
+            {groups.data?.map((g) => (
+              <GroupRow key={g.id} group={g} />
+            ))}
+            {groups.data?.length === 0 && (
+              <li className="text-sm text-muted-foreground">No groups yet.</li>
+            )}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ------------------------------------------------------------------ calling
+
+function Calling({ phoneId }: { phoneId: string }) {
+  const queryClient = useQueryClient();
+  const key = ['calling', phoneId];
+  const settings = useQuery({
+    queryKey: key,
+    enabled: Boolean(phoneId),
+    retry: false,
+    queryFn: () => api<CallingSettingsDto>(`/calling/settings?phoneId=${phoneId}`),
+  });
+
+  // Local copy, so a toggle changes the moment it is clicked; the server's answer then wins.
+  const [local, setLocal] = useState<CallingSettingsDto | null>(null);
+  const current = local ?? settings.data;
+
+  const save = async (patch: Partial<CallingSettingsDto>) => {
+    if (!current) return;
+    const before = current;
+    const next = { ...before, ...patch };
+    setLocal(next);
+    // Show the change at once, and put it back if Meta or the plan refuses it.
+    const saved = await act(
+      () =>
+        api<CallingSettingsDto>(`/calling/settings?phoneId=${phoneId}`, {
+          method: 'PUT',
+          body: next,
+        }),
+      'Saved. WhatsApp can take a while to show the change.',
+    );
+    setLocal(saved ?? before);
+    if (saved) queryClient.setQueryData(key, saved);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Calling</CardTitle>
+        <CardDescription>
+          Let customers call this number on WhatsApp, and call back those who allow it. Calls ring
+          for everyone in the inbox; the first to answer takes it.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 text-sm">
+        {settings.isPending ? (
+          <Skeleton className="h-16 w-full" />
+        ) : !current ? (
+          <p className="text-muted-foreground">
+            Could not read this number&apos;s calling settings.
+          </p>
+        ) : (
+          <>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={current.enabled}
+                onChange={(e) => void save({ enabled: e.target.checked })}
+              />
+              Calling on
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={current.iconVisible}
+                disabled={!current.enabled}
+                onChange={(e) => void save({ iconVisible: e.target.checked })}
+              />
+              Show the call button to customers
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={current.callbackPermission}
+                disabled={!current.enabled}
+                onChange={(e) => void save({ callbackPermission: e.target.checked })}
+              />
+              Ask customers who call for permission to call them back
+            </label>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function WhatsAppToolsPage() {
+  const canManage = useCan(Permission.CHANNELS_MANAGE);
+  const numbers = usePhoneNumbers();
+  const connected = (numbers.data ?? []).filter((n) => n.status === 'connected');
+  const [picked, setPicked] = useState('');
+  const phoneId = picked || connected[0]?.id || '';
+
+  if (!canManage) {
+    return (
+      <p className="text-sm text-muted-foreground">Only owners and admins can use these tools.</p>
+    );
+  }
+  if (numbers.isPending) return <Skeleton className="h-40 w-full" />;
+  if (connected.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Connect a WhatsApp number in Settings &gt; WhatsApp to use these tools.
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-4">
+      <NumberPicker value={phoneId} onChange={setPicked} numbers={connected} />
+      <Tabs defaultValue="qr">
+        <TabsList>
+          <TabsTrigger value="qr">QR codes</TabsTrigger>
+          <TabsTrigger value="catalog">Catalog</TabsTrigger>
+          <TabsTrigger value="groups">Groups</TabsTrigger>
+          <TabsTrigger value="calling">Calling</TabsTrigger>
+        </TabsList>
+        <TabsContent value="qr">
+          <QrCodes phoneId={phoneId} />
+        </TabsContent>
+        <TabsContent value="catalog">
+          <Catalog phoneId={phoneId} />
+        </TabsContent>
+        <TabsContent value="groups">
+          <Groups phoneId={phoneId} />
+        </TabsContent>
+        <TabsContent value="calling">
+          <Calling phoneId={phoneId} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}

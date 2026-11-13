@@ -3,7 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { DbClient } from '../src/client';
 import { withDbContext, withTenant } from '../src/tenant';
-import { appClient, createTenant, ownerClient, type TenantFixture } from './fixtures';
+import {
+  appClient,
+  createTenant,
+  ownerClient,
+  type TenantFixture,
+  whatsappChannelId,
+} from './fixtures';
 
 let owner: DbClient;
 let app: DbClient;
@@ -24,7 +30,12 @@ async function seedConversation(t: TenantFixture) {
     });
     const contact = await tx.contact.create({ data: { orgId: t.orgId, waId: randomUUID() } });
     const conversation = await tx.conversation.create({
-      data: { orgId: t.orgId, phoneId: phone.id, contactId: contact.id },
+      data: {
+        orgId: t.orgId,
+        phoneId: phone.id,
+        channelId: await whatsappChannelId(tx, phone.id),
+        contactId: contact.id,
+      },
     });
     const message = await tx.message.create({
       data: {

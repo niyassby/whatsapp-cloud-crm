@@ -236,7 +236,8 @@ export interface TagDto {
 
 export interface ContactDto {
   id: string;
-  waId: string;
+  /** Null for someone known only on Instagram or website chat. */
+  waId: string | null;
   name: string | null;
   email: string | null;
   customFields: Record<string, FieldValue>;

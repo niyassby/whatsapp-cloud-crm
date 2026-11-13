@@ -1,23 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import {
-  applyContactReply,
   applyRecipientStatus,
-  conversationInclude,
   conversationToDto,
-  exitDripsOnOptOut,
+  emitWebhookEvent,
+  type InboundResult,
   messageInclude,
   messageToDto,
   type Prisma,
+  recordInbound,
   refundDebit,
-  setContactConsent,
   withTenant,
-  emitWebhookEvent,
 } from '@wacrm/db';
-import { isOptOutMessage, messageDebitKey, messagePreview, toPublicMessage } from '@wacrm/shared';
+import { messageDebitKey, toPublicMessage } from '@wacrm/shared';
 import { mapError, parseWebhookEvents, type WebhookEvent } from '@wacrm/whatsapp';
 import type { WorkerDeps } from '../deps';
-
-const WINDOW_MS = 24 * 3600_000;
+import { qrReferralFor } from './channels';
 
 type InboundEvent = Extract<WebhookEvent, { type: 'message' }>;
 type StatusEvent = Extract<WebhookEvent, { type: 'status' }>;
@@ -31,9 +28,6 @@ interface Extracted {
 
 /** Types with no customer content. They do not create or touch a conversation. */
 const SKIPPED = new Set(['system', 'request_welcome']);
-
-/** Message types the customer writes or taps. A photo captioned "stop" is not an opt-out. */
-const CAN_OPT_OUT = new Set(['text', 'button', 'interactive']);
 
 /**
  * Adds what the message replies to (a quick-reply button names the template message it came from)
@@ -110,7 +104,21 @@ function extract(ev: InboundEvent): Extracted {
     case 'contacts':
       return { type: 'contacts', body: null, content: ev.contacts as Prisma.InputJsonValue };
     case 'order':
-      return { type: 'order', body: ev.order.text ?? null, content: ev.order };
+      // Stored in Meta's documented shape, not the SDK's, so the content outlives the SDK.
+      return {
+        type: 'order',
+        body: ev.order.text ?? null,
+        content: {
+          catalog_id: ev.order.catalogId,
+          ...(ev.order.text ? { text: ev.order.text } : {}),
+          product_items: ev.order.productItems.map((i) => ({
+            product_retailer_id: i.productRetailerId,
+            quantity: i.quantity,
+            item_price: i.itemPrice,
+            currency: i.currency,
+          })),
+        },
+      };
     default:
       return { type: 'unsupported', body: 'This message type is not supported yet.' };
   }
@@ -139,189 +147,44 @@ async function retryOnDeadlock<T>(fn: () => Promise<T>, attempts = 3): Promise<T
 async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): Promise<void> {
   if (SKIPPED.has(ev.messageType)) return;
   const data = extract(ev);
-  const sentAt = new Date(Number(ev.timestamp) * 1000);
-  const preview = messagePreview(data.type, data.body);
   const messageId = randomUUID();
   const createdAt = new Date();
 
   const saved = await retryOnDeadlock(() =>
     withTenant(deps.db, { orgId }, async (tx) => {
-      const claim = await tx.messageRef.createMany({
-        data: {
-          orgId,
-          kind: 'wamid',
-          ref: ev.id,
-          messageId,
-          messageCreatedAt: createdAt,
+      const channel = await tx.channel.findFirst({
+        where: {
+          kind: 'whatsapp',
+          status: 'active',
+          phone: { phoneNumberId: ev.phoneNumberId, status: { not: 'disconnected' } },
         },
-        skipDuplicates: true,
+        select: { id: true, phoneId: true },
       });
-      if (claim.count === 0) {
-        const ref = await tx.messageRef.findUnique({
-          where: { orgId_kind_ref: { orgId, kind: 'wamid', ref: ev.id } },
-        });
-        return ref ? { duplicate: ref } : null;
-      }
-
-      const phone = await tx.phoneNumber.findFirst({
-        where: { phoneNumberId: ev.phoneNumberId, status: { not: 'disconnected' } },
-        select: { id: true },
+      if (!channel) return null;
+      return recordInbound(tx, {
+        orgId,
+        channel: { id: channel.id, kind: 'whatsapp', phoneId: channel.phoneId },
+        sender: { waId: ev.sender, name: ev.profileName ?? null },
+        ref: { kind: 'wamid', id: ev.id },
+        sentAt: new Date(Number(ev.timestamp) * 1000),
+        messageId,
+        createdAt,
+        type: data.type,
+        body: data.body,
+        content: withReplyContext(data.content, ev),
+        media: data.media,
+        // A click-to-WhatsApp ad, or else a QR code whose exact message this is.
+        referral:
+          ev.referral ??
+          (data.type === 'text' && channel.phoneId
+            ? await qrReferralFor(tx, channel.phoneId, data.body)
+            : null),
       });
-      if (!phone) return null;
-
-      const known = await tx.contact.count({ where: { orgId, waId: ev.sender } });
-      const row = await tx.contact.upsert({
-        where: { orgId_waId: { orgId, waId: ev.sender } },
-        create: { orgId, waId: ev.sender, name: ev.profileName, lastActivityAt: sentAt },
-        update: {},
-        select: { id: true, mergedIntoId: true },
-      });
-      // A duplicate that was merged: its number now belongs to the primary contact.
-      const contact = { id: row.mergedIntoId ?? row.id };
-      const current = await tx.contact.findUniqueOrThrow({
-        where: { id: contact.id },
-        select: { name: true, lastActivityAt: true, deletedAt: true },
-      });
-      await tx.contact.update({
-        where: { id: contact.id },
-        data: {
-          // Writing in brings a deleted contact back, with its consent record intact.
-          deletedAt: null,
-          // A name someone entered or imported is not replaced by the WhatsApp profile name.
-          ...(!current.name && ev.profileName ? { name: ev.profileName } : {}),
-          ...(!current.lastActivityAt || current.lastActivityAt < sentAt
-            ? { lastActivityAt: sentAt }
-            : {}),
-        },
-      });
-
-      if (known === 0) {
-        await emitWebhookEvent(tx, orgId, 'contact.created', {
-          id: contact.id,
-          waId: ev.sender,
-          name: ev.profileName ?? null,
-        });
-      }
-
-      const reply = await applyContactReply(tx, contact.id, sentAt);
-
-      let optedOut = false;
-      if (CAN_OPT_OUT.has(data.type)) {
-        const org = await tx.organization.findUniqueOrThrow({
-          where: { id: orgId },
-          select: { optOutKeywords: true },
-        });
-        if (isOptOutMessage(data.body, org.optOutKeywords)) {
-          optedOut = await setContactConsent(tx, {
-            orgId,
-            contactId: contact.id,
-            status: 'opted_out',
-            source: 'keyword',
-            proof: `Message ${ev.id}: ${data.body?.slice(0, 200)}`,
-          });
-          await exitDripsOnOptOut(tx, contact.id);
-          if (optedOut) {
-            await emitWebhookEvent(tx, orgId, 'contact.opted_out', {
-              id: contact.id,
-              waId: ev.sender,
-            });
-          }
-        }
-      }
-
-      const key = { orgId_phoneId_contactId: { orgId, phoneId: phone.id, contactId: contact.id } };
-      const existing = await tx.conversation.findUnique({
-        where: key,
-        select: { windowExpiresAt: true, lastMessageAt: true },
-      });
-      const windowFromThis = new Date(sentAt.getTime() + WINDOW_MS);
-      // Deliveries can arrive out of order: never move the window or the preview backwards.
-      const windowExpiresAt =
-        existing?.windowExpiresAt && existing.windowExpiresAt > windowFromThis
-          ? existing.windowExpiresAt
-          : windowFromThis;
-      const isLatest = !existing?.lastMessageAt || existing.lastMessageAt <= sentAt;
-
-      const conversation = await tx.conversation.upsert({
-        where: key,
-        create: {
-          orgId,
-          phoneId: phone.id,
-          contactId: contact.id,
-          windowExpiresAt,
-          lastMessageAt: sentAt,
-          lastMessagePreview: preview,
-          unreadCount: 1,
-        },
-        update: {
-          // A customer writing back reopens the conversation.
-          status: 'open',
-          windowExpiresAt,
-          unreadCount: { increment: 1 },
-          ...(isLatest ? { lastMessageAt: sentAt, lastMessagePreview: preview } : {}),
-        },
-        include: conversationInclude,
-      });
-
-      const message = await tx.message.create({
-        data: {
-          id: messageId,
-          createdAt,
-          orgId,
-          conversationId: conversation.id,
-          direction: 'inbound',
-          type: data.type,
-          status: 'received',
-          body: data.body,
-          content: withReplyContext(data.content, ev),
-          waMessageId: ev.id,
-          ...(data.media
-            ? {
-                mediaMetaId: data.media.id,
-                mediaMime: data.media.mime,
-                mediaFilename: data.media.filename,
-                mediaStatus: 'pending' as const,
-              }
-            : {}),
-        },
-        include: messageInclude,
-      });
-      await emitWebhookEvent(tx, orgId, 'message.received', {
-        message: toPublicMessage(messageToDto(message)),
-        contact: { id: contact.id, waId: ev.sender, name: current.name ?? ev.profileName ?? null },
-        phoneNumberId: phone.id,
-      });
-      return {
-        conversation,
-        message,
-        contactId: contact.id,
-        optedOut,
-        campaignId: reply.campaignId,
-      };
     }),
   );
   if (!saved) return;
-  if ('duplicate' in saved && saved.duplicate) {
-    // Already saved. The rules may not have run if queueing failed last time; a second run is
-    // stopped by the claim inside it, so queueing again is safe.
-    await deps.enqueueAutomation({
-      orgId,
-      messageId: saved.duplicate.messageId,
-      createdAt: saved.duplicate.messageCreatedAt.toISOString(),
-    });
-    return;
-  }
-
-  if (saved.campaignId) {
-    deps.publisher.emit(orgId, 'campaign:updated', { campaignId: saved.campaignId });
-  }
-  if (saved.optedOut) deps.publisher.emit(orgId, 'contact:updated', { contactId: saved.contactId });
-  deps.publisher.emit(orgId, 'message:new', { message: messageToDto(saved.message) });
-  deps.publisher.emit(orgId, 'conversation:updated', {
-    conversation: conversationToDto(saved.conversation),
-  });
-  await deps.enqueueAutomation({ orgId, messageId, createdAt: createdAt.toISOString() });
-  if (data.media) {
+  await afterInbound(deps, orgId, saved);
+  if (saved.kind === 'saved' && data.media) {
     await deps.enqueueMediaDownload({
       orgId,
       messageId,
@@ -330,6 +193,37 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
       phoneNumberId: ev.phoneNumberId,
     });
   }
+}
+
+/** Publish and queue the rules after an inbound message on any channel is saved. */
+export async function afterInbound(
+  deps: WorkerDeps,
+  orgId: string,
+  saved: InboundResult,
+): Promise<void> {
+  if (saved.kind === 'duplicate') {
+    // Already saved. The rules may not have run if queueing failed last time; a second run is
+    // stopped by the claim inside it, so queueing again is safe.
+    await deps.enqueueAutomation({
+      orgId,
+      messageId: saved.messageId,
+      createdAt: saved.messageCreatedAt.toISOString(),
+    });
+    return;
+  }
+  if (saved.campaignId) {
+    deps.publisher.emit(orgId, 'campaign:updated', { campaignId: saved.campaignId });
+  }
+  if (saved.optedOut) deps.publisher.emit(orgId, 'contact:updated', { contactId: saved.contactId });
+  deps.publisher.emit(orgId, 'message:new', { message: messageToDto(saved.message) });
+  deps.publisher.emit(orgId, 'conversation:updated', {
+    conversation: conversationToDto(saved.conversation),
+  });
+  await deps.enqueueAutomation({
+    orgId,
+    messageId: saved.message.id,
+    createdAt: saved.message.createdAt.toISOString(),
+  });
 }
 
 const RANK: Record<string, number> = {

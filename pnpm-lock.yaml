@@ -125,6 +125,9 @@ importers:
       pdfkit:
         specifier: ^0.20.2
         version: 0.20.2
+      qrcode:
+        specifier: 1.5.4
+        version: 1.5.4
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2
@@ -156,6 +159,9 @@ importers:
       '@types/pdfkit':
         specifier: ^0.17.7
         version: 0.17.7
+      '@types/qrcode':
+        specifier: 1.5.5
+        version: 1.5.5
       socket.io-client:
         specifier: ^4.8.4
         version: 4.8.4
@@ -2984,6 +2990,9 @@ packages:
 
   '@types/pg@8.23.1':
     resolution: {integrity: sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==}
+
+  '@types/qrcode@1.5.5':
+    resolution: {integrity: sha512-CdfBi/e3Qk+3Z/fXYShipBT13OJ2fDO2Q2w5CIP5anLTLIndQG9z6P1cnm+8zCWSpm5dnxMFd/uREtb0EXuQzg==}
 
   '@types/qrcode@1.5.6':
     resolution: {integrity: sha512-te7NQcV2BOvdj2b1hCAHzAoMNuj65kNBMz0KBaxM6c3VGBOhU0dURQKOtH8CFNI/dsKkwlv32p26qYQTWoB5bw==}
@@ -7548,6 +7557,10 @@ snapshots:
       '@types/node': 20.19.43
       pg-protocol: 1.16.1
       pg-types: 2.2.0
+
+  '@types/qrcode@1.5.5':
+    dependencies:
+      '@types/node': 20.19.43
 
   '@types/qrcode@1.5.6':
     dependencies:

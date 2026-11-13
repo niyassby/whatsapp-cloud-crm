@@ -1,5 +1,6 @@
 'use client';
 
+import { CHANNEL_LABELS } from '@wacrm/shared';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { ConversationDto } from '@wacrm/shared';
 import { useEffect, useRef, useState } from 'react';
@@ -161,8 +162,13 @@ function Row({
     >
       <span className="flex items-center gap-2">
         <span className={cn('truncate', c.unreadCount > 0 ? 'font-semibold' : 'font-medium')}>
-          {c.contact.name ?? c.contact.waId}
+          {c.contact.name ?? (c.contact.waId ? `+${c.contact.waId}` : 'Visitor')}
         </span>
+        {c.channel.kind !== 'whatsapp' && (
+          <span className="shrink-0 rounded bg-muted px-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+            {CHANNEL_LABELS[c.channel.kind]}
+          </span>
+        )}
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           {shortTime(c.lastMessageAt)}
         </span>

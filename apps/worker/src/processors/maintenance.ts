@@ -6,6 +6,7 @@ import {
   totpAad,
   webhookSecretAad,
   integrationCredentialsAad,
+  channelCredentialsAad,
 } from '@wacrm/shared/server';
 
 /** Delete raw webhook payloads past retention. Returns how many rows went. */
@@ -54,6 +55,7 @@ export async function reencryptSecrets(
   users: number;
   webhookEndpoints: number;
   integrations: number;
+  channels: number;
   failed: string[];
 }> {
   const refresh = (value: string | null, aad: string) =>
@@ -62,6 +64,7 @@ export async function reencryptSecrets(
   let users = 0;
   let webhookEndpoints = 0;
   let integrations = 0;
+  let channels = 0;
   const failed: string[] = [];
 
   const phones = await db.$queryRaw<{ id: string; org_id: string }[]>`
@@ -131,5 +134,20 @@ export async function reencryptSecrets(
     });
     await run.catch(() => failed.push(`integration_connections:${id}`));
   }
-  return { phoneNumbers, users, webhookEndpoints, integrations, failed };
+  const channelRows = await db.$queryRaw<{ id: string; org_id: string }[]>`
+    SELECT * FROM secrets_list_channels()`;
+  for (const { id, org_id: orgId } of channelRows) {
+    const run = withTenant(db, { orgId }, async (tx) => {
+      const row = await tx.channel.findUniqueOrThrow({
+        where: { id },
+        select: { credentialsEnc: true },
+      });
+      const credentialsEnc = refresh(row.credentialsEnc, channelCredentialsAad(id));
+      if (!credentialsEnc) return;
+      await tx.channel.update({ where: { id }, data: { credentialsEnc } });
+      channels++;
+    });
+    await run.catch(() => failed.push(`channels:${id}`));
+  }
+  return { phoneNumbers, users, webhookEndpoints, integrations, channels, failed };
 }

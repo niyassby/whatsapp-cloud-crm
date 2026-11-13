@@ -187,7 +187,7 @@ export class ContactsService {
       return rows.map((c) => ({
         id: c.id,
         status: c.status,
-        phoneDisplay: c.phone.displayPhoneNumber,
+        phoneDisplay: c.phone?.displayPhoneNumber ?? null,
         lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
         lastMessagePreview: c.lastMessagePreview,
       }));
@@ -721,9 +721,9 @@ export class ContactsService {
     for (const source of moving) {
       const target = await tx.conversation.findUnique({
         where: {
-          orgId_phoneId_contactId: {
+          orgId_channelId_contactId: {
             orgId: source.orgId,
-            phoneId: source.phoneId,
+            channelId: source.channelId,
             contactId: toId,
           },
         },

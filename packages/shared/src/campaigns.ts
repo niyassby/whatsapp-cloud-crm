@@ -53,13 +53,14 @@ export function zonedTimeToUtc(local: string, zone: string): Date {
 
 // ------------------------------------------------------------------ who receives what
 
-export type SkipReason = 'no_consent' | 'opted_out' | 'missing_variable' | 'merged';
+export type SkipReason = 'no_consent' | 'opted_out' | 'missing_variable' | 'merged' | 'no_whatsapp';
 
 export const SKIP_REASON_LABELS: Record<SkipReason, string> = {
   no_consent: 'No marketing consent',
   opted_out: 'Opted out',
   missing_variable: 'Missing a variable value',
   merged: 'Merged into another contact',
+  no_whatsapp: 'No WhatsApp number',
 };
 
 /**
@@ -286,7 +287,7 @@ export interface CampaignRecipientDto {
   id: string;
   contactId: string;
   contactName: string | null;
-  waId: string;
+  waId: string | null;
   status: RecipientStatus;
   skipReason: string | null;
   errorMessage: string | null;

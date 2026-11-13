@@ -157,7 +157,8 @@ export async function downloadJobFile(jobId: string): Promise<void> {
   window.location.assign(url);
 }
 
-export const contactLabel = (c: { name: string | null; waId: string }) => c.name ?? `+${c.waId}`;
+export const contactLabel = (c: { name: string | null; waId: string | null }) =>
+  c.name ?? (c.waId ? `+${c.waId}` : 'Unknown visitor');
 
 export const OPT_IN_LABELS: Record<OptInStatus, string> = {
   opted_in: 'Opted in',

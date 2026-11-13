@@ -19,7 +19,13 @@ import {
 import { useRealtime } from '@/components/realtime-provider';
 import { api } from '@/lib/api';
 import { handleApiError } from '@/lib/forms';
-import { applyConversationUpdate, displayWaId, inboxKeys, useLabels } from '@/lib/inbox';
+import {
+  applyConversationUpdate,
+  contactSubtitle,
+  displayWaId,
+  inboxKeys,
+  useLabels,
+} from '@/lib/inbox';
 import { useCan, useMe, useMembers } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
@@ -76,10 +82,17 @@ export function DetailsPanel({ conversation }: { conversation: ConversationDto }
   return (
     <aside className="grid gap-6 p-4" aria-label="Conversation details">
       <div>
-        <h3 className="font-semibold">{conversation.contact.name ?? conversation.contact.waId}</h3>
-        <p className="text-sm text-muted-foreground">{displayWaId(conversation.contact.waId)}</p>
+        <h3 className="font-semibold">
+          {conversation.contact.name ?? (displayWaId(conversation.contact.waId) || 'Visitor')}
+        </h3>
+        <p className="text-sm text-muted-foreground">{contactSubtitle(conversation)}</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Via {conversation.phoneNumber.display ?? 'your number'}
+          Via {conversation.phoneNumber?.display ?? conversation.channel.name}
+          {conversation.ad && (
+            <span className="mt-1 block" data-testid="conversation-source">
+              From {conversation.ad.headline ?? conversation.ad.sourceId ?? 'an ad'}
+            </span>
+          )}
         </p>
         <div className="mt-2 flex items-center gap-2">
           <ConsentBadge status={conversation.contact.optInStatus} />

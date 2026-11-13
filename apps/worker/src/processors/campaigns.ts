@@ -17,6 +17,7 @@ import {
   withTenant,
   emitWebhookEvent,
   campaignCostMicros,
+  whatsappChannelId,
 } from '@wacrm/db';
 import {
   AppError,
@@ -99,7 +100,7 @@ function parseTemplate(row: {
 
 const toTemplateContact = (c: {
   name: string | null;
-  waId: string;
+  waId: string | null;
   email: string | null;
   customFields: unknown;
 }): ContactForTemplate => ({
@@ -220,7 +221,7 @@ export async function prepareCampaign(
     c: {
       id: string;
       name: string | null;
-      waId: string;
+      waId: string | null;
       email: string | null;
       customFields: unknown;
       optInStatus: 'unknown' | 'opted_in' | 'opted_out';
@@ -236,6 +237,8 @@ export async function prepareCampaign(
       estimateMicros: 0n,
     });
     if (c.mergedIntoId) return skip('merged');
+    // Known only on Instagram or website chat: a broadcast needs a WhatsApp number.
+    if (!c.waId) return skip('no_whatsapp');
     const reason = broadcastSkipReason(c.optInStatus, template.category);
     if (reason) return skip(reason);
     const variables = resolveVariables(template.definition, mapping, toTemplateContact(c), extra);
@@ -767,12 +770,14 @@ async function prepareMessages(
           });
         } else {
           // Closed until they reply, so a broadcast does not flood the team's open inbox.
+          const channelId = await whatsappChannelId(tx, campaign.phoneId);
           const created = await tx.conversation.upsert({
             where: {
-              orgId_phoneId_contactId: { orgId, phoneId: campaign.phoneId, contactId: contact.id },
+              orgId_channelId_contactId: { orgId, channelId, contactId: contact.id },
             },
             create: {
               orgId,
+              channelId,
               phoneId: campaign.phoneId,
               contactId: contact.id,
               status: 'closed',

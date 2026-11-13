@@ -8,6 +8,7 @@ import {
   ensureWallet,
   reserveFunds,
   withTenant,
+  whatsappChannelId,
 } from '@wacrm/db';
 import { ErrorCode } from '@wacrm/shared';
 import { phoneTokenAad, SecretBox } from '@wacrm/shared/server';
@@ -517,7 +518,13 @@ describe('dashboard', () => {
     await withTenant(owner, { orgId: s.orgId }, async (tx) => {
       const contact = await tx.contact.findFirstOrThrow({ where: { orgId: s.orgId } });
       const c = await tx.conversation.create({
-        data: { orgId: s.orgId, phoneId: s.phoneId, contactId: contact.id, status: 'open' },
+        data: {
+          orgId: s.orgId,
+          phoneId: s.phoneId,
+          channelId: await whatsappChannelId(tx, s.phoneId),
+          contactId: contact.id,
+          status: 'open',
+        },
       });
       const user = await tx.membership.findFirstOrThrow({ where: { orgId: s.orgId } });
       const at = (seconds: number) => new Date(Date.now() - 3_600_000 + seconds * 1000);

@@ -11,6 +11,7 @@ import {
   type DbClient,
   ensureWallet,
   withTenant,
+  whatsappChannelId,
 } from '@wacrm/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -790,7 +791,7 @@ describe('drip sequences', () => {
   it('stops when the contact replies', async () => {
     const s = await drip();
     await runDripBatch(s.deps, s.orgId, s.sequenceId);
-    await processMessagesChange(s.deps, s.orgId, s.inbound(s.contact.waId, 'Tell me more'));
+    await processMessagesChange(s.deps, s.orgId, s.inbound(s.contact.waId!, 'Tell me more'));
     expect(await s.enrollment()).toMatchObject({ status: 'exited', exitReason: 'replied' });
     await due(s);
     await runDripBatch(s.deps, s.orgId, s.sequenceId);
@@ -800,7 +801,7 @@ describe('drip sequences', () => {
   it('carries on after a reply when told to', async () => {
     const s = await drip({ exitOnReply: false });
     await runDripBatch(s.deps, s.orgId, s.sequenceId);
-    await processMessagesChange(s.deps, s.orgId, s.inbound(s.contact.waId, 'Thanks'));
+    await processMessagesChange(s.deps, s.orgId, s.inbound(s.contact.waId!, 'Thanks'));
     await due(s);
     await runDripBatch(s.deps, s.orgId, s.sequenceId);
     expect(s.sends()).toBe(2);
@@ -808,7 +809,7 @@ describe('drip sequences', () => {
 
   it('always stops on STOP', async () => {
     const s = await drip({ exitOnReply: false });
-    await processMessagesChange(s.deps, s.orgId, s.inbound(s.contact.waId, 'STOP'));
+    await processMessagesChange(s.deps, s.orgId, s.inbound(s.contact.waId!, 'STOP'));
     expect(await s.enrollment()).toMatchObject({ status: 'exited', exitReason: 'opted_out' });
   });
 
@@ -896,7 +897,12 @@ describe('acceptance: a 10k campaign', () => {
     const conversationId = await withTenant(client, { orgId: s.orgId }, async (tx) => {
       const contact = await tx.contact.create({ data: { orgId: s.orgId, waId: '14155552671' } });
       const c = await tx.conversation.create({
-        data: { orgId: s.orgId, phoneId: s.number.id, contactId: contact.id },
+        data: {
+          orgId: s.orgId,
+          phoneId: s.number.id,
+          channelId: await whatsappChannelId(tx, s.number.id),
+          contactId: contact.id,
+        },
       });
       return c.id;
     });

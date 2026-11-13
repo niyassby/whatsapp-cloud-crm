@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { type DbClient, emitWebhookEvent, withTenant } from '@wacrm/db';
+import { type DbClient, emitWebhookEvent, withTenant, whatsappChannelId } from '@wacrm/db';
 import { WEBHOOK_MAX_ATTEMPTS, type WebhookEventType } from '@wacrm/shared';
 import { verifyWebhookSignature, webhookSecretAad } from '@wacrm/shared/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -282,7 +282,12 @@ describe('events come from what really happens', () => {
     await withTenant(client, { orgId }, async (tx) => {
       const contact = await tx.contact.create({ data: { orgId, waId: '14155552671' } });
       const c = await tx.conversation.create({
-        data: { orgId, phoneId: s.number.id, contactId: contact.id },
+        data: {
+          orgId,
+          phoneId: s.number.id,
+          channelId: await whatsappChannelId(tx, s.number.id),
+          contactId: contact.id,
+        },
       });
       await tx.message.create({
         data: {

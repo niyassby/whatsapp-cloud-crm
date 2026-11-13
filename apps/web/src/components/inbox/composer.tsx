@@ -3,6 +3,8 @@
 import { useQueryClient } from '@tanstack/react-query';
 import {
   ACCEPTED_MEDIA_TYPES,
+  CHANNEL_CAPABILITIES,
+  CHANNEL_LABELS,
   type ConversationDto,
   type MessageDto,
   mediaRuleFor,
@@ -17,6 +19,7 @@ import { handleApiError } from '@/lib/forms';
 import { inboxKeys, isWindowOpen, upsertMessage, useCannedReplies } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
 import { AiMenu } from './ai-menu';
+import { ProductsDialog } from './products-dialog';
 import { TemplateDialog } from './template-dialog';
 
 /** Re-renders when the window closes, so the composer locks without needing a new event. */
@@ -52,7 +55,10 @@ export function Composer({ conversation }: { conversation: ConversationDto }) {
   const windowOpen = useWindowOpen(conversation);
 
   const isNote = mode === 'note';
-  const numberConnected = conversation.phoneNumber.status === 'connected';
+  const caps = CHANNEL_CAPABILITIES[conversation.channel.kind];
+  const numberConnected =
+    conversation.channel.status === 'active' &&
+    (!conversation.phoneNumber || conversation.phoneNumber.status === 'connected');
   // Notes never reach the customer, so neither restriction applies to them.
   const locked = !isNote && (!windowOpen || !numberConnected);
 
@@ -153,7 +159,8 @@ export function Composer({ conversation }: { conversation: ConversationDto }) {
     <div className="shrink-0 border-t bg-background">
       {!numberConnected && (
         <p role="status" className="bg-muted px-3 py-2 text-sm text-muted-foreground">
-          This WhatsApp number is not connected, so replies cannot be sent.
+          This {CHANNEL_LABELS[conversation.channel.kind]} channel is not connected, so replies
+          cannot be sent.
         </p>
       )}
       {numberConnected && !windowOpen && (
@@ -163,13 +170,16 @@ export function Composer({ conversation }: { conversation: ConversationDto }) {
         >
           <span className="flex items-center gap-1.5">
             <Clock className="size-4 shrink-0" aria-hidden />
-            The 24-hour window has closed. You can only send an approved template until the customer
-            replies.
+            {caps.templates
+              ? 'The 24-hour window has closed. You can only send an approved template until the customer replies.'
+              : 'The 24-hour window has closed. You can reply when the customer writes again.'}
           </span>
-          <TemplateDialog
-            conversationId={conversation.id}
-            optInStatus={conversation.contact.optInStatus}
-          />
+          {caps.templates && (
+            <TemplateDialog
+              conversationId={conversation.id}
+              optInStatus={conversation.contact.optInStatus}
+            />
+          )}
         </div>
       )}
 
@@ -221,7 +231,10 @@ export function Composer({ conversation }: { conversation: ConversationDto }) {
         </div>
 
         <div className="flex items-end gap-1">
-          {!isNote && (
+          {!isNote && caps.products && (
+            <ProductsDialog conversation={conversation} disabled={locked || busy} />
+          )}
+          {!isNote && caps.media && (
             <>
               <input
                 ref={fileRef}

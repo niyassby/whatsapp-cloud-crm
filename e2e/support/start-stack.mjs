@@ -9,6 +9,7 @@ import {
   APP_SECRET,
   STRIPE_WEBHOOK_SECRET,
   DB_NAME,
+  IG_APP_SECRET,
   PORTS,
   QUEUE_PREFIX,
   VERIFY_TOKEN,
@@ -39,6 +40,9 @@ const env = {
   META_APP_SECRET: APP_SECRET,
   META_WEBHOOK_VERIFY_TOKEN: VERIFY_TOKEN,
   META_GRAPH_BASE_URL: `http://127.0.0.1:${PORTS.graph}`,
+  INSTAGRAM_APP_ID: 'e2e-ig-app',
+  INSTAGRAM_APP_SECRET: IG_APP_SECRET,
+  INSTAGRAM_BASE_URL: `http://127.0.0.1:${PORTS.graph}/ig`,
   WEBHOOK_ALLOW_PRIVATE_URLS: 'true',
   INTEGRATIONS_DEMO: 'true',
   // Deterministic AI with no network: hashed word vectors and answers from the best passage.

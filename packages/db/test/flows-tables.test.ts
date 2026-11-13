@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { DbClient } from '../src/client';
 import { withTenant } from '../src/tenant';
-import { appClient, createTenant, ownerClient, type TenantFixture } from './fixtures';
+import {
+  appClient,
+  createTenant,
+  ownerClient,
+  type TenantFixture,
+  whatsappChannelId,
+} from './fixtures';
 
 let owner: DbClient;
 let app: DbClient;
@@ -36,7 +42,12 @@ beforeAll(async () => {
     const contact = await tx.contact.create({ data: { orgId: b.orgId, waId: '919800011122' } });
     contactId = contact.id;
     const conversation = await tx.conversation.create({
-      data: { orgId: b.orgId, phoneId: phone.id, contactId: contact.id },
+      data: {
+        orgId: b.orgId,
+        phoneId: phone.id,
+        channelId: await whatsappChannelId(tx, phone.id),
+        contactId: contact.id,
+      },
     });
     conversationId = conversation.id;
     await tx.flow.create({ data: { id: flowId, orgId: b.orgId, name: 'Theirs', draft: {} } });

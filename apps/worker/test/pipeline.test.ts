@@ -1,6 +1,6 @@
 /** Inbound messages, delivery statuses, outbound sends and media: real Postgres, fake Meta. */
 import { randomUUID } from 'node:crypto';
-import { type DbClient, withTenant } from '@wacrm/db';
+import { type DbClient, withTenant, whatsappChannelId } from '@wacrm/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RetryableJobError } from '../src/deps';
 import { ensureMessagePartitions } from '../src/processors/maintenance';
@@ -54,7 +54,12 @@ async function queuedMessage(
       data: { orgId, waId: `91${Date.now()}${Math.floor(Math.random() * 1000)}` },
     });
     const conversation = await tx.conversation.create({
-      data: { orgId, phoneId, contactId: contact.id },
+      data: {
+        orgId,
+        phoneId,
+        channelId: await whatsappChannelId(tx, phoneId),
+        contactId: contact.id,
+      },
     });
     await tx.message.create({
       data: {

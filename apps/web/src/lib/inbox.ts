@@ -14,6 +14,7 @@ import type {
   LabelDto,
   MessageDto,
 } from '@wacrm/shared';
+import { CHANNEL_CAPABILITIES, CHANNEL_LABELS } from '@wacrm/shared';
 import { api } from './api';
 
 export type ConversationFilter = 'all' | 'mine' | 'unassigned';
@@ -126,8 +127,19 @@ export function applyConversationUpdate(client: QueryClient, conversation: Conve
   );
 }
 
-export const isWindowOpen = (c: Pick<ConversationDto, 'windowExpiresAt'>, now = Date.now()) =>
+/** Website chat has no reply window; WhatsApp and Instagram allow 24 hours. */
+export const isWindowOpen = (
+  c: Pick<ConversationDto, 'windowExpiresAt'> & {
+    channel?: Pick<ConversationDto['channel'], 'kind'>;
+  },
+  now = Date.now(),
+) =>
+  (c.channel !== undefined && CHANNEL_CAPABILITIES[c.channel.kind].replyWindowHours === null) ||
   Boolean(c.windowExpiresAt && new Date(c.windowExpiresAt).getTime() > now);
+
+/** The channel's own words for a contact with no phone number. */
+export const contactSubtitle = (c: Pick<ConversationDto, 'contact' | 'channel'>) =>
+  c.contact.waId ? displayWaId(c.contact.waId) : CHANNEL_LABELS[c.channel.kind];
 
 /** "Today", "Yesterday" or a date, for day dividers. */
 export function dayLabel(iso: string, now = new Date()): string {
@@ -152,4 +164,5 @@ export function shortTime(iso: string | null, now = new Date()): string {
 }
 
 /** Phone numbers get a +. Username users have a business-scoped id instead, shown as is. */
-export const displayWaId = (waId: string) => (/^\d+$/.test(waId) ? `+${waId}` : waId);
+export const displayWaId = (waId: string | null) =>
+  !waId ? '' : /^\d+$/.test(waId) ? `+${waId}` : waId;

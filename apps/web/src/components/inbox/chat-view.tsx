@@ -8,8 +8,15 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useRealtime } from '@/components/realtime-provider';
 import { api } from '@/lib/api';
-import { applyConversationUpdate, dayLabel, displayWaId, useMessages } from '@/lib/inbox';
+import {
+  applyConversationUpdate,
+  dayLabel,
+  contactSubtitle,
+  displayWaId,
+  useMessages,
+} from '@/lib/inbox';
 import { Composer } from './composer';
+import { CallActions } from './call-actions';
 import { MessageBubble } from './message-bubble';
 
 export function ChatView({
@@ -81,13 +88,14 @@ export function ChatView({
         </Button>
         <div className="min-w-0">
           <h2 className="truncate font-semibold">
-            {conversation.contact.name ?? conversation.contact.waId}
+            {conversation.contact.name ?? (displayWaId(conversation.contact.waId) || 'Visitor')}
           </h2>
           <p className="truncate text-xs text-muted-foreground">
-            {displayWaId(conversation.contact.waId)}
+            {contactSubtitle(conversation)}
             {conversation.status === 'closed' ? ' · Closed' : ''}
           </p>
         </div>
+        <CallActions conversation={conversation} />
       </header>
 
       <div

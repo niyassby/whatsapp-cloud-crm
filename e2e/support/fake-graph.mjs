@@ -4,7 +4,14 @@
  */
 import { createHmac, randomUUID } from 'node:crypto';
 import http from 'node:http';
-import { API_URL, APP_SECRET, FAILING_RECIPIENT, FAILURE_TEXT, PORTS } from './config.mjs';
+import {
+  API_URL,
+  APP_SECRET,
+  FAILING_RECIPIENT,
+  FAILURE_TEXT,
+  IG_ACCOUNT_ID,
+  PORTS,
+} from './config.mjs';
 
 /** Any id ending in 777 is a known WABA; ending in 888 a known number. */
 const isWaba = (id) => id?.endsWith('777');
@@ -127,6 +134,37 @@ function afterSend(phoneId, wamid, to, callback) {
   later(400, { status: 'read' });
 }
 
+/** Calling settings of the fake number, as the app last set them. */
+let calling = {
+  status: 'DISABLED',
+  call_icon_visibility: 'DEFAULT',
+  callback_permission_status: 'DISABLED',
+};
+/** Waiting to join the fake group until approved. */
+const joinRequests = ['jr-e2e'];
+/** Instagram messages the app sent, for the spec to read back. */
+const igSent = [];
+
+/** A stand-in for Instagram's login, token exchange and Graph. */
+function instagram(req, url, raw, send) {
+  const path = url.pathname.replace(/^\/ig/, '');
+  if (path === '/oauth/access_token') return send({ access_token: 'IGQ-e2e-short', user_id: 1 });
+  if (path === '/access_token' || path === '/refresh_access_token') {
+    return send({ access_token: 'IGQ-e2e-long-lived-token', expires_in: 5184000 });
+  }
+  const [, , node, edge] = path.split('/');
+  if (node === 'me' && edge === 'subscribed_apps') return send({ success: true });
+  if (node === 'me')
+    return send({ user_id: IG_ACCOUNT_ID, username: 'e2e.bakery', name: 'E2E Bakery' });
+  if (edge === 'messages' && req.method === 'POST') {
+    const body = JSON.parse(raw.toString('utf8'));
+    igSent.push(body);
+    return send({ recipient_id: body.recipient.id, message_id: `mid.e2e.${randomUUID()}` });
+  }
+  if (node && !edge) return send({ name: 'Ivy Instagram', username: 'ivy.insta' });
+  return send({ error: { message: `Unknown Instagram path ${path}`, code: 100 } }, 400);
+}
+
 const readBody = (req) =>
   new Promise((resolve) => {
     const chunks = [];
@@ -143,6 +181,98 @@ http
       res.writeHead(status, { 'content-type': 'application/json' });
       res.end(JSON.stringify(body));
     };
+
+    // ---- Instagram (INSTAGRAM_BASE_URL points at /ig on this server)
+    if (url.pathname.startsWith('/ig/')) return instagram(req, url, raw, send);
+    if (url.pathname === '/__ig-sent') return send(igSent);
+
+    // ---- Phase 4.2 WhatsApp modules
+    if (isPhone(id) && sub === 'message_qrdls') {
+      if (req.method === 'POST') {
+        const input = JSON.parse(raw.toString('utf8'));
+        const code = `E2E${randomUUID().slice(0, 6).toUpperCase()}`;
+        return send({
+          code,
+          prefilled_message: input.prefilled_message,
+          deep_link_url: `https://wa.me/message/${code}`,
+        });
+      }
+      return send({ success: true });
+    }
+    if (isPhone(id) && sub === 'groups' && req.method === 'POST') {
+      return send({ messaging_product: 'whatsapp', id: 'grp-e2e' });
+    }
+    if (isPhone(id) && sub === 'calls') {
+      return send({
+        messaging_product: 'whatsapp',
+        calls: [{ id: `wacid.${randomUUID()}` }],
+        success: true,
+      });
+    }
+    if (isPhone(id) && sub === 'call_permissions') {
+      return send({
+        messaging_product: 'whatsapp',
+        permission: { status: 'temporary' },
+        actions: [
+          { action_name: 'start_call', can_perform_action: true, limits: [] },
+          { action_name: 'send_call_permission_request', can_perform_action: true, limits: [] },
+        ],
+      });
+    }
+    if (isPhone(id) && sub === 'settings') {
+      if (req.method === 'POST') {
+        calling = JSON.parse(raw.toString('utf8')).calling;
+        return send({ success: true });
+      }
+      return send({ calling });
+    }
+    if (isWaba(id) && sub === 'product_catalogs') {
+      return send({ data: [{ id: 'cat-e2e', name: 'E2E Bakery' }] });
+    }
+    if (id === 'cat-e2e' && sub === 'products') {
+      return send({
+        data: [
+          {
+            id: 'p1',
+            retailer_id: 'CAKE-1',
+            name: 'Chocolate cake',
+            price: '₹650.00',
+            currency: 'INR',
+          },
+          {
+            id: 'p2',
+            retailer_id: 'BREAD-1',
+            name: 'Sourdough loaf',
+            price: '₹220.00',
+            currency: 'INR',
+          },
+        ],
+        paging: { cursors: {} },
+      });
+    }
+    if (id === 'grp-e2e') {
+      if (sub === 'invite_link') {
+        return send({
+          messaging_product: 'whatsapp',
+          invite_link: 'https://chat.whatsapp.com/e2e',
+        });
+      }
+      if (sub === 'join_requests' && req.method === 'GET') {
+        return send({
+          data: joinRequests.map((r) => ({
+            join_request_id: r,
+            wa_id: '919812300001',
+            creation_timestamp: Math.floor(Date.now() / 1000),
+          })),
+        });
+      }
+      if (sub === 'join_requests') {
+        joinRequests.length = 0;
+        return send({ messaging_product: 'whatsapp', approved_join_requests: ['jr-e2e'] });
+      }
+      if (!sub && req.method === 'DELETE') return send({ success: true });
+      return send({ id: 'grp-e2e', subject: 'Cake club', total_participant_count: 3 });
+    }
 
     if (isWaba(id)) {
       if (sub === 'phone_numbers') return send({ data: [phoneInfo('200000000000888')] });

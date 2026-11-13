@@ -6,6 +6,7 @@ import {
   type DbClient,
   ensureWallet,
   withTenant,
+  whatsappChannelId,
 } from '@wacrm/db';
 import { ErrorCode, messageDebitKey } from '@wacrm/shared';
 import { phoneTokenAad, SecretBox } from '@wacrm/shared/server';
@@ -93,6 +94,7 @@ async function scene(
       data: {
         orgId,
         phoneId: id,
+        channelId: await whatsappChannelId(tx, id),
         contactId: contact.id,
         windowExpiresAt: opts.windowOpen ? new Date(Date.now() + 3600_000) : null,
       },

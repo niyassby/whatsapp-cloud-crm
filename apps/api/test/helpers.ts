@@ -16,7 +16,8 @@ import { OBJECT_STORAGE } from '../src/infra/infra.tokens';
 import { MemoryStorage } from '@wacrm/shared/server';
 import { MAILER, MemoryMailer } from '../src/infra/mailer';
 import { GRAPH_CONFIG } from '../src/whatsapp/whatsapp.tokens';
-import type { GraphConfig } from '@wacrm/whatsapp';
+import type { GraphConfig, InstagramClient } from '@wacrm/whatsapp';
+import { INSTAGRAM } from '../src/channels/channels.tokens';
 
 export const urls = testDbUrls('wacrm_api_test');
 
@@ -31,6 +32,8 @@ export interface BuildOptions {
   fetch?: typeof fetch;
   /** AI providers; the deterministic fakes by default. */
   ai?: AiProviders;
+  /** The Instagram client; none by default, as on an installation with no Instagram app. */
+  instagram?: InstagramClient | null;
 }
 
 export interface TestApp {
@@ -74,6 +77,8 @@ export async function buildApp(extra: BuildOptions = {}): Promise<TestApp> {
     .useValue(extra.connectors ?? buildRegistry())
     .overrideProvider(AI_PROVIDERS)
     .useValue(extra.ai ?? { chat: new FakeChatProvider(), embeddings: new FakeEmbeddingProvider() })
+    .overrideProvider(INSTAGRAM)
+    .useValue(extra.instagram ?? null)
     .overrideProvider(INTEGRATIONS_FETCH)
     .useValue(
       extra.fetch ??

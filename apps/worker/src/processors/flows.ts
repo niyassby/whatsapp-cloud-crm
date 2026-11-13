@@ -23,6 +23,7 @@ import {
   type TenantTx,
   withTenant,
   writeAiLog,
+  whatsappChannelId,
 } from '@wacrm/db';
 import {
   ACTIVE_FLOW_RUN_STATUSES,
@@ -175,7 +176,7 @@ function scopeOf(run: LoadedRun): FlowScope {
     contact: {
       id: c.id,
       name: c.name,
-      phone: c.waId,
+      phone: c.waId ?? '',
       email: c.email,
       fields: (c.customFields ?? {}) as FlowScope['contact']['fields'],
     },
@@ -443,9 +444,10 @@ async function conversationFor(
     select: { id: true },
   });
   if (!phone) return null;
+  const channelId = await whatsappChannelId(tx, phone.id);
   const created = await tx.conversation.upsert({
-    where: { orgId_phoneId_contactId: { orgId, phoneId: phone.id, contactId } },
-    create: { orgId, phoneId: phone.id, contactId, status: 'closed' },
+    where: { orgId_channelId_contactId: { orgId, channelId, contactId } },
+    create: { orgId, channelId, phoneId: phone.id, contactId, status: 'closed' },
     update: {},
     select: { id: true },
   });
@@ -562,7 +564,7 @@ interface StepCtx {
 function conversationOf(ctx: StepCtx) {
   const conv = ctx.run.conversation;
   if (!conv) throw new FlowNodeError('This contact has no conversation to write in');
-  if (conv.phone.status !== 'connected') {
+  if (conv.phone && conv.phone.status !== 'connected') {
     throw new FlowNodeError('The WhatsApp number is not connected');
   }
   return conv;
@@ -638,6 +640,9 @@ async function sendTemplate(
   const template = await ctx.tx.messageTemplate.findUnique({ where: { id: node.data.templateId } });
   if (!template || template.status !== 'approved' || !template.supported) {
     throw new FlowNodeError('The template is missing or not approved');
+  }
+  if (!conv.phone) {
+    throw new FlowNodeError('Templates can only be sent on WhatsApp');
   }
   if (template.wabaAccountId !== conv.phone.wabaAccountId) {
     throw new FlowNodeError('The template belongs to another WhatsApp account than this number');

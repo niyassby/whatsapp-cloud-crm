@@ -6,6 +6,7 @@ import {
   type DbClient,
   ensureWallet,
   withTenant,
+  whatsappChannelId,
 } from '@wacrm/db';
 import { ErrorCode } from '@wacrm/shared';
 import { phoneTokenAad, SecretBox } from '@wacrm/shared/server';
@@ -627,7 +628,12 @@ describe('the inbox picker', () => {
         },
       });
       const c = await tx.conversation.create({
-        data: { orgId: w.orgId, phoneId: phone.id, contactId: contact.id },
+        data: {
+          orgId: w.orgId,
+          phoneId: phone.id,
+          channelId: await whatsappChannelId(tx, phone.id),
+          contactId: contact.id,
+        },
       });
       await tx.wabaAccount.update({
         where: { id: w.wabaAccountId },

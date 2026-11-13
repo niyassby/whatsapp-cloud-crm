@@ -1,6 +1,6 @@
 /** Rules and routing settings over real HTTP. The rules themselves are tested in the worker. */
 import { randomUUID } from 'node:crypto';
-import { createPrismaClient, type DbClient, withTenant } from '@wacrm/db';
+import { createPrismaClient, type DbClient, withTenant, whatsappChannelId } from '@wacrm/db';
 import { DEFAULT_AUTOMATION_SETTINGS, ErrorCode } from '@wacrm/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp, Client, type TestApp, tokenFromMail, uniqueEmail, urls } from './helpers';
@@ -89,6 +89,7 @@ describe('settings', () => {
         data: {
           orgId: s.orgId,
           phoneId: phone.id,
+          channelId: await whatsappChannelId(tx, phone.id),
           contactId: contact.id,
           awaitingReplySince: new Date(),
           slaDueAt: new Date(Date.now() + 60_000),

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { type DbClient, withTenant } from '@wacrm/db';
+import { type DbClient, withTenant, whatsappChannelId } from '@wacrm/db';
 import type { ContactImportOptionsInput } from '@wacrm/shared';
 import { contactJobKey, normalizePhone } from '@wacrm/shared/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -487,7 +487,12 @@ describe('marketing at send time', () => {
         data: { orgId, waId: '919876543210', optInStatus: status },
       });
       const conversation = await tx.conversation.create({
-        data: { orgId, phoneId: number.id, contactId: contact.id },
+        data: {
+          orgId,
+          phoneId: number.id,
+          channelId: await whatsappChannelId(tx, number.id),
+          contactId: contact.id,
+        },
       });
       await tx.message.create({
         data: {

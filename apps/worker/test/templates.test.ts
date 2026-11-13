@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { type DbClient, withTenant } from '@wacrm/db';
+import { type DbClient, withTenant, whatsappChannelId } from '@wacrm/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sendOutboundMessage } from '../src/processors/outbound';
 import { syncTemplates, templateSyncTargets } from '../src/processors/templates';
@@ -308,7 +308,12 @@ describe('sending a template', () => {
         data: { orgId: s.orgId, waId: '919876543210', optInStatus: 'opted_in' },
       });
       const conversation = await tx.conversation.create({
-        data: { orgId: s.orgId, phoneId: s.number.id, contactId: contact.id },
+        data: {
+          orgId: s.orgId,
+          phoneId: s.number.id,
+          channelId: await whatsappChannelId(tx, s.number.id),
+          contactId: contact.id,
+        },
       });
       await tx.message.create({
         data: {

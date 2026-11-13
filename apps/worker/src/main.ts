@@ -23,6 +23,8 @@ import {
   type TemplateSyncJob,
   type WebhookDeliveryJob,
   type WebhookEventJob,
+  WEBCHAT_NAMESPACE,
+  webchatRoom,
 } from '@wacrm/shared';
 import {
   phoneTokenAad,
@@ -31,12 +33,13 @@ import {
   s3ConfigFromEnv,
   SecretBox,
 } from '@wacrm/shared/server';
-import { WhatsAppClientFactory } from '@wacrm/whatsapp';
+import { InstagramClient, WhatsAppClientFactory } from '@wacrm/whatsapp';
 import { Emitter } from '@socket.io/redis-emitter';
 import { DelayedError, Queue, Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import pino from 'pino';
 import type { WorkerDeps } from './deps';
+import { refreshInstagramTokens } from './processors/channels';
 import { loadWorkerEnv } from './env';
 import { ensureMessagePartitions, purgeWebhookEvents } from './processors/maintenance';
 import { downloadInboundMedia } from './processors/media';
@@ -86,6 +89,11 @@ const socketEmitter = new Emitter(redis);
 const publisher: RealtimePublisher = {
   emit: (orgId, event, payload) => {
     socketEmitter.to(orgRoom(orgId)).emit(event, payload);
+  },
+  emitVisitor: (conversationId, message) => {
+    socketEmitter.of(WEBCHAT_NAMESPACE).to(webchatRoom(conversationId)).emit('message:new', {
+      message,
+    });
   },
 };
 
@@ -208,6 +216,15 @@ const deps: WorkerDeps = {
   },
   ai: createAiProviders(process.env),
   defaultCurrency: env.WALLET_DEFAULT_CURRENCY,
+  instagram:
+    env.INSTAGRAM_APP_ID && env.INSTAGRAM_APP_SECRET
+      ? new InstagramClient({
+          appId: env.INSTAGRAM_APP_ID,
+          appSecret: env.INSTAGRAM_APP_SECRET,
+          apiVersion: env.META_GRAPH_API_VERSION,
+          baseUrl: env.INSTAGRAM_BASE_URL,
+        })
+      : null,
 };
 
 const isFinalAttempt = (job: { attemptsMade: number; opts: { attempts?: number } }) =>
@@ -257,7 +274,8 @@ const outboundWorker = new Worker<OutboundJob>(
         select: { conversation: { select: { phone: { select: { phoneNumberId: true } } } } },
       }),
     );
-    if (phone) {
+    // Only WhatsApp has a per-number rate limit.
+    if (phone?.conversation.phone) {
       const wait = await msUntilSendSlot(phone.conversation.phone.phoneNumberId);
       if (wait > 0) {
         await job.moveToDelayed(Date.now() + wait, token);
@@ -422,6 +440,11 @@ const maintenanceWorker = new Worker(
       }
       return;
     }
+    if (job.name === 'channel-tokens') {
+      const refreshed = await refreshInstagramTokens(deps);
+      if (refreshed) log.info({ refreshed }, 'Instagram tokens refreshed');
+      return;
+    }
     if (job.name === 'partner-statements') {
       // Last month's statement for each partner. Statements are unique per month, so running
       // this every day only does work on the first run after a month ends.
@@ -518,6 +541,9 @@ void maintenanceQueue
 void maintenanceQueue
   .upsertJobScheduler('message-partitions', { pattern: '0 2 * * *' }, { name: 'partitions' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule partitions'));
+void maintenanceQueue
+  .upsertJobScheduler('channel-tokens', { pattern: '45 4 * * *' }, { name: 'channel-tokens' })
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule token refresh'));
 void maintenanceQueue
   .upsertJobScheduler(
     'partner-statements',

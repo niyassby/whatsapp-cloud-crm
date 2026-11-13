@@ -51,6 +51,125 @@ export interface WhatsAppGateway {
   getPhoneInfo(): Promise<GatewayResult<PhoneInfo>>;
   getWabaInfo(): Promise<GatewayResult<WabaInfo>>;
   register(pin: string): Promise<GatewayResult<{ success: boolean }>>;
+
+  // ---------------------------------------------------------------- QR codes and short links
+  createQrCode(prefilledMessage: string): Promise<GatewayResult<QrCodeInfo>>;
+  updateQrCode(code: string, prefilledMessage: string): Promise<GatewayResult<QrCodeInfo>>;
+  deleteQrCode(code: string): Promise<GatewayResult<{ success: boolean }>>;
+
+  // ---------------------------------------------------------------- catalog
+  /** The catalog connected to this number's WABA, or null when there is none. */
+  getConnectedCatalog(): Promise<GatewayResult<{ id: string; name: string } | null>>;
+  listProducts(catalogId: string, after?: string): Promise<GatewayResult<ProductPage>>;
+  sendProducts(
+    to: string,
+    input: SendProductsGatewayInput,
+    opts?: SendOpts,
+  ): Promise<GatewayResult<SentMessage>>;
+
+  // ---------------------------------------------------------------- groups
+  /** Meta may only return the group id later, in a group_lifecycle_update webhook. */
+  createGroup(input: CreateGroupGatewayInput): Promise<GatewayResult<{ groupId: string | null }>>;
+  getGroup(groupId: string): Promise<GatewayResult<GroupInfo>>;
+  getGroupInviteLink(groupId: string): Promise<GatewayResult<{ inviteLink: string }>>;
+  listGroupJoinRequests(groupId: string): Promise<GatewayResult<GroupJoinRequest[]>>;
+  answerGroupJoinRequests(
+    groupId: string,
+    input: { approve: string[]; reject: string[] },
+  ): Promise<GatewayResult<{ success: boolean }>>;
+  removeGroupParticipants(
+    groupId: string,
+    users: string[],
+  ): Promise<GatewayResult<{ success: boolean }>>;
+  deleteGroup(groupId: string): Promise<GatewayResult<{ success: boolean }>>;
+  sendGroupText(
+    groupId: string,
+    body: string,
+    opts?: SendOpts,
+  ): Promise<GatewayResult<SentMessage>>;
+
+  // ---------------------------------------------------------------- calling
+  getCallingSettings(): Promise<GatewayResult<CallingSettings>>;
+  updateCallingSettings(settings: CallingSettings): Promise<GatewayResult<{ success: boolean }>>;
+  getCallPermission(waId: string): Promise<GatewayResult<CallPermission>>;
+  sendCallPermissionRequest(
+    to: string,
+    body: string,
+    opts?: SendOpts,
+  ): Promise<GatewayResult<SentMessage>>;
+  /** Start a call with the agent's SDP offer. Meta's answer arrives by webhook. */
+  connectCall(
+    to: string,
+    sdpOffer: string,
+    callbackData?: string,
+  ): Promise<GatewayResult<{ callId: string }>>;
+  acceptCall(callId: string, sdpAnswer: string): Promise<GatewayResult<{ success: boolean }>>;
+  rejectCall(callId: string): Promise<GatewayResult<{ success: boolean }>>;
+  terminateCall(callId: string): Promise<GatewayResult<{ success: boolean }>>;
+}
+
+export interface QrCodeInfo {
+  code: string;
+  prefilledMessage: string;
+  deepLinkUrl: string;
+}
+
+export interface Product {
+  retailerId: string;
+  name: string;
+  description: string | null;
+  price: string | null;
+  currency: string | null;
+  imageUrl: string | null;
+  availability: string | null;
+}
+
+export interface ProductPage {
+  items: Product[];
+  nextCursor?: string;
+}
+
+export type SendProductsGatewayInput =
+  | { kind: 'product'; catalogId: string; retailerId: string; body?: string }
+  | {
+      kind: 'product_list';
+      catalogId: string;
+      header: string;
+      body: string;
+      sections: { title: string; retailerIds: string[] }[];
+    }
+  | { kind: 'catalog'; body: string; thumbnailRetailerId?: string };
+
+export interface CreateGroupGatewayInput {
+  subject: string;
+  description?: string;
+  joinApprovalMode: 'approval_required' | 'auto_approve';
+}
+
+export interface GroupInfo {
+  id: string;
+  subject: string | null;
+  description: string | null;
+  participantCount: number | null;
+  joinApprovalMode: string | null;
+}
+
+export interface GroupJoinRequest {
+  id: string;
+  waId: string | null;
+  requestedAt: Date;
+}
+
+export interface CallingSettings {
+  enabled: boolean;
+  iconVisible: boolean;
+  callbackPermission: boolean;
+}
+
+export interface CallPermission {
+  status: string;
+  canCall: boolean;
+  canRequest: boolean;
 }
 
 export interface SendOpts {

@@ -20,3 +20,5 @@ export * from './integrations';
 export * from './ai';
 export * from './realtime';
 export * from './reseller';
+export * from './channels';
+export * from './wa-modules';

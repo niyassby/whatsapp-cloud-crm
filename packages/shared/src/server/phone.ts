@@ -26,7 +26,8 @@ export function normalizePhone(raw: string, defaultCountry?: string): string | n
 }
 
 /** The country a wa_id belongs to, for pricing. Null when it cannot be told. */
-export function countryOfWaId(waId: string): string | null {
+export function countryOfWaId(waId: string | null): string | null {
+  if (!waId) return null;
   return parsePhoneNumberFromString(`+${waId}`)?.country ?? null;
 }
 
