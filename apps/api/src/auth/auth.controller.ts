@@ -146,7 +146,7 @@ export class AuthController {
 
   @Get('me')
   me(@CurrentAuth() auth: AuthContext): Promise<MeResponse> {
-    return this.auth.me(auth.userId, auth.orgId);
+    return this.auth.me(auth);
   }
 
   @Post('switch-org')

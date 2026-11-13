@@ -13,6 +13,18 @@ export const PUBLIC_KEY = 'auth:public';
 export const PERMISSIONS_KEY = 'auth:permissions';
 export const FEATURE_KEY = 'auth:feature';
 export const API_KEY_SCOPE_KEY = 'auth:apiKeyScope';
+export const PARTNER_KEY = 'auth:partner';
+export const PLATFORM_ADMIN_KEY = 'auth:platformAdmin';
+
+/**
+ * A partner console route. The caller must work for an active partner (checked on every request),
+ * and gets `auth.partnerId` with no org: client workspaces are reached through PartnerService,
+ * which checks each one belongs to the partner.
+ */
+export const PartnerRoute = () => SetMetadata(PARTNER_KEY, true);
+
+/** A platform admin route. The caller must have a platform_admins row, checked on every request. */
+export const PlatformAdminRoute = () => SetMetadata(PLATFORM_ADMIN_KEY, true);
 
 export interface PublicOptions {
   /** Parse a bearer token if one is sent (e.g. accept-invite works logged in or out). */

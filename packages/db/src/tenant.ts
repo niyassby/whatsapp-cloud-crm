@@ -9,8 +9,13 @@ export interface DbContext {
   orgId?: string;
   /** Authenticated user. Lets the user read their own memberships across orgs. */
   userId?: string;
-  /** Reseller context (Section 4). */
+  /** Reseller context: a partner acting on its own rows and its clients. */
   partnerId?: string;
+  /**
+   * Ask for platform-admin access. It only opens anything when `userId` also has a
+   * platform_admins row, which Postgres checks; the flag alone does nothing.
+   */
+  platformAdmin?: boolean;
 }
 
 export interface TransactionOptions {
@@ -23,6 +28,7 @@ const contextSchema = z.object({
   orgId: z.uuid().optional(),
   userId: z.uuid().optional(),
   partnerId: z.uuid().optional(),
+  platformAdmin: z.boolean().optional(),
 });
 
 export class InvalidDbContextError extends Error {
@@ -57,13 +63,15 @@ export async function withDbContext<T>(
     throw new InvalidDbContextError('DB context ids must be UUIDs');
   }
   const { orgId = '', userId = '', partnerId = '' } = parsed.data;
+  const platformAdmin = parsed.data.platformAdmin ? 'on' : '';
 
   return client.$transaction(
     async (tx) => {
       await tx.$queryRaw`
       SELECT set_config('app.org_id', ${orgId}, true),
              set_config('app.user_id', ${userId}, true),
-             set_config('app.partner_id', ${partnerId}, true)`;
+             set_config('app.partner_id', ${partnerId}, true),
+             set_config('app.platform_admin', ${platformAdmin}, true)`;
       return fn(tx);
     },
     { maxWait: DEFAULT_MAX_WAIT_MS, ...options },

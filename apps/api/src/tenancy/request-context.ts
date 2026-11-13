@@ -13,9 +13,19 @@ export interface AuthContext {
   orgId?: string;
   /** Role in `orgId`, loaded fresh from the membership row on every request. */
   role?: Role;
+  /** Set by AccessGuard on @PartnerRoute routes: the partner this person works for. */
   partnerId?: string;
+  /** Set by AccessGuard on @PlatformAdminRoute routes, after checking platform_admins. */
+  platformAdmin?: boolean;
   /** Set when an API key made this request rather than a person's session. */
   apiKeyId?: string;
+  /**
+   * The caller is not a member of `orgId`: a partner's staff or a platform admin is acting inside
+   * it. Names the impersonation_sessions row, which is checked on every request.
+   */
+  impersonationId?: string;
+  /** The org exists but was suspended. Only @SkipTenant routes (the switcher) still work. */
+  orgSuspended?: boolean;
 }
 
 declare module 'fastify' {

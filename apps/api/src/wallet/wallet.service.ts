@@ -1,6 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { ensureWallet, ledgerToDto, type Prisma, walletToDto } from '@wacrm/db';
 import {
+  clientPartnerPricing,
+  ensureWallet,
+  ledgerToDto,
+  type Prisma,
+  walletToDto,
+} from '@wacrm/db';
+import {
+  applyMarkup,
   csvCell,
   type CursorPage,
   decimalToMicros,
@@ -167,13 +174,15 @@ export class WalletService {
   /** Current prices in this wallet's currency: the newest row in force for each pair. */
   async rates(actor: WalletActor): Promise<RateDto[]> {
     const { currency } = await this.get(actor);
-    const rows = await this.db.run((tx) =>
-      tx.rateCard.findMany({
+    const { rows, markupBps } = await this.db.run(async (tx) => ({
+      rows: await tx.rateCard.findMany({
         where: { currency, validFrom: { lte: new Date() } },
         orderBy: { validFrom: 'desc' },
         take: 5_000,
       }),
-    );
+      // A partner's client sees what it will be charged, never the wholesale price.
+      markupBps: (await clientPartnerPricing(tx))?.markupBps ?? 0,
+    }));
     const seen = new Set<string>();
     const out: RateDto[] = [];
     for (const r of rows) {
@@ -184,7 +193,7 @@ export class WalletService {
         country: r.country,
         category: r.category,
         currency: r.currency,
-        rateMicros: Number(r.rateMicros),
+        rateMicros: applyMarkup(Number(r.rateMicros), markupBps),
         validFrom: r.validFrom.toISOString(),
       });
     }

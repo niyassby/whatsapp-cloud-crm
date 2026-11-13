@@ -4,6 +4,7 @@ import { AuthModule } from './auth/auth.module';
 import { FlowsModule } from './flows/flows.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { AiModule } from './ai/ai.module';
+import { ResellerModule } from './reseller/reseller.module';
 import { AutomationModule } from './automation/automation.module';
 import { BillingModule } from './billing/billing.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
@@ -52,6 +53,7 @@ export class AppModule {
         FlowsModule,
         IntegrationsModule,
         AiModule,
+        ResellerModule,
       ],
       controllers: [HealthController],
       providers: [

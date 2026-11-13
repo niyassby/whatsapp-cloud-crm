@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { createAiProviders } from '@wacrm/ai';
 import { createPaymentProviders } from '@wacrm/billing';
-import { createPrismaClient, withTenant } from '@wacrm/db';
+import { closeDuePartnerMonths, createPrismaClient, withTenant } from '@wacrm/db';
 import {
   buildHealth,
   type AutomationJob,
@@ -422,6 +422,14 @@ const maintenanceWorker = new Worker(
       }
       return;
     }
+    if (job.name === 'partner-statements') {
+      // Last month's statement for each partner. Statements are unique per month, so running
+      // this every day only does work on the first run after a month ends.
+      const result = await closeDuePartnerMonths(db);
+      if (result.created) log.info({ created: result.created }, 'partner statements issued');
+      for (const f of result.failed) log.error(f, 'could not close a partner month');
+      return;
+    }
     if (job.name === 'outbound-sweep') {
       // The job id is the message id, so a message whose job exists is not queued twice.
       for (const m of await stuckOutboundMessages(deps)) {
@@ -510,6 +518,13 @@ void maintenanceQueue
 void maintenanceQueue
   .upsertJobScheduler('message-partitions', { pattern: '0 2 * * *' }, { name: 'partitions' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule partitions'));
+void maintenanceQueue
+  .upsertJobScheduler(
+    'partner-statements',
+    { pattern: '30 1 * * *' },
+    { name: 'partner-statements' },
+  )
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule statements'));
 void maintenanceQueue
   .upsertJobScheduler('sla-check', { every: 60_000 }, { name: 'sla-check' })
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule SLA checks'));

@@ -19,6 +19,7 @@ import type { ReactNode } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useMe } from '@/lib/queries';
 import { cn } from '@/lib/utils';
+import { ImpersonationBanner } from './impersonation-banner';
 import { LowBalanceBanner } from './low-balance-banner';
 import { NoOrg } from './no-org';
 import { NotificationBell } from './notification-bell';
@@ -64,6 +65,8 @@ const NAV: {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const me = useMe();
+  // Banners ask the API about the workspace, which a suspended one refuses.
+  const usable = Boolean(me.data?.currentOrg) && !me.data?.currentOrg?.suspended;
 
   return (
     <div className="flex h-screen">
@@ -108,21 +111,39 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center justify-between gap-4 border-b px-4">
-          {me.data ? <OrgSwitcher me={me.data} /> : <Skeleton className="h-8 w-40" />}
+          {!me.data ? (
+            <Skeleton className="h-8 w-40" />
+          ) : me.data.impersonation ? (
+            // No switching while inside someone else's workspace: leave it first.
+            <span className="truncate text-sm font-medium">{me.data.currentOrg?.name}</span>
+          ) : (
+            <OrgSwitcher me={me.data} />
+          )}
           <div className="flex items-center gap-1">
-            {me.data?.currentOrg && <NotificationBell />}
+            {usable && <NotificationBell />}
             {me.data ? <UserMenu me={me.data} /> : <Skeleton className="size-8 rounded-full" />}
           </div>
         </header>
-        {me.data && !me.data.user.emailVerified && <VerifyEmailBanner email={me.data.user.email} />}
-        <TrialBanner />
-        <LowBalanceBanner />
-        <ReconnectBanner />
+        {me.data?.impersonation && <ImpersonationBanner impersonation={me.data.impersonation} />}
+        {me.data && !me.data.user.emailVerified && !me.data.impersonation && (
+          <VerifyEmailBanner email={me.data.user.email} />
+        )}
+        {usable && <TrialBanner />}
+        {usable && <LowBalanceBanner />}
+        {usable && <ReconnectBanner />}
         <main className="min-h-0 flex-1 overflow-auto p-6">
           {me.isPending ? (
             <Skeleton className="h-40 w-full" />
           ) : me.data && !me.data.currentOrg ? (
             <NoOrg me={me.data} />
+          ) : me.data?.currentOrg?.suspended ? (
+            <div className="mx-auto max-w-lg py-16 text-center" data-testid="suspended-notice">
+              <h1 className="text-xl font-semibold">This workspace is suspended</h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {me.data.currentOrg.name} cannot be used for now. Nothing has been deleted. Contact
+                whoever manages your account to have it restored, or switch to another workspace.
+              </p>
+            </div>
           ) : (
             children
           )}

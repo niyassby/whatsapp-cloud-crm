@@ -19,3 +19,4 @@ export * from './flow-builder';
 export * from './integrations';
 export * from './ai';
 export * from './realtime';
+export * from './reseller';

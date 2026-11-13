@@ -5,6 +5,7 @@ import {
   AppError,
   type AuthTokensResponse,
   ErrorCode,
+  impersonationPermissions,
   type LoginInput,
   type LoginResponse,
   type MeResponse,
@@ -21,6 +22,8 @@ import { API_ENV, type ApiEnv } from '../env';
 import { MAILER, type Mailer, type MailMessage } from '../infra/mailer';
 import { RateLimiter } from '../infra/rate-limiter.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import type { AuthContext } from '../tenancy/request-context';
+import { AuthenticatorService } from './authenticator.service';
 import { resetPasswordMail, verifyEmailMail } from './mail-templates';
 import { PasswordService } from './password.service';
 import { TokenService } from './token.service';
@@ -67,6 +70,7 @@ export class AuthService {
     private readonly audit: AuditService,
     private readonly secrets: SecretBox,
     private readonly realtime: RealtimeGateway,
+    private readonly authenticator: AuthenticatorService,
   ) {}
 
   // ------------------------------------------------------------------ signup
@@ -271,8 +275,9 @@ export class AuthService {
     };
   }
 
-  async me(userId: string, currentOrgId: string | undefined): Promise<MeResponse> {
-    const { user, memberships } = await withDbContext(
+  async me(auth: AuthContext): Promise<MeResponse> {
+    const { userId, orgId: currentOrgId } = auth;
+    const { user, memberships, admin } = await withDbContext(
       this.prisma.client,
       { userId },
       async (tx) => ({
@@ -283,23 +288,72 @@ export class AuthService {
         memberships: await tx.membership.findMany({
           where: { userId, status: 'active', organization: { deletedAt: null } },
           orderBy: { createdAt: 'asc' },
-          select: { role: true, organization: { select: { id: true, name: true, slug: true } } },
+          select: {
+            role: true,
+            organization: { select: { id: true, name: true, slug: true, status: true } },
+          },
         }),
+        admin: await tx.platformAdmin.findUnique({ where: { userId } }),
       }),
     );
-    const orgs: OrgSummary[] = memberships.map((m) => ({ ...m.organization, role: m.role }));
+    const partner = await this.authenticator.partnerOf(userId);
+    const orgs: OrgSummary[] = memberships.map(({ role, organization: o }) => ({
+      id: o.id,
+      name: o.name,
+      slug: o.slug,
+      role,
+      ...(o.status === 'suspended' ? { suspended: true } : {}),
+    }));
+    const profile = {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      emailVerified: user.emailVerifiedAt !== null,
+      totpEnabled: user.totpEnabledAt !== null,
+    };
+    const operator = {
+      partner: partner?.status === 'active' ? { id: partner.id, name: partner.name } : null,
+      platformAdmin: admin !== null,
+    };
+
+    if (auth.impersonationId && currentOrgId) {
+      // Not a member: the workspace is read in its own context, which the guard already allowed.
+      const viewed = await withDbContext(
+        this.prisma.client,
+        { userId, orgId: currentOrgId },
+        async (tx) => ({
+          org: await tx.organization.findUniqueOrThrow({
+            where: { id: currentOrgId },
+            select: { id: true, name: true, slug: true },
+          }),
+          session: await tx.impersonationSession.findUniqueOrThrow({
+            where: { id: auth.impersonationId },
+            select: { id: true, expiresAt: true },
+          }),
+        }),
+      );
+      return {
+        user: profile,
+        orgs,
+        currentOrg: { ...viewed.org, role: 'admin' },
+        permissions: impersonationPermissions(),
+        ...operator,
+        impersonation: {
+          id: viewed.session.id,
+          orgName: viewed.org.name,
+          expiresAt: viewed.session.expiresAt.toISOString(),
+        },
+      };
+    }
+
     const currentOrg = orgs.find((o) => o.id === currentOrgId) ?? null;
     return {
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        emailVerified: user.emailVerifiedAt !== null,
-        totpEnabled: user.totpEnabledAt !== null,
-      },
+      user: profile,
       orgs,
       currentOrg,
-      permissions: currentOrg ? [...rolePermissions[currentOrg.role]] : [],
+      permissions: currentOrg && !currentOrg.suspended ? [...rolePermissions[currentOrg.role]] : [],
+      ...operator,
+      impersonation: null,
     };
   }
 

@@ -20,6 +20,7 @@
     "seed": "prisma db seed",
     "rates:import": "tsx scripts/rates-import.ts",
     "wallet:credit": "tsx scripts/wallet-credit.ts",
+    "admin:grant": "tsx scripts/admin-grant.ts",
     "plans:import": "tsx scripts/plans-import.ts",
     "studio": "prisma studio",
     "clean": "rimraf dist .turbo src/generated"

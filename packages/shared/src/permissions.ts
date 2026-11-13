@@ -61,6 +61,22 @@ export const rolePermissions: Record<Role, readonly Permission[]> = {
   agent: AGENT,
 };
 
+/**
+ * Not available to someone impersonating a workspace, whatever role they act with: nothing that
+ * outlives the session (keys) or changes who is in the workspace.
+ */
+export const IMPERSONATION_DENIED: readonly Permission[] = [
+  Permission.API_KEYS_MANAGE,
+  Permission.TEAM_UPDATE_ROLE,
+  Permission.TEAM_REMOVE,
+  Permission.ORG_DELETE,
+  Permission.BILLING_MANAGE,
+];
+
+/** Impersonators act as an admin, less the permissions above. */
+export const impersonationPermissions = (): Permission[] =>
+  rolePermissions.admin.filter((p) => !IMPERSONATION_DENIED.includes(p));
+
 export function hasPermission(role: Role | undefined, permission: Permission): boolean {
   return role !== undefined && rolePermissions[role].includes(permission);
 }

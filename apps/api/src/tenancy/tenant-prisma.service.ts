@@ -40,4 +40,53 @@ export class TenantPrismaService {
     }
     return withDbContext(this.prisma.client, { userId: ctx.userId }, fn, options);
   }
+
+  /**
+   * Run as the partner or platform admin of the current request (@PartnerRoute /
+   * @PlatformAdminRoute). RLS shows the partner its own rows and its clients' workspaces, and a
+   * platform admin everything those policies name. Tenant tables stay closed: no org is set.
+   */
+  runAsOperator<T>(fn: (tx: TenantTx) => Promise<T>, options?: TransactionOptions): Promise<T> {
+    return withDbContext(this.prisma.client, this.operator(), fn, options);
+  }
+
+  /**
+   * Run inside one workspace on behalf of the partner or platform admin of the current request.
+   * The workspace is checked first, in the same transaction and under RLS: a partner only finds
+   * its own clients, so naming someone else's workspace is NOT_FOUND before anything is read.
+   */
+  runInWorkspace<T>(
+    orgId: string,
+    fn: (tx: TenantTx) => Promise<T>,
+    options?: TransactionOptions,
+  ): Promise<T> {
+    const operator = this.operator();
+    return withTenant(
+      this.prisma.client,
+      { ...operator, orgId },
+      async (tx) => {
+        const org = await tx.organization.findFirst({
+          where: {
+            id: orgId,
+            deletedAt: null,
+            ...(operator.platformAdmin ? {} : { partnerId: operator.partnerId }),
+          },
+          select: { id: true },
+        });
+        if (!org) throw new AppError(ErrorCode.NOT_FOUND, 'Workspace not found');
+        return fn(tx);
+      },
+      options,
+    );
+  }
+
+  private operator(): { userId: string; partnerId?: string; platformAdmin?: boolean } {
+    const ctx = requestContext.get();
+    if (!ctx?.userId || (!ctx.partnerId && !ctx.platformAdmin)) {
+      throw new AppError(ErrorCode.FORBIDDEN, 'A partner or platform admin is required');
+    }
+    return ctx.platformAdmin
+      ? { userId: ctx.userId, platformAdmin: true }
+      : { userId: ctx.userId, partnerId: ctx.partnerId };
+  }
 }

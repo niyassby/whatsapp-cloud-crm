@@ -20,6 +20,8 @@ export interface AccessClaims {
   org?: string;
   /** session (refresh-token family) id */
   sid: string;
+  /** impersonation session id: `sub` is acting inside `org` without being a member */
+  imp?: string;
   /** expiry, seconds since the epoch (set on verified tokens) */
   exp?: number;
 }
@@ -53,15 +55,16 @@ export class TokenService {
 
   // ------------------------------------------------------------- access + mfa JWTs
 
-  signAccess(claims: AccessClaims): string {
+  signAccess(claims: AccessClaims, ttlSeconds: number = this.env.ACCESS_TOKEN_TTL_SECONDS): string {
     const payload: Record<string, string> = { sid: claims.sid };
     if (claims.org) payload.org = claims.org;
+    if (claims.imp) payload.imp = claims.imp;
     return jwt.sign(payload, this.env.JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
       subject: claims.sub,
       issuer: ISSUER,
       audience: ACCESS_AUDIENCE,
-      expiresIn: this.env.ACCESS_TOKEN_TTL_SECONDS,
+      expiresIn: ttlSeconds,
       jwtid: randomUUID(),
     });
   }
@@ -77,6 +80,7 @@ export class TokenService {
       sub: payload.sub,
       sid,
       org: typeof org === 'string' ? org : undefined,
+      imp: typeof payload.imp === 'string' ? payload.imp : undefined,
       exp: payload.exp,
     };
   }

@@ -13,7 +13,7 @@ import { type ReactNode, useEffect } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { create } from 'zustand';
 import { refreshSession } from '@/lib/api';
-import { useAuthStore } from '@/lib/auth-store';
+import { activeToken, useAuthStore } from '@/lib/auth-store';
 import { contactKeys } from '@/lib/contacts';
 import { env } from '@/lib/env';
 import { applyConversationUpdate, inboxKeys, upsertMessage } from '@/lib/inbox';
@@ -79,7 +79,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     const socket: AppSocket = io(env.NEXT_PUBLIC_API_URL, {
       path: SOCKET_PATH,
       // A function, so every reconnect uses the current access token.
-      auth: (cb) => cb({ token: useAuthStore.getState().accessToken }),
+      auth: (cb) => cb({ token: activeToken() }),
     });
     useRealtime.setState({ socket });
 
@@ -94,6 +94,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     };
 
     const reconnectWithFreshToken = () => {
+      // An impersonation token is never renewed; the next API call closes the view.
+      if (useAuthStore.getState().impersonation) return;
       void refreshSession().then((ok) => {
         if (ok) socket.connect();
       });

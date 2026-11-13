@@ -80,6 +80,14 @@ export const ErrorCode = {
   /** The AI provider failed or declined; nothing was charged. */
   AI_PROVIDER_ERROR: 'AI_PROVIDER_ERROR',
   KNOWLEDGE_INVALID: 'KNOWLEDGE_INVALID',
+
+  // resellers
+  /** The workspace was suspended by its partner or the platform. */
+  ORG_SUSPENDED: 'ORG_SUSPENDED',
+  /** A partner pays for this workspace, so it cannot buy a plan or add funds itself. */
+  MANAGED_BY_PARTNER: 'MANAGED_BY_PARTNER',
+  PARTNER_LIMIT_REACHED: 'PARTNER_LIMIT_REACHED',
+  PARTNER_SUSPENDED: 'PARTNER_SUSPENDED',
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -138,6 +146,10 @@ export const errorHttpStatus: Record<ErrorCode, number> = {
   AI_NOT_AVAILABLE: 409,
   AI_PROVIDER_ERROR: 502,
   KNOWLEDGE_INVALID: 400,
+  ORG_SUSPENDED: 403,
+  MANAGED_BY_PARTNER: 409,
+  PARTNER_LIMIT_REACHED: 402,
+  PARTNER_SUSPENDED: 403,
 };
 
 /** Typed application error carrying a stable code. */

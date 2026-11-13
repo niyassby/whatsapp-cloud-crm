@@ -1,9 +1,11 @@
 import {
   AppError,
+  applyMarkup,
   ErrorCode,
   isChargeable,
   type LedgerEntryDto,
   messageDebitKey,
+  periodOf,
   RATE_ANY_COUNTRY,
   type WalletDto,
   type WalletEntryType,
@@ -93,6 +95,11 @@ interface EntryInput {
   description?: string | null;
   actorUserId?: string | null;
   rate?: RateSnapshot | null;
+  /**
+   * For a partner's client: the partner, and this amount at the rate card price before the
+   * partner's markup. Positive, like the amount passed to a debit.
+   */
+  wholesale?: { partnerId: string; amountMicros: number } | null;
 }
 
 export interface WalletMove {
@@ -116,6 +123,10 @@ async function applyEntry(
 ): Promise<WalletMove> {
   const amount = BigInt(input.amountMicros);
   const after = wallet.balance + amount;
+  // Signed like the entry itself: negative on a debit, positive on its refund.
+  const wholesale = input.wholesale
+    ? BigInt(input.wholesale.amountMicros) * (amount < 0n ? -1n : 1n)
+    : null;
   await tx.walletLedger.create({
     data: {
       orgId: input.orgId,
@@ -132,8 +143,33 @@ async function applyEntry(
       rateMicros: input.rate ? BigInt(input.rate.rateMicros) : null,
       country: input.rate?.country ?? null,
       category: input.rate?.category ?? null,
+      partnerId: input.wholesale?.partnerId ?? null,
+      wholesaleMicros: wholesale,
     },
   });
+  if (input.wholesale && wholesale !== null && (type === 'debit' || type === 'refund')) {
+    // The partner's side of the same movement, in the same transaction: what it owes the platform
+    // and what it earned. createMany, because the client may write this row but never read it.
+    await tx.partnerLedger.createMany({
+      data: [
+        {
+          partnerId: input.wholesale.partnerId,
+          orgId: input.orgId,
+          type: type === 'debit' ? 'usage' : 'usage_refund',
+          currency: wallet.currency,
+          wholesaleMicros: -wholesale,
+          retailMicros: -amount,
+          commissionMicros: -amount + wholesale,
+          period: periodOf(new Date()),
+          referenceType: input.referenceType ?? null,
+          referenceId: input.referenceId ?? null,
+          idempotencyKey: `wallet:${input.orgId}:${input.idempotencyKey}`,
+          description: input.description ?? null,
+        },
+      ],
+      skipDuplicates: true,
+    });
+  }
 
   const { threshold } = wallet;
   const crossed =
@@ -240,6 +276,11 @@ export async function refundDebit(
       country: debit.country,
       category: debit.category,
     },
+    // The partner is not billed for, and earns nothing on, a send that was given back.
+    wholesale:
+      debit.partnerId && debit.wholesaleMicros !== null
+        ? { partnerId: debit.partnerId, amountMicros: Number(-debit.wholesaleMicros) }
+        : null,
   });
 }
 
@@ -338,14 +379,38 @@ export async function releaseReservation(
 
 export interface RateQuote {
   rateCardId: string;
+  /** What this workspace pays: the rate card price, plus its partner's markup if it has one. */
   rateMicros: number;
+  /** The rate card price itself. */
+  wholesaleMicros: number;
+  /** The partner whose markup is in `rateMicros`, when this workspace is a partner's client. */
+  partnerId: string | null;
   currency: string;
   /** The country the rate was found for, or '*' for the fallback. */
   country: string;
   category: string;
 }
 
-/** The newest rate in force. A country's own rate wins over the any-country one. */
+/**
+ * The partner whose client the current workspace is, with its markup. Reviewed raw SQL: no
+ * parameters, and the workspace comes from the transaction's own RLS context, so a caller cannot
+ * price one workspace with another's partner.
+ */
+export async function clientPartnerPricing(
+  tx: TenantTx,
+): Promise<{ partnerId: string; markupBps: number } | null> {
+  const rows = await tx.$queryRaw<{ id: string; wallet_markup_bps: number }[]>`
+    SELECT p.id, p.wallet_markup_bps
+    FROM organizations o JOIN partners p ON p.id = o.partner_id
+    WHERE o.id = app_current_org_id()`;
+  const row = rows[0];
+  return row ? { partnerId: row.id, markupBps: row.wallet_markup_bps } : null;
+}
+
+/**
+ * The newest rate in force. A country's own rate wins over the any-country one. For a partner's
+ * client the price includes the partner's markup, so estimates, holds and charges all agree.
+ */
 export async function findRate(
   tx: TenantTx,
   input: { currency: string; category: string; country: string | null; at?: Date },
@@ -359,9 +424,13 @@ export async function findRate(
     });
   const row = (input.country ? await find(input.country) : null) ?? (await find(RATE_ANY_COUNTRY));
   if (!row) return null;
+  const partner = await clientPartnerPricing(tx);
+  const wholesaleMicros = Number(row.rateMicros);
   return {
     rateCardId: row.id,
-    rateMicros: Number(row.rateMicros),
+    rateMicros: applyMarkup(wholesaleMicros, partner?.markupBps ?? 0),
+    wholesaleMicros,
+    partnerId: partner?.partnerId ?? null,
     currency: row.currency,
     country: row.country,
     category,
@@ -432,6 +501,9 @@ export async function chargeMessage(
     referenceId: input.messageId,
     idempotencyKey: messageDebitKey(input.messageId),
     reservationId: input.reservationId,
+    wholesale: quote.partnerId
+      ? { partnerId: quote.partnerId, amountMicros: quote.wholesaleMicros }
+      : null,
     rate: {
       rateCardId: quote.rateCardId,
       rateMicros: quote.rateMicros,

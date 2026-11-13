@@ -85,7 +85,15 @@ describe('tenant isolation', () => {
 
 describe('what the app role may not do', () => {
   it('cannot change plans, prices or tax rates', async () => {
-    await expect(asA((tx) => tx.plan.updateMany({ data: { name: 'x' } }))).rejects.toThrow();
+    // Since 4.1 a platform admin may edit a plan's limits and features, so the app role has a
+    // column grant. A workspace still changes nothing: RLS matches no row for it, and columns
+    // outside the grant (prices, trial flags) are refused outright.
+    expect(await asA((tx) => tx.plan.updateMany({ data: { name: 'x' } }))).toEqual({ count: 0 });
+    await expect(asA((tx) => tx.plan.updateMany({ data: { isTrial: true } }))).rejects.toThrow();
+    await expect(asA((tx) => tx.plan.deleteMany())).rejects.toThrow();
+    await expect(
+      asA((tx) => tx.planPrice.updateMany({ data: { amountMicros: 1n } })),
+    ).rejects.toThrow();
     await expect(
       asA((tx) => tx.taxRate.create({ data: { country: 'ZZ', rateBps: 1, label: 'x' } })),
     ).rejects.toThrow();

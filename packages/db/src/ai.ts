@@ -213,6 +213,9 @@ export async function chargeAi(
       referenceType: 'ai',
       referenceId: input.logId,
       idempotencyKey: `ai:${input.logId}:${part}`,
+      wholesale: quote.partnerId
+        ? { partnerId: quote.partnerId, amountMicros: aiCostMicros(tokens, quote.wholesaleMicros) }
+        : null,
       description: `AI ${part}: ${tokens.toLocaleString('en')} tokens`,
       rate: {
         rateCardId: quote.rateCardId,

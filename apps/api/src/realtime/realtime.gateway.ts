@@ -75,6 +75,7 @@ export class RealtimeGateway
     if (typeof token !== 'string' || !token) throw { code: ErrorCode.UNAUTHENTICATED };
     const auth = await this.authenticator.authenticate(token);
     if (!auth.orgId) throw { code: ErrorCode.TENANT_CONTEXT_MISSING };
+    if (auth.orgSuspended) throw { code: ErrorCode.ORG_SUSPENDED };
     const { orgId, userId, sessionId } = auth;
 
     const user = await withTenant(this.prisma.client, { orgId, userId }, (tx) =>
@@ -157,5 +158,10 @@ export class RealtimeGateway
 
   disconnectMember(orgId: string, userId: string): void {
     this.server.in(memberRoom(orgId, userId)).disconnectSockets(true);
+  }
+
+  /** A workspace was suspended or deleted: everyone in it is cut off at once. */
+  disconnectOrg(orgId: string): void {
+    this.server.in(orgRoom(orgId)).disconnectSockets(true);
   }
 }

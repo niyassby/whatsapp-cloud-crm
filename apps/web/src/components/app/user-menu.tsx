@@ -2,7 +2,7 @@
 
 import { useQueryClient } from '@tanstack/react-query';
 import { type MeResponse, Permission } from '@wacrm/shared';
-import { LogOut, Settings, ShieldCheck } from 'lucide-react';
+import { Building2, Handshake, LogOut, Settings, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -80,6 +80,20 @@ export function UserMenu({ me }: { me: MeResponse }) {
             </DropdownMenuCheckboxItem>
             <DropdownMenuSeparator />
           </>
+        )}
+        {!me.impersonation && me.partner && (
+          <DropdownMenuItem asChild>
+            <Link href="/partner">
+              <Handshake className="size-4" aria-hidden /> Partner console
+            </Link>
+          </DropdownMenuItem>
+        )}
+        {!me.impersonation && me.platformAdmin && (
+          <DropdownMenuItem asChild>
+            <Link href="/admin">
+              <Building2 className="size-4" aria-hidden /> Platform admin
+            </Link>
+          </DropdownMenuItem>
         )}
         <DropdownMenuItem asChild>
           <Link href="/settings/security">

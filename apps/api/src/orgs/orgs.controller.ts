@@ -127,6 +127,7 @@ export class OrgsController {
         targetId: r.targetId,
         metadata: r.metadata,
         ip: r.ip,
+        impersonated: r.impersonationId !== null,
         createdAt: r.createdAt.toISOString(),
       })),
       nextCursor: rows.length > query.limit && last ? encodeCursor(last) : null,

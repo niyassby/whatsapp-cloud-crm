@@ -1,7 +1,7 @@
 'use client';
 
 import type { AuthTokensResponse, ErrorCode, ErrorResponse } from '@wacrm/shared';
-import { useAuthStore } from './auth-store';
+import { activeToken, useAuthStore } from './auth-store';
 import { env } from './env';
 
 export class ApiError extends Error {
@@ -66,10 +66,33 @@ export function refreshSession(): Promise<boolean> {
   return pending;
 }
 
+/**
+ * Leave the workspace being viewed and go back to the console it was opened from. A full page
+ * load, so nothing cached from the client's workspace stays on screen.
+ */
+export function leaveImpersonation(): void {
+  const { impersonation, setImpersonation } = useAuthStore.getState();
+  if (!impersonation) return;
+  setImpersonation(null);
+  window.location.assign(impersonation.returnTo);
+}
+
+/**
+ * What to do about a 401. A person's own session is refreshed and the request retried. An
+ * impersonation is never refreshed: it has ended, expired or been revoked, so the view closes.
+ */
+async function recover(): Promise<boolean> {
+  if (useAuthStore.getState().impersonation) {
+    leaveImpersonation();
+    return false;
+  }
+  return refreshSession();
+}
+
 /** POST multipart form data, with the same token handling and errors as `api`. */
 export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
   const send = () => {
-    const token = useAuthStore.getState().accessToken;
+    const token = activeToken();
     return fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, {
       method: 'POST',
       credentials: 'include',
@@ -78,7 +101,7 @@ export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
     });
   };
   let res = await send();
-  if (res.status === 401 && (await refreshSession())) res = await send();
+  if (res.status === 401 && (await recover())) res = await send();
   return parse<T>(res);
 }
 
@@ -101,7 +124,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   const { method = 'GET', body, auth = true } = options;
 
   const send = () => {
-    const token = auth ? useAuthStore.getState().accessToken : null;
+    const token = auth ? activeToken() : null;
     return fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, {
       method,
       credentials: 'include',
@@ -114,21 +137,21 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   };
 
   let res = await send();
-  if (res.status === 401 && auth && (await refreshSession())) res = await send();
+  if (res.status === 401 && auth && (await recover())) res = await send();
   return parse<T>(res);
 }
 
 /** Fetch a file that needs the access token, so a plain link cannot be used. */
 export async function apiDownload(path: string, filename: string): Promise<void> {
   const send = () => {
-    const token = useAuthStore.getState().accessToken;
+    const token = activeToken();
     return fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, {
       credentials: 'include',
       headers: token ? { authorization: `Bearer ${token}` } : {},
     });
   };
   let res = await send();
-  if (res.status === 401 && (await refreshSession())) res = await send();
+  if (res.status === 401 && (await recover())) res = await send();
   if (!res.ok) {
     await parse(res);
     return;

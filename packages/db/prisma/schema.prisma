@@ -176,18 +176,188 @@ enum AuthTokenType {
   password_reset
 }
 
-/// Resellers. Kept simple until Section 4. TODO(branding): reseller theming plugs in here later.
+/// Resellers. A partner creates and manages client workspaces (organizations.partner_id).
+/// TODO(branding): reseller theming plugs in here later.
 model Partner {
-  id        String        @id @default(uuid(7)) @db.Uuid
-  name      String
-  slug      String        @unique
-  status    PartnerStatus @default(active)
-  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id              String        @id @default(uuid(7)) @db.Uuid
+  name            String
+  slug            String        @unique
+  status          PartnerStatus @default(active)
+  /// Client wallets are created in this currency, and statements are issued in it.
+  currency        String        @default("INR")
+  /// Added on top of the rate card for this partner's clients, in basis points (1500 = 15%).
+  walletMarkupBps Int           @default(0) @map("wallet_markup_bps")
+  /// Null means no limit on client workspaces.
+  maxClients      Int?          @map("max_clients")
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   organizations Organization[]
+  members       PartnerMember[]
+  clients       PartnerClient[]
+  ledger        PartnerLedger[]
+  statements    PartnerStatement[]
 
   @@map("partners")
+}
+
+/// People who run the platform. Rows are added with `pnpm admin:grant`; the app role only reads.
+model PlatformAdmin {
+  userId    String   @id @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("platform_admins")
+}
+
+/// A person who works for a partner. One partner per person.
+model PartnerMember {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  partnerId String   @map("partner_id") @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([partnerId])
+  @@map("partner_members")
+}
+
+/// What a partner set for one client workspace. Only the partner or a platform admin writes it.
+model PartnerClient {
+  orgId             String   @id @map("org_id") @db.Uuid
+  partnerId         String   @map("partner_id") @db.Uuid
+  /// Caps below the plan's own limits. Null leaves the plan's limit.
+  limitSeats        Int?     @map("limit_seats")
+  limitNumbers      Int?     @map("limit_numbers")
+  limitContacts     Int?     @map("limit_contacts")
+  /// What the partner charges this client a month for the plan. Used for the commission report.
+  clientPriceMicros BigInt?  @map("client_price_micros")
+  /// The owner the partner invited, for the partner's own list.
+  ownerEmail        String?  @map("owner_email")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  partner      Partner      @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@index([partnerId])
+  @@map("partner_clients")
+}
+
+/// What the platform charges a partner a month for a client on this plan. Set by a platform admin.
+model WholesalePlanPrice {
+  id           String @id @default(uuid(7)) @db.Uuid
+  planId       String @map("plan_id") @db.Uuid
+  currency     String
+  amountMicros BigInt @map("amount_micros")
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, currency])
+  @@map("wholesale_plan_prices")
+}
+
+/// Append-only (no UPDATE or DELETE grant). One row per thing a partner owes for or earns on:
+/// a client's wallet debit (and its refund), and a client's monthly plan fee.
+model PartnerLedger {
+  id               String   @id @default(uuid(7)) @db.Uuid
+  partnerId        String   @map("partner_id") @db.Uuid
+  orgId            String?  @map("org_id") @db.Uuid
+  /// usage, usage_refund, plan_fee, adjustment
+  type             String
+  currency         String
+  /// What the partner owes the platform. Negative on a refund.
+  wholesaleMicros  BigInt   @map("wholesale_micros")
+  /// What the client was charged, or is charged by the partner.
+  retailMicros     BigInt   @map("retail_micros")
+  /// retail - wholesale: the partner's margin.
+  commissionMicros BigInt   @map("commission_micros")
+  /// YYYY-MM in UTC, the statement this belongs to.
+  period           String
+  referenceType    String?  @map("reference_type")
+  referenceId      String?  @map("reference_id")
+  /// The same key never applies twice for one partner.
+  idempotencyKey   String   @map("idempotency_key")
+  description      String?
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@unique([partnerId, idempotencyKey])
+  @@index([partnerId, period, createdAt(sort: Desc)])
+  @@index([partnerId, orgId, period])
+  @@map("partner_ledger")
+}
+
+/// A closed month: what the partner owes at wholesale, and what it earned. Totals are copied from
+/// the ledger when the month closes. A platform admin records the payment.
+model PartnerStatement {
+  id                      String    @id @default(uuid(7)) @db.Uuid
+  partnerId               String    @map("partner_id") @db.Uuid
+  period                  String
+  currency                String
+  usageWholesaleMicros    BigInt    @map("usage_wholesale_micros")
+  usageRetailMicros       BigInt    @map("usage_retail_micros")
+  planFeesWholesaleMicros BigInt    @map("plan_fees_wholesale_micros")
+  planFeesRetailMicros    BigInt    @map("plan_fees_retail_micros")
+  commissionMicros        BigInt    @map("commission_micros")
+  /// usage + plan fees at wholesale: what the platform invoices the partner.
+  totalDueMicros          BigInt    @map("total_due_micros")
+  /// issued, paid
+  status                  String    @default("issued")
+  issuedAt                DateTime  @default(now()) @map("issued_at") @db.Timestamptz(3)
+  paidAt                  DateTime? @map("paid_at") @db.Timestamptz(3)
+  paymentReference        String?   @map("payment_reference")
+  paidById                String?   @map("paid_by_id") @db.Uuid
+
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@unique([partnerId, period, currency])
+  @@map("partner_statements")
+}
+
+/// Someone outside a workspace acting inside it: a partner's staff in a client, or a platform
+/// admin. The access token names the row, and every request checks it is still open.
+model ImpersonationSession {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  orgId     String    @map("org_id") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  /// Null when a platform admin started it.
+  partnerId String?   @map("partner_id") @db.Uuid
+  reason    String
+  startedAt DateTime  @default(now()) @map("started_at") @db.Timestamptz(3)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  endedAt   DateTime? @map("ended_at") @db.Timestamptz(3)
+  ip        String?
+  userAgent String?   @map("user_agent")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, startedAt(sort: Desc)])
+  @@index([userId])
+  @@map("impersonation_sessions")
+}
+
+/// Append-only. Platform and partner actions that belong to no single workspace.
+model PlatformAuditLog {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  /// Set when the action was by, or about, a partner.
+  partnerId   String?  @map("partner_id") @db.Uuid
+  action      String
+  targetType  String?  @map("target_type")
+  targetId    String?  @map("target_id")
+  metadata    Json?
+  ip          String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([partnerId, createdAt(sort: Desc)])
+  @@map("platform_audit_logs")
 }
 
 /// Tenant root. organizations.id is the value of app.org_id.
@@ -258,6 +428,8 @@ model Organization {
   knowledgeDocuments     KnowledgeDocument[]
   knowledgeChunks        KnowledgeChunk[]
   aiLogs                 AiLog[]
+  partnerClient          PartnerClient?
+  impersonations         ImpersonationSession[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -287,8 +459,8 @@ model User {
   auditLogs             AuditLog[]
   refreshTokens         RefreshToken[]
   authTokens            AuthToken[]
-  invitationsSent       Invitation[]          @relation("InvitedBy")
-  invitationsAccepted   Invitation[]          @relation("AcceptedBy")
+  invitationsSent       Invitation[]           @relation("InvitedBy")
+  invitationsAccepted   Invitation[]           @relation("AcceptedBy")
   wabaAccountsConnected WabaAccount[]
   conversationsAssigned Conversation[]
   messagesSent          Message[]
@@ -304,6 +476,9 @@ model User {
   walletTopups          WalletTopup[]
   webhookEndpoints      WebhookEndpoint[]
   notifications         Notification[]
+  platformAdmin         PlatformAdmin?
+  partnerMember         PartnerMember?
+  impersonations        ImpersonationSession[]
 
   @@map("users")
 }
@@ -353,17 +528,19 @@ model ApiKey {
 
 /// Append-only. The app role has SELECT + INSERT only (no UPDATE / DELETE).
 model AuditLog {
-  id            String   @id @default(uuid(7)) @db.Uuid
-  orgId         String   @map("org_id") @db.Uuid
-  actorUserId   String?  @map("actor_user_id") @db.Uuid
-  actorApiKeyId String?  @map("actor_api_key_id") @db.Uuid
-  action        String
-  targetType    String?  @map("target_type")
-  targetId      String?  @map("target_id")
-  metadata      Json?
-  ip            String?
-  userAgent     String?  @map("user_agent")
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  id              String   @id @default(uuid(7)) @db.Uuid
+  orgId           String   @map("org_id") @db.Uuid
+  actorUserId     String?  @map("actor_user_id") @db.Uuid
+  actorApiKeyId   String?  @map("actor_api_key_id") @db.Uuid
+  action          String
+  targetType      String?  @map("target_type")
+  targetId        String?  @map("target_id")
+  metadata        Json?
+  ip              String?
+  userAgent       String?  @map("user_agent")
+  /// Set when the actor was impersonating, so the trail shows who was really acting.
+  impersonationId String?  @map("impersonation_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   actorUser    User?        @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
@@ -937,6 +1114,9 @@ model WalletLedger {
   rateMicros         BigInt?         @map("rate_micros")
   country            String?
   category           String?
+  /// For a partner's client: the partner, and this entry at the rate card price before markup.
+  partnerId          String?         @map("partner_id") @db.Uuid
+  wholesaleMicros    BigInt?         @map("wholesale_micros")
   createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
@@ -1194,8 +1374,9 @@ model Plan {
   sortOrder   Int      @default(0) @map("sort_order")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  prices        PlanPrice[]
-  subscriptions Subscription[]
+  prices          PlanPrice[]
+  wholesalePrices WholesalePlanPrice[]
+  subscriptions   Subscription[]
 
   @@map("plans")
 }

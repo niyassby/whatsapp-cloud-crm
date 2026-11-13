@@ -6,7 +6,10 @@ import {
   providersForCurrency,
 } from '@wacrm/billing';
 import {
+  assertNotPartnerManaged,
+  effectiveLimits,
   effectivePlan,
+  managingPartnerName,
   invoiceToDto,
   planToDto,
   planUsage,
@@ -174,6 +177,9 @@ export class BillingService {
     const tax = await taxRateFor(tx, profile.billingCountry);
     return {
       ...part,
+      // What is in force here, which a partner may have set below the plan's own limits.
+      plan: { ...part.plan, ...(await effectiveLimits(tx, actor.orgId)) },
+      managedBy: await managingPartnerName(tx),
       usage: await planUsage(tx, actor.orgId),
       currency,
       providers: configured,
@@ -247,6 +253,7 @@ export class BillingService {
   async checkout(actor: BillingActor, input: CheckoutInput): Promise<CheckoutResultDto> {
     const { currency } = await this.wallet.get(actor);
     const { price, sub, email } = await this.db.run(async (tx) => {
+      await assertNotPartnerManaged(tx);
       const plan = await tx.plan.findFirst({ where: { code: input.planCode, isPublic: true } });
       if (!plan) throw new AppError(ErrorCode.NOT_FOUND, 'Plan not found');
       return {
@@ -395,6 +402,9 @@ export class BillingService {
    */
   async createTopup(actor: BillingActor, input: CreateTopupInput): Promise<CheckoutResultDto> {
     const { currency } = await this.wallet.get(actor);
+    // Before anything about providers: a partner's client is told who to ask, not that payments
+    // are unavailable.
+    await this.db.run((tx) => assertNotPartnerManaged(tx));
     const provider = this.pickProvider(currency, input.provider);
     const { topup, email, quote } = await this.db.run(async (tx) => {
       const { quote, email } = await this.quoteFor(tx, actor.orgId, currency, input.amount);

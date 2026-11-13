@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma, type TenantTx, withTenant } from '@wacrm/db';
 import type { RequestMeta } from '../common/request-meta';
 import { PrismaService } from '../db/prisma.service';
+import { requestContext } from '../tenancy/request-context';
 
 /** Stable audit action names. Add here; never rename. */
 export const AuditAction = {
@@ -55,12 +56,49 @@ export const AuditAction = {
   CAMPAIGN_PAUSED: 'campaign.paused',
   CAMPAIGN_RESUMED: 'campaign.resumed',
   CAMPAIGN_CANCELLED: 'campaign.cancelled',
+  IMPERSONATION_STARTED: 'impersonation.started',
+  IMPERSONATION_ENDED: 'impersonation.ended',
+  CLIENT_CREATED: 'partner.client_created',
+  CLIENT_CHANGED: 'partner.client_changed',
+  CLIENT_SUSPENDED: 'partner.client_suspended',
+  CLIENT_RESUMED: 'partner.client_resumed',
+  CLIENT_DELETED: 'partner.client_deleted',
+  WALLET_CREDITED: 'wallet.credited',
+  PLAN_SET: 'billing.plan_set',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
 export interface AuditEntry {
   action: AuditAction;
   actorUserId?: string | null;
+  targetType?: string;
+  targetId?: string;
+  metadata?: Prisma.InputJsonValue;
+  meta?: RequestMeta;
+  /** Only needed where the request context does not already carry it (starting a session). */
+  impersonationId?: string;
+}
+
+export const PlatformAuditAction = {
+  PARTNER_CREATED: 'partner.created',
+  PARTNER_CHANGED: 'partner.changed',
+  PARTNER_MEMBER_ADDED: 'partner.member_added',
+  PARTNER_MEMBER_REMOVED: 'partner.member_removed',
+  PARTNER_MARKUP_CHANGED: 'partner.markup_changed',
+  PLAN_CHANGED: 'plan.changed',
+  WHOLESALE_PRICE_CHANGED: 'plan.wholesale_price_changed',
+  RATE_CARD_ADDED: 'rate_card.added',
+  STATEMENT_CLOSED: 'statement.closed',
+  STATEMENT_PAID: 'statement.paid',
+  ORG_SUSPENDED: 'org.suspended',
+  ORG_RESUMED: 'org.resumed',
+} as const;
+export type PlatformAuditAction = (typeof PlatformAuditAction)[keyof typeof PlatformAuditAction];
+
+export interface PlatformAuditEntry {
+  action: PlatformAuditAction;
+  actorUserId: string;
+  partnerId?: string | null;
   targetType?: string;
   targetId?: string;
   metadata?: Prisma.InputJsonValue;
@@ -83,7 +121,29 @@ export class AuditService {
         metadata: entry.metadata ?? Prisma.JsonNull,
         ip: entry.meta?.ip ?? null,
         userAgent: entry.meta?.userAgent ?? null,
+        // Everything done while impersonating is marked, without each caller having to remember.
+        impersonationId: entry.impersonationId ?? requestContext.get()?.impersonationId ?? null,
       },
+    });
+  }
+
+  /**
+   * Partner and platform actions that belong to no one workspace (a partner created, a plan or
+   * rate changed, a statement paid). Needs the partner's or a platform admin's context.
+   */
+  async recordPlatform(tx: TenantTx, entry: PlatformAuditEntry): Promise<void> {
+    await tx.platformAuditLog.createMany({
+      data: [
+        {
+          actorUserId: entry.actorUserId,
+          partnerId: entry.partnerId ?? null,
+          action: entry.action,
+          targetType: entry.targetType ?? null,
+          targetId: entry.targetId ?? null,
+          metadata: entry.metadata ?? Prisma.JsonNull,
+          ip: entry.meta?.ip ?? null,
+        },
+      ],
     });
   }
 

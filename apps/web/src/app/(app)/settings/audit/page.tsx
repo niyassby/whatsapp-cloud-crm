@@ -1,5 +1,6 @@
 'use client';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -33,11 +34,23 @@ const LABELS: Record<string, string> = {
   'team.invite_accepted': 'Joined via invitation',
   'team.role_changed': 'Changed a role',
   'team.member_removed': 'Removed a member',
+  'impersonation.started': 'Opened this workspace from outside',
+  'impersonation.ended': 'Left this workspace',
+  'partner.client_created': 'Created this workspace for a client',
+  'partner.client_changed': 'Changed the workspace name or limits',
+  'partner.client_suspended': 'Suspended this workspace',
+  'partner.client_resumed': 'Restored this workspace',
+  'partner.client_deleted': 'Deleted this workspace',
+  'wallet.credited': 'Added funds to the wallet',
+  'billing.plan_set': 'Set the plan',
 };
 
 function describe(metadata: unknown): string {
   if (!metadata || typeof metadata !== 'object') return '';
   const m = metadata as Record<string, unknown>;
+  if (m.reason) return 'Reason: ' + String(m.reason);
+  if (m.amount) return String(m.amount) + (m.note ? ' (' + String(m.note) + ')' : '');
+  if (m.plan) return String(m.plan);
   if (m.from && m.to) return `${String(m.from)} → ${String(m.to)}`;
   if (m.email) return `${String(m.email)}${m.role ? ` as ${String(m.role)}` : ''}`;
   if (m.role) return String(m.role);
@@ -78,7 +91,17 @@ export default function AuditLogPage() {
                     <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
                       {new Date(log.createdAt).toLocaleString()}
                     </TableCell>
-                    <TableCell>{log.actorName ?? 'System'}</TableCell>
+                    <TableCell>
+                      {log.actorName ?? (log.impersonated ? 'Outside admin' : 'System')}{' '}
+                      {log.impersonated && (
+                        <Badge
+                          variant="outline"
+                          title="Done by your partner or the platform, not a member"
+                        >
+                          Not a member
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <div>{LABELS[log.action] ?? log.action}</div>
                       <div className="text-xs text-muted-foreground">{describe(log.metadata)}</div>

@@ -114,6 +114,8 @@ export interface OrgSummary {
   name: string;
   slug: string;
   role: Role;
+  /** Suspended by its partner or the platform: visible in the switcher, but not usable. */
+  suspended?: boolean;
 }
 
 export interface MeResponse {
@@ -127,6 +129,11 @@ export interface MeResponse {
   orgs: OrgSummary[];
   currentOrg: OrgSummary | null;
   permissions: Permission[];
+  /** The partner this person works for, which opens the partner console. */
+  partner: { id: string; name: string } | null;
+  platformAdmin: boolean;
+  /** Set while acting inside a workspace as an outsider. */
+  impersonation: { id: string; orgName: string; expiresAt: string } | null;
 }
 
 export interface TotpSetupResponse {
@@ -174,6 +181,8 @@ export interface AuditLogDto {
   targetId: string | null;
   metadata: unknown;
   ip: string | null;
+  /** Done by someone impersonating: a partner’s staff or a platform admin, not a member. */
+  impersonated: boolean;
   createdAt: string;
 }
 

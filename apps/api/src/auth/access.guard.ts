@@ -1,10 +1,24 @@
 import { type CanActivate, type ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { type ApiScope, AppError, ErrorCode, hasPermission, type Permission } from '@wacrm/shared';
+import {
+  type ApiScope,
+  AppError,
+  ErrorCode,
+  hasPermission,
+  IMPERSONATION_DENIED,
+  type Permission,
+} from '@wacrm/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { SKIP_TENANT_KEY } from '../tenancy/skip-tenant.decorator';
 import { ApiKeyAuthService } from './api-key-auth.service';
-import { API_KEY_SCOPE_KEY, PERMISSIONS_KEY, PUBLIC_KEY, type PublicOptions } from './decorators';
+import {
+  API_KEY_SCOPE_KEY,
+  PARTNER_KEY,
+  PERMISSIONS_KEY,
+  PLATFORM_ADMIN_KEY,
+  PUBLIC_KEY,
+  type PublicOptions,
+} from './decorators';
 import { AuthenticatorService } from './authenticator.service';
 
 /**
@@ -14,6 +28,9 @@ import { AuthenticatorService } from './authenticator.service';
  *      membership row (a removed or demoted member loses access immediately, not at expiry)
  *   3. tenancy layer 1: require an org unless @SkipTenant (layer 2 is Postgres RLS)
  *   4. permissions from the shared role map (@RequirePermission)
+ *
+ * @PartnerRoute and @PlatformAdminRoute replace steps 3 and 4: the caller's partner membership or
+ * platform_admins row is loaded fresh, and the request carries no org.
  */
 @Injectable()
 export class AccessGuard implements CanActivate {
@@ -59,18 +76,56 @@ export class AccessGuard implements CanActivate {
       return true;
     }
     if (!bearer) throw new AppError(ErrorCode.UNAUTHENTICATED, 'Authentication required');
-    req.auth = await this.authenticator.authenticate(bearer);
+    const auth = await this.authenticator.authenticate(bearer);
+    req.auth = auth;
+
+    const partnerRoute = this.reflector.getAllAndOverride<boolean>(PARTNER_KEY, targets);
+    const adminRoute = this.reflector.getAllAndOverride<boolean>(PLATFORM_ADMIN_KEY, targets);
+    if (partnerRoute || adminRoute) {
+      // An impersonation token is for the client's workspace only. It never opens the consoles.
+      if (auth.impersonationId) {
+        throw new AppError(ErrorCode.FORBIDDEN, 'Leave the workspace you are viewing first');
+      }
+      // These consoles act across workspaces, so the org on the token is dropped: nothing here
+      // can reach tenant data without naming a workspace and having it checked.
+      const scoped = { userId: auth.userId, sessionId: auth.sessionId };
+      if (adminRoute) {
+        if (!(await this.authenticator.isPlatformAdmin(auth.userId))) {
+          throw new AppError(ErrorCode.FORBIDDEN, 'Platform admins only');
+        }
+        req.auth = { ...scoped, platformAdmin: true };
+        return true;
+      }
+      const partner = await this.authenticator.partnerOf(auth.userId);
+      if (!partner) throw new AppError(ErrorCode.FORBIDDEN, 'Partner accounts only');
+      if (partner.status !== 'active') {
+        throw new AppError(ErrorCode.PARTNER_SUSPENDED, 'This partner account is suspended');
+      }
+      req.auth = { ...scoped, partnerId: partner.id };
+      return true;
+    }
 
     const skipTenant = this.reflector.getAllAndOverride<boolean>(SKIP_TENANT_KEY, targets);
-    if (!skipTenant && !req.auth.orgId) {
+    if (!skipTenant && !auth.orgId) {
       throw new AppError(ErrorCode.TENANT_CONTEXT_MISSING, 'An organization context is required');
+    }
+    if (!skipTenant && auth.orgSuspended) {
+      throw new AppError(ErrorCode.ORG_SUSPENDED, 'This workspace is suspended');
     }
 
     const required =
       this.reflector.getAllAndOverride<Permission[] | undefined>(PERMISSIONS_KEY, targets) ?? [];
-    const missing = required.filter((p) => !hasPermission(req.auth?.role, p));
+    const missing = required.filter((p) => !hasPermission(auth.role, p));
     if (missing.length > 0) {
       throw new AppError(ErrorCode.FORBIDDEN, 'You do not have permission to do this', { missing });
+    }
+    if (auth.impersonationId) {
+      const denied = required.filter((p) => IMPERSONATION_DENIED.includes(p));
+      if (denied.length > 0) {
+        throw new AppError(ErrorCode.FORBIDDEN, 'Not available while viewing a client workspace', {
+          missing: denied,
+        });
+      }
     }
     return true;
   }

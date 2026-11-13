@@ -454,16 +454,27 @@ export default function BillingSettingsPage() {
       <Suspense>
         <PaymentNotice />
       </Suspense>
-      {summary.data.providers.length === 0 && canManage && (
-        <Alert>
-          <AlertTitle>Payments are not set up yet</AlertTitle>
+      {summary.data.managedBy ? (
+        <Alert data-testid="managed-by">
+          <AlertTitle>Managed by {summary.data.managedBy}</AlertTitle>
           <AlertDescription>
-            Plans cannot be bought until a payment provider is configured on this deployment.
+            {summary.data.managedBy} looks after this workspace&apos;s plan and wallet. Ask them to
+            change the plan, raise a limit or add funds.
           </AlertDescription>
         </Alert>
+      ) : (
+        summary.data.providers.length === 0 &&
+        canManage && (
+          <Alert>
+            <AlertTitle>Payments are not set up yet</AlertTitle>
+            <AlertDescription>
+              Plans cannot be bought until a payment provider is configured on this deployment.
+            </AlertDescription>
+          </Alert>
+        )
       )}
       <Current summary={summary.data} canManage={canManage} />
-      <PlanPicker summary={summary.data} canManage={canManage} />
+      {!summary.data.managedBy && <PlanPicker summary={summary.data} canManage={canManage} />}
       <Profile summary={summary.data} canManage={canManage} />
       <Invoices />
     </div>

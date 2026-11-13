@@ -35,6 +35,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { api, apiDownload } from '@/lib/api';
+import { useBillingSummary } from '@/lib/billing';
 import { handleApiError } from '@/lib/forms';
 import { useCan } from '@/lib/queries';
 import {
@@ -410,6 +411,8 @@ export default function WalletPage() {
   const canRead = useCan(Permission.WALLET_READ);
   const canPay = useCan(Permission.BILLING_MANAGE);
   const wallet = useWallet(canRead);
+  // A partner adds funds for a workspace it manages, so the button is not offered there.
+  const billing = useBillingSummary(canPay);
   const [addingFunds, setAddingFunds] = useState(false);
 
   if (!canRead) {
@@ -421,7 +424,9 @@ export default function WalletPage() {
     <div className="mx-auto grid max-w-5xl gap-4">
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-2xl font-semibold">Wallet</h1>
-        {canPay && wallet.data && <Button onClick={() => setAddingFunds(true)}>Add funds</Button>}
+        {canPay && wallet.data && billing.data && !billing.data.managedBy && (
+          <Button onClick={() => setAddingFunds(true)}>Add funds</Button>
+        )}
       </div>
       <Suspense>
         <PaymentNotice />

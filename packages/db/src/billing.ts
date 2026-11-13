@@ -117,14 +117,33 @@ const countOne = (tx: TenantTx, orgId: string, limit: PlanLimit) => {
   ]).then(([members, invites]) => members + invites);
 };
 
+const lower = (a: number | null, b: number | null | undefined) =>
+  b === null || b === undefined ? a : a === null ? b : Math.min(a, b);
+
+/**
+ * The limits in force: the plan's, lowered by any cap the workspace's partner set. A partner can
+ * only restrict, since the plan is what the platform charges the partner for.
+ */
+export async function effectiveLimits(
+  tx: TenantTx,
+  orgId: string,
+): Promise<Record<PlanLimit, number | null>> {
+  const current = await effectivePlan(tx, orgId);
+  const cap = await tx.partnerClient.findUnique({ where: { orgId } });
+  return {
+    seats: lower(current?.plan.seats ?? null, cap?.limitSeats),
+    numbers: lower(current?.plan.numbers ?? null, cap?.limitNumbers),
+    contacts: lower(current?.plan.contacts ?? null, cap?.limitContacts),
+  };
+}
+
 /** How many more fit. Null means no limit. */
 export async function roomLeft(
   tx: TenantTx,
   orgId: string,
   limit: PlanLimit,
 ): Promise<number | null> {
-  const current = await effectivePlan(tx, orgId);
-  const max = current?.plan[limit] ?? null;
+  const max = (await effectiveLimits(tx, orgId))[limit];
   if (max === null) return null;
   return Math.max(0, max - (await countOne(tx, orgId, limit)));
 }

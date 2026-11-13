@@ -238,6 +238,11 @@ export interface BillingSummaryDto {
   profile: BillingProfileDto;
   taxRateBps: number;
   taxLabel: string | null;
+  /**
+   * The partner that pays for this workspace. When set, the plan and wallet are changed by the
+   * partner, and nothing can be bought here.
+   */
+  managedBy: string | null;
 }
 
 export interface TopupQuoteDto {

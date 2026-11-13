@@ -80,6 +80,15 @@ export class ApiKeyAuthService {
 
     const orgId = row.org_id;
     const allowed = await withTenant(this.prisma.client, { orgId }, async (tx) => {
+      const org = await tx.organization.findUnique({
+        where: { id: orgId },
+        select: { status: true, deletedAt: true },
+      });
+      // A deleted workspace's keys are simply invalid. A suspended one says why.
+      if (!org || org.deletedAt) throw invalid();
+      if (org.status === 'suspended') {
+        throw new AppError(ErrorCode.ORG_SUSPENDED, 'This workspace is suspended');
+      }
       const ok = await hasFeature(tx, orgId, 'public_api');
       // Not on every request: it would mean a write for each read.
       const stale = new Date(Date.now() - LAST_USED_RESOLUTION_MS);

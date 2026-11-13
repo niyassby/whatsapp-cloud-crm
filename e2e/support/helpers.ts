@@ -106,7 +106,7 @@ export async function createWorkspace(opts: { funded?: boolean } = {}) {
   };
 }
 
-async function inviteTokenFromMailpit(email: string): Promise<string> {
+export async function inviteTokenFromMailpit(email: string): Promise<string> {
   const mailpit = 'http://127.0.0.1:8025/api/v1';
   for (let i = 0; i < 30; i++) {
     const search = await fetch(`${mailpit}/search?query=${encodeURIComponent(`to:${email}`)}`);
