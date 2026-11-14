@@ -22,3 +22,4 @@ export * from './realtime';
 export * from './reseller';
 export * from './channels';
 export * from './wa-modules';
+export * from './reports';

@@ -45,6 +45,8 @@ export const AuditAction = {
   FLOW_CHANGED: 'flow.changed',
   INTEGRATION_CHANGED: 'integration.changed',
   AI_CHANGED: 'ai.changed',
+  REPORT_EXPORTED: 'report.exported',
+  REPORT_SCHEDULE_CHANGED: 'report_schedule.changed',
   API_KEY_CREATED: 'api_key.created',
   API_KEY_REVOKED: 'api_key.revoked',
   WEBHOOK_ENDPOINT_CREATED: 'webhook_endpoint.created',

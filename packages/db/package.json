@@ -22,6 +22,7 @@
     "wallet:credit": "tsx scripts/wallet-credit.ts",
     "admin:grant": "tsx scripts/admin-grant.ts",
     "plans:import": "tsx scripts/plans-import.ts",
+    "bench:analytics": "tsx scripts/analytics-benchmark.ts",
     "studio": "prisma studio",
     "clean": "rimraf dist .turbo src/generated"
   },

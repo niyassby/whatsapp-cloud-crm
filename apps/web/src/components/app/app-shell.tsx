@@ -2,6 +2,7 @@
 
 import { Permission } from '@wacrm/shared';
 import {
+  ChartColumn,
   ChartLine,
   FileText,
   Inbox,
@@ -43,6 +44,7 @@ const NAV: {
     icon: ChartLine,
     permission: Permission.ANALYTICS_READ,
   },
+  { href: '/reports', label: 'Reports', icon: ChartColumn, permission: Permission.ANALYTICS_READ },
   { href: '/inbox', label: 'Inbox', icon: Inbox },
   { href: '/contacts', label: 'Contacts', icon: Users },
   { href: '/templates', label: 'Templates', icon: FileText },

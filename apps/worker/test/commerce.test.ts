@@ -452,5 +452,15 @@ describe('WooCommerce', () => {
       'Hi Ravi, your order #727 is confirmed. Total 899.00.',
       'Your order #727 is on its way: see your email',
     ]);
+    // The paid order is one sale in the reports, however many deliveries mention it.
+    const sales = await withTenant(client, { orgId: t.orgId }, (tx) => tx.conversion.findMany());
+    expect(sales).toEqual([
+      expect.objectContaining({
+        source: 'store_order',
+        reference: 'woocommerce:727',
+        amountMicros: 899_000_000n,
+        currency: 'INR',
+      }),
+    ]);
   });
 });

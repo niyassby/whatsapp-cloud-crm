@@ -7,11 +7,12 @@ import {
   messageInclude,
   messageToDto,
   type Prisma,
+  recordConversion,
   recordInbound,
   refundDebit,
   withTenant,
 } from '@wacrm/db';
-import { messageDebitKey, toPublicMessage } from '@wacrm/shared';
+import { messageDebitKey, type OrderContent, orderTotal, toPublicMessage } from '@wacrm/shared';
 import { mapError, parseWebhookEvents, type WebhookEvent } from '@wacrm/whatsapp';
 import type { WorkerDeps } from '../deps';
 import { qrReferralFor } from './channels';
@@ -161,7 +162,7 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
         select: { id: true, phoneId: true },
       });
       if (!channel) return null;
-      return recordInbound(tx, {
+      const result = await recordInbound(tx, {
         orgId,
         channel: { id: channel.id, kind: 'whatsapp', phoneId: channel.phoneId },
         sender: { waId: ev.sender, name: ev.profileName ?? null },
@@ -180,6 +181,21 @@ async function applyInbound(deps: WorkerDeps, orgId: string, ev: InboundEvent): 
             ? await qrReferralFor(tx, channel.phoneId, data.body)
             : null),
       });
+      // A catalog order is a sale for the reports, recorded once with the message.
+      if (result?.kind === 'saved' && data.type === 'order') {
+        const { total, currency } = orderTotal((data.content ?? {}) as OrderContent);
+        if (total > 0 && currency) {
+          await recordConversion(tx, {
+            orgId,
+            contactId: result.contactId,
+            source: 'whatsapp_order',
+            reference: ev.id,
+            amount: String(total),
+            currency,
+          });
+        }
+      }
+      return result;
     }),
   );
   if (!saved) return;

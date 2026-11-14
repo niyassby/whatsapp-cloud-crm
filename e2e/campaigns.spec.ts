@@ -149,7 +149,11 @@ test('a drip sequence sends its first step to who was enrolled', async () => {
 test('the dashboard reports what happened', async () => {
   await owner.goto('/dashboard');
   await expect(owner.getByText('Messages per day')).toBeVisible();
-  await expect(owner.getByTestId('tile-Delivery rate')).not.toHaveText('—');
+  // The dashboard reads aggregates the worker refreshes every few seconds in this stack.
+  await expect(async () => {
+    await owner.reload();
+    await expect(owner.getByTestId('tile-Delivery rate')).not.toHaveText('—', { timeout: 2_000 });
+  }).toPass({ timeout: 60_000, intervals: [3_000] });
   await expect(owner.getByTestId('tile-Active conversations')).not.toHaveText('0');
   await owner.getByRole('button', { name: 'View as table' }).click();
   await expect(owner.getByRole('table')).toContainText('Received');

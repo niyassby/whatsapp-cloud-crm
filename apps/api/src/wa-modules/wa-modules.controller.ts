@@ -341,7 +341,11 @@ export class ProductsAndAdsController {
   @Get('analytics/ads')
   @RequireFeature('ad_attribution')
   @RequirePermission(Permission.ANALYTICS_READ)
-  ads(@Query(zod(adsReportSchema)) query: { days: number }): Promise<AdsReportDto> {
-    return this.modules.adsReport(query.days);
+  ads(
+    @CurrentAuth() auth: AuthContext,
+    @Query(zod(adsReportSchema)) query: { days: number },
+    @Meta() meta: RequestMeta,
+  ): Promise<AdsReportDto> {
+    return this.modules.adsReport(actor(auth, meta).orgId, query.days);
   }
 }

@@ -366,6 +366,41 @@ Setup for each: `infra/channels.md`.
 - Web: Settings > Channels, Settings > WhatsApp tools (QR codes, Catalog, Groups, Calling), Dashboard > Ad attribution, the widget page `/widget/[key]`, the products dialog and call menu in the inbox, and the call bar in the shell.
 - Tests: `apps/worker/test/channels.test.ts`, `apps/api/test/channels.test.ts` (website chat end to end, Instagram, every module against a scripted Graph, each module's plan flag, isolation), `packages/db/test/channels-tables.test.ts`, `packages/shared/src/channels.test.ts`, `packages/whatsapp/test/instagram.test.ts`, `e2e/channels.spec.ts` (one browser test per module).
 
+## Analytics and reports (Phase 4.3)
+
+- Reports never read `messages`. The worker keeps aggregates and records, and reports read only those, plus `conversations` counts, campaigns, referrals and the ledger.
+- Tables:
+  - Derived, rewritten by the rollup: `analytics_hourly` (per local hour and channel: inbound, sent by a person or by software, notes, sent, delivered, read, failed, new conversations), `analytics_agent_hourly` (messages and notes per person), `analytics_template_hourly` (attempts, delivered, read, failed, replied within 24 hours) `analytics_responses` (one row per first reply by a person to a waiting customer), and `analytics_response_hist` / `analytics_resolution_hist` (counts per local hour, channel, person and log bucket of seconds).
+  - Append-only records: `conversation_resolutions` (written by the `conversation_resolution` trigger on every close; reopening resets `conversations.opened_at`) and `conversions` (sales).
+  - `report_schedules`.
+  - All are under tenant RLS. New indexes: `messages (org_id, created_at)`, `conversations (org_id, created_at)` and `(last_message_at)`, `ad_referrals (contact_id, created_at)`.
+- Hours are the organization's local wall-clock hour (`timestamp`, not `timestamptz`), so days and hours of the day are exact in its time zone, half-hour zones included. Every rollup statement filters on local time and on a padded UTC range, so the index and partitions are used and a daylight saving change cannot split an hour. Changing the time zone queues a `rebuild` of 400 days.
+- Rollup (`packages/db/src/analytics.ts`, `rollupAnalytics`): deletes and rewrites whole local hours in one transaction, so it is idempotent. The window's bounds are worked out first and passed to every statement as bound values: bounds read from a join are not constants to the planner, which then scanned every partition (5 s for a 3-hour window on 4M messages, 0.5 s after). Queue `analytics` (concurrency 1, its own):
+  - `rollup` recent: the last 3 hours, every `ANALYTICS_ROLLUP_EVERY_MS` (5 minutes).
+  - `rollup` deep: the last 3 days, hourly at :23, because read receipts and replies arrive late.
+  - `rebuild`: a span, one day per transaction (`rebuildAnalytics`).
+  - Targets come from the definer function `analytics_rollup_targets(since)` (ids only, from `conversations.last_message_at`).
+- Response time: a customer waits from their first message after the last reply by a person (automated messages answer nobody), looking back at most 7 days. The reply's row has the seconds. Resolution time runs from `opened_at` to close. Medians and the 90th percentile (`durationStats`) are exact, from the rows, while a range holds at most `EXACT_PERCENTILE_LIMIT` (20,000) of them; above that they come from the histograms, buckets 10% wide (`histogramBucket` and `histogramPercentile` in shared, `HISTOGRAM_BUCKET_SQL` in db), within about 5%.
+- Conversions (`recordConversion`): unique on (org, source, reference); amounts in micros.
+  - Sources:
+    - `store_order`: an `order.paid` integration event, reference `<connector>:<order id>`.
+    - `payment`: `payment.paid`, reference `<connector>:<payment or link id>`.
+    - `whatsapp_order`: a catalog order message, reference the wamid. Written in the inbound transaction.
+  - Each conversion is credited when recorded to the contact's latest broadcast within 72 hours and latest ad (not QR) within 7 days.
+  - Campaign ROI is (revenue - cost) / cost, with cost from the ledger and only revenue in the wallet currency.
+- Reports (`buildReport`): `conversations` (totals, daily, hour of day, by channel), `agents` (per member, including people who left if they did something in the period), `campaigns` (started in the range, 200 at most), `templates`, `ads`. A range is two local dates, both included, at most 366 days; the default is the last 30. `/analytics/dashboard` and `/analytics/ads` read the same queries, so they can be up to 5 minutes behind.
+- Files: `reportTables` (`packages/shared/src/reports.ts`) turns any report into tables, and CSV (`reportToCsv`, raw seconds and decimal amounts, `csvCell` against formulas, BOM in downloads), PDF (`renderReportPdf` in `@wacrm/shared/server`, pdfkit, landscape) and the web tables all come from it.
+- Schedules:
+  - Fields: daily (yesterday), weekly on Monday (the 7 days before), monthly on the 1st (last month), at a local hour, CSV or PDF.
+  - Recipients are member ids, never addresses. Only active members with `ANALYTICS_READ` may be named, checked at save and again at send, so a report cannot be mailed outside the workspace.
+  - Sending: `report-schedules` runs every minute through `report_schedules_due` (definer, ids only). `runReportSchedule` locks the row (`FOR UPDATE SKIP LOCKED`), moves `next_run_at` on and builds the report in one transaction, then mails outside it. A failed send is recorded in `last_error` and not resent for that period.
+  - "Send now" (`POST /reports/schedules/:id/run`) sets `next_run_at` to now.
+  - The worker mails with nodemailer (`SMTP_URL`, `MAIL_FROM`, `WEB_URL`).
+- API: `GET /reports/:kind?from&to`, `GET /reports/:kind/export?format=csv|pdf` (audited `report.exported`), `/reports/schedules` CRUD (audited `report_schedule.changed`, 50 per workspace). Permission `ANALYTICS_READ`, plan feature `reports` (Starter, Growth, Scale). `PlanFeatureGuard` now also reads `@RequireFeature` on the controller class.
+- Web: `/reports` (range presets and dates, one tab per report, CSV and PDF, scheduled emails), linked in the sidebar. The hour-of-day bar chart (`components/reports/hour-chart.tsx`) uses the volume chart's validated blue in both modes. The ad report shows sales and revenue.
+- Benchmark (the acceptance): `pnpm --filter @wacrm/db bench:analytics [messages]` (`-- --reuse` keeps the last run's data) recreates `wacrm_bench_test`, seeds 5,000,000 messages over 180 days (one workspace with 80%), runs the rollup and times every report over 30, 90 and 180 days as the app role, failing at 1 second. Result on the dev PC (2026-11-14): seeding 10 minutes, rollup of 180 days for all five workspaces 4 minutes, one 5-minute pass 0.5 s; slowest report 621 ms (conversations, 180 days), then campaigns 421 ms and team 364 ms; templates under 10 ms. Before the histograms, conversations over 180 days took 3.4 s.
+- Tests: `packages/db/test/analytics-tables.test.ts` (rollup in a +5:30 zone, responses and their histogram, the resolution trigger, conversions, reports, isolation, definer functions), `packages/shared/src/reports.test.ts` (time zones, schedule times and periods, CSV, histogram accuracy), `apps/api/test/reports.test.ts`, `apps/worker/test/analytics.test.ts` (tick, catalog order sales, scheduled mail), sales checks in `commerce.test.ts` and `payments.test.ts`, `e2e/reports.spec.ts` (report after a real reply, CSV download, a scheduled email arriving in Mailpit).
+
 ## Troubleshooting
 
 - Local services run without Docker on the development PC (`infra/native-setup.md`): PostgreSQL 18 as a Windows service on 5433, Memurai (Redis) on 6379, and SeaweedFS and Mailpit from `.tools/` via `pnpm services:up`. If a test or the app cannot reach one, run `pnpm services:status`; logs are in `.tools/logs`.
@@ -400,6 +435,7 @@ Validate with Zod at startup. Never commit real secrets. Keep `.env.example` cur
 - `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET` (API and worker): the Instagram app, for Instagram messaging. `INSTAGRAM_BASE_URL` for local fakes only (refused in production)
 - `AI_PROVIDER` (`anthropic` | `fake`, unset = AI off), `ANTHROPIC_API_KEY`, `AI_MODEL` (default `claude-opus-5-5`), `AI_EMBEDDINGS_PROVIDER` (`voyage` | `openai` | `fake`), `AI_EMBEDDINGS_MODEL`, `VOYAGE_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL` (API and worker). Changing the embedding provider or model means reindexing documents
 - `API_PUBLIC_URL` (default http://localhost:4000): this API as providers reach it, for integration webhooks and OAuth callbacks. `INTEGRATIONS_DEMO` (API and worker) adds the Demo Store connector. OAuth connectors read their own client id and secret variables (see `infra/connectors.md`)
+- `ANALYTICS_ROLLUP_EVERY_MS` (worker, 300000): how often recent hours of report data are recomputed. The worker also reads `SMTP_URL`, `MAIL_FROM` and `WEB_URL` for scheduled reports
 - `SENTRY_DSN`
 
 ## Architecture rules (must follow)
@@ -456,7 +492,7 @@ Mark as phases complete.
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
 - [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 campaigns and dashboard DONE; 2.5 billing code DONE, real sandbox payments not verified; 2.6 public API and webhooks DONE. Gate NOT passed until real sandbox payments are run: wallet concurrency, webhook idempotency, campaign load and OpenAPI all pass). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
 - [ ] Section 3: Automation, integrations, AI (3.1 rules and routing DONE; 3.2 flow engine DONE; 3.3 flow builder DONE; 3.4 connector framework DONE; 3.5 commerce connectors code DONE, not checked against a real Shopify dev store; 3.6 payments, Zapier/Make, Sheets, HubSpot code DONE, payment links not run in a real sandbox; 3.7 AI assistant and knowledge base DONE with fake providers, not yet run against Claude and a real embedding provider). Started with the Section 2 gate still open (no sandbox payments run), by the project owner's decision (2026-11-09).
-- [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 reseller module and platform console DONE; 4.2 channels and extended WhatsApp modules DONE with fakes, not yet run against Instagram, calling, groups or catalogs at Meta; 4.3 to 4.5 to do). Started with the Section 3 gate still open (payment links and real AI providers not run), by the project owner's decision (2026-11-13).
+- [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 reseller module and platform console DONE; 4.2 channels and extended WhatsApp modules DONE with fakes, not yet run against Instagram, calling, groups or catalogs at Meta; 4.3 analytics and reports DONE; 4.4 and 4.5 to do). Started with the Section 3 gate still open (payment links and real AI providers not run), by the project owner's decision (2026-11-13).
 
 ## Decisions log
 
@@ -615,7 +651,18 @@ Add one line per decision: date, decision, reason.
 - 2026-11-13: Group announcements and call signalling go straight to Meta, not through the outbound queue. Reason: a group message belongs to no conversation, and a call answer must reach Meta in seconds. Both are rate-limited and audited.
 - 2026-11-13: Calls ring for everyone in the workspace and the first to claim the call answers it. Reason: no queue or routing for calls yet, and a claim before Meta stops two agents answering.
 
+- 2026-11-14: Reports read aggregate tables the worker rewrites, not materialized views. Reason: a view refresh recomputes everything, while the rollup rewrites only recent hours, and per-workspace rows stay under RLS like any tenant table.
+- 2026-11-14: Aggregates are per local hour in the workspace's time zone, rebuilt when the zone changes. Reason: India is UTC+5:30, so UTC hours cannot make exact local days.
+- 2026-11-14: Response times are recomputed from messages by the rollup; resolutions are recorded by a trigger. Reason: replies are in messages and can be recomputed, while a close is not; a trigger catches every path that closes a thread.
+- 2026-11-14: First response time is measured from the customer's first unanswered message to the next reply by a person, per waiting period, looking back 7 days. Automated and API sends answer nobody.
+- 2026-11-14: Scheduled reports go only to owners and admins of the workspace, by member id. Reason: a report holds customer and team data; a free-form address would be a way to mail it out.
+- 2026-11-14: Percentiles over long ranges come from log histograms (10% buckets, within about 5%), exact up to 20,000 values. Reason: sorting a million response rows took 3.4 s, over the 1 second target.
+- 2026-11-14: A scheduled send is claimed before mailing and not retried. Reason: one missing email shows in `last_error`, while a retry loop could mail the same report many times.
+- 2026-11-14: Sales come from paid store orders, paid payment links and WhatsApp catalog orders, credited at the time to the latest broadcast (72 hours) and ad (7 days). Catalog orders count when placed, since WhatsApp does not report payment.
+
 ## Known gaps / TODO
+
+- Reports: figures are up to 5 minutes behind (the rollup interval), and up to an hour for late read receipts and replies older than 3 hours. Resolution history starts with Phase 4.3 (no closes before it were recorded). Revenue in a currency other than the wallet's is left out of ROI. Campaigns are attributed by last touch only. Report PDFs use the built-in font (no Hindi). Scheduled emails have no unsubscribe link and are not retried. No per-label, per-tag or per-flow reports yet, no custom report builder, and AI and wallet spend are not in reports (the wallet page has its own). Response rows and hourly tables are kept forever; add retention with 4.4.
 
 - Phase 4.2 not run against Meta: Instagram login, webhooks and sends; calling (WebRTC audio, webhook payloads, whether a call opens the 24-hour window); groups (whether the id comes back at once, and the webhook shapes); catalog listing permissions on the WABA token; QR codes. All follow the SDK and Meta's documentation and are pinned by tests and the fake Meta.
 - Channels: Instagram media (images people send are kept as a link, which expires; nothing is copied to storage), story replies and mentions are text only, no HUMAN_AGENT tag for replies after 24 hours. Website chat has no file upload, no typing indicator, no offline email follow-up, and no proactive messages; its allowed-sites check is advisory. No Facebook Messenger channel yet. Group conversations are not in the inbox. Calls have no recording, transfer, queue or TURN server, and a page reload during a call drops it. The widget and Instagram contacts cannot yet be merged with a WhatsApp contact automatically.

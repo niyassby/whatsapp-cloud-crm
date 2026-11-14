@@ -242,11 +242,16 @@ export interface AdsReportRowDto {
   newContacts: number;
   /** Conversations where someone from the team replied. */
   replied: number;
+  /** Paid orders and payments from people the ad brought, within 7 days of their click. */
+  conversions: number;
+  /** In the wallet currency. */
+  revenueMicros: number;
   firstAt: string;
   lastAt: string;
 }
 
 export interface AdsReportDto {
   days: number;
+  currency: string;
   rows: AdsReportRowDto[];
 }

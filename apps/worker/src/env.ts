@@ -78,6 +78,12 @@ export const workerEnvSchema = z.object({
     .regex(/^[A-Z]{3}$/)
     .default('INR'),
   ...s3EnvShape,
+  /** How often recent hours of report data are recomputed. Lower only for local tests. */
+  ANALYTICS_ROLLUP_EVERY_MS: z.coerce.number().int().min(1000).default(300_000),
+  /** Scheduled report emails. Same values as the API. */
+  SMTP_URL: z.url({ protocol: /^smtps?$/ }).default('smtp://127.0.0.1:1025'),
+  MAIL_FROM: z.string().default('WhatsApp CRM <no-reply@localhost>'),
+  WEB_URL: z.url().default('http://localhost:3000'),
   /** Raw webhook payloads are kept this long for replay. */
   WEBHOOK_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
 });

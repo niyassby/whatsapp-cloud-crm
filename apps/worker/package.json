@@ -21,10 +21,12 @@
     "bullmq": "^6.7.0",
     "csv-parse": "^7.0.3",
     "ioredis": "^6.0.0",
+    "nodemailer": "^10.3.1",
     "pino": "^10.4.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@types/nodemailer": "^8.0.2",
     "tsx": "^4.23.15"
   }
 }

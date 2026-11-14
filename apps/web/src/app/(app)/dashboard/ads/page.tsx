@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { type AdsReportDto, Permission } from '@wacrm/shared';
+import { type AdsReportDto, formatMoney, Permission } from '@wacrm/shared';
 import Link from 'next/link';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -61,7 +61,8 @@ export default function AdsReportPage() {
         <CardHeader>
           <CardTitle>Click-to-chat ads</CardTitle>
           <CardDescription>
-            Each message that came from an ad is counted. New people had never written before.
+            Each message that came from an ad is counted. New people had never written before. Sales
+            are paid orders within 7 days of the click.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -80,6 +81,8 @@ export default function AdsReportPage() {
                   <TableHead className="text-right">Conversations</TableHead>
                   <TableHead className="text-right">New people</TableHead>
                   <TableHead className="text-right">Answered</TableHead>
+                  <TableHead className="text-right">Sales</TableHead>
+                  <TableHead className="text-right">Revenue</TableHead>
                   <TableHead>Last</TableHead>
                 </TableRow>
               </TableHeader>
@@ -96,6 +99,10 @@ export default function AdsReportPage() {
                     <TableCell className="text-right tabular-nums">{r.conversations}</TableCell>
                     <TableCell className="text-right tabular-nums">{r.newContacts}</TableCell>
                     <TableCell className="text-right tabular-nums">{r.replied}</TableCell>
+                    <TableCell className="text-right tabular-nums">{r.conversions}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatMoney(r.revenueMicros, report.data.currency)}
+                    </TableCell>
                     <TableCell>{new Date(r.lastAt).toLocaleDateString()}</TableCell>
                   </TableRow>
                 ))}

@@ -6,3 +6,4 @@ export * from './tokens';
 export * from './redis';
 export * from './storage';
 export * from './phone';
+export * from './report-pdf';

@@ -7,7 +7,7 @@
       "seats": 3,
       "numbers": 1,
       "contacts": 2500,
-      "features": ["campaigns", "flows", "webchat", "qr_codes"],
+      "features": ["campaigns", "flows", "webchat", "qr_codes", "reports"],
       "sortOrder": 1,
       "prices": [
         {
@@ -44,7 +44,8 @@
         "qr_codes",
         "instagram",
         "catalog",
-        "ad_attribution"
+        "ad_attribution",
+        "reports"
       ],
       "isTrial": true,
       "sortOrder": 2,
@@ -85,7 +86,8 @@
         "catalog",
         "ad_attribution",
         "groups",
-        "calling"
+        "calling",
+        "reports"
       ],
       "sortOrder": 3,
       "prices": [

@@ -6,6 +6,7 @@ import { IntegrationsModule } from './integrations/integrations.module';
 import { AiModule } from './ai/ai.module';
 import { ResellerModule } from './reseller/reseller.module';
 import { ChannelsModule } from './channels/channels.module';
+import { ReportsModule } from './reports/reports.module';
 import { WaModulesModule } from './wa-modules/wa-modules.module';
 import { AutomationModule } from './automation/automation.module';
 import { BillingModule } from './billing/billing.module';
@@ -58,6 +59,7 @@ export class AppModule {
         ResellerModule,
         ChannelsModule,
         WaModulesModule,
+        ReportsModule,
       ],
       controllers: [HealthController],
       providers: [

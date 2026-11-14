@@ -21,7 +21,14 @@ import {
   refreshTokens,
   sha256Hex,
 } from '@wacrm/connectors';
-import { assertWithinLimit, Prisma, setContactConsent, type TenantTx, withTenant } from '@wacrm/db';
+import {
+  assertWithinLimit,
+  Prisma,
+  recordConversion,
+  setContactConsent,
+  type TenantTx,
+  withTenant,
+} from '@wacrm/db';
 import { AppError, ErrorCode, type IntegrationJob } from '@wacrm/shared';
 import { integrationCredentialsAad, normalizePhone } from '@wacrm/shared/server';
 import type { WorkerDeps } from '../deps';
@@ -660,6 +667,7 @@ export async function processIntegrationEvent(
             continue;
           }
           row.contactId = contact.id;
+          await recordSale(tx, orgId, conn.connectorKey, contact.id, ev);
           if (ev.contact?.consent) {
             const now = await tx.contact.findUniqueOrThrow({
               where: { id: contact.id },
@@ -890,5 +898,46 @@ export async function processIntegrationJob(
       const r = await syncConnection(deps, job.orgId, job.connectionId);
       return r === 'skipped' ? r : `synced ${r.events}`;
     }
+  }
+}
+
+/**
+ * A paid order or payment is a conversion for the reports. Claimed with the event above, and
+ * unique on its reference too, so a store and its payment provider cannot count one sale twice
+ * under the same id.
+ */
+async function recordSale(
+  tx: TenantTx,
+  orgId: string,
+  connector: string,
+  contactId: string,
+  ev: { trigger: string; data: Record<string, unknown> },
+): Promise<void> {
+  const pick = (v: unknown) => (v && typeof v === 'object' ? (v as Record<string, unknown>) : null);
+  const str = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
+  if (ev.trigger === 'order.paid') {
+    const order = pick(ev.data.order);
+    if (!order) return;
+    await recordConversion(tx, {
+      orgId,
+      contactId,
+      source: 'store_order',
+      reference: `${connector}:${str(order.id)}`,
+      amount: str(order.total),
+      currency: str(order.currency),
+    });
+  } else if (ev.trigger === 'payment.paid') {
+    const payment = pick(ev.data.payment);
+    if (!payment) return;
+    const id = str(payment.id) || str(payment.linkId);
+    if (!id) return;
+    await recordConversion(tx, {
+      orgId,
+      contactId,
+      source: 'payment',
+      reference: `${connector}:${id}`,
+      amount: str(payment.amount),
+      currency: str(payment.currency),
+    });
   }
 }

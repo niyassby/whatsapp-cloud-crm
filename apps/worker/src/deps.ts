@@ -14,6 +14,7 @@ import type {
 } from '@wacrm/shared';
 import type { ObjectStorage, SecretBox } from '@wacrm/shared/server';
 import type { InstagramClient, WhatsAppClientFactory } from '@wacrm/whatsapp';
+import type { ReportMail } from './processors/analytics';
 import type { WebhookPoster } from './processors/webhook-deliveries';
 import type { SafeHttp } from './safe-http';
 
@@ -57,6 +58,10 @@ export interface WorkerDeps {
   instagram: InstagramClient | null;
   /** For a workspace whose first paid send comes from a drip. */
   defaultCurrency: string;
+  /** Scheduled report emails. Missing in tests that do not send mail. */
+  sendMail?: (mail: ReportMail) => Promise<void>;
+  /** The web app, for links in emails. */
+  webUrl?: string;
 }
 
 /** Thrown inside a job so BullMQ retries it with backoff. */

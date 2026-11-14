@@ -6,6 +6,7 @@ import { createPaymentProviders } from '@wacrm/billing';
 import { closeDuePartnerMonths, createPrismaClient, withTenant } from '@wacrm/db';
 import {
   buildHealth,
+  type AnalyticsJob,
   type AutomationJob,
   type FlowJob,
   type AiJob,
@@ -51,6 +52,15 @@ import { checkSla, runInboxAutomation, slaDueConversations } from './processors/
 import { flowDueRuns, processFlowJob } from './processors/flows';
 import { integrationDueWork, processIntegrationJob } from './processors/integrations';
 import { processAiJob } from './processors/ai';
+import {
+  dueReportSchedules,
+  rebuildOrg,
+  ROLLUP_DEEP_MS,
+  ROLLUP_RECENT_MS,
+  runReportSchedule,
+  runRollup,
+} from './processors/analytics';
+import nodemailer from 'nodemailer';
 import { buildRegistry } from '@wacrm/connectors';
 import { createSafeHttp } from './safe-http';
 import { processBillingEvent } from './processors/billing';
@@ -140,6 +150,12 @@ const campaignQueue = new Queue<CampaignJob>(QueueName.CAMPAIGNS, {
   defaultJobOptions: DEFAULT_JOB_OPTIONS,
 });
 
+const analyticsQueue = new Queue<AnalyticsJob>(QueueName.ANALYTICS, {
+  ...queueOpts,
+  defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, removeOnComplete: true, removeOnFail: 100 },
+});
+const mailer = nodemailer.createTransport(env.SMTP_URL);
+
 const deps: WorkerDeps = {
   db,
   publisher,
@@ -216,6 +232,16 @@ const deps: WorkerDeps = {
   },
   ai: createAiProviders(process.env),
   defaultCurrency: env.WALLET_DEFAULT_CURRENCY,
+  webUrl: env.WEB_URL,
+  sendMail: async (mail) => {
+    await mailer.sendMail({
+      from: env.MAIL_FROM,
+      to: mail.to,
+      subject: mail.subject,
+      text: mail.text,
+      attachments: [mail.attachment],
+    });
+  },
   instagram:
     env.INSTAGRAM_APP_ID && env.INSTAGRAM_APP_SECRET
       ? new InstagramClient({
@@ -400,6 +426,65 @@ const aiWorker = new Worker<AiJob>(
 aiWorker.on('failed', (job, err) => {
   log.warn({ jobId: job?.id, err: err.message }, 'ai job attempt failed');
 });
+
+// Its own queue, concurrency 1: rollups read messages in bulk and must not crowd the inbox.
+const analyticsWorker = new Worker<AnalyticsJob>(
+  QueueName.ANALYTICS,
+  async (job) => {
+    const data = job.data;
+    if (data.kind === 'rollup') {
+      const result = await runRollup(
+        deps,
+        data.window === 'deep' ? ROLLUP_DEEP_MS : ROLLUP_RECENT_MS,
+      );
+      for (const f of result.failed) log.error(f, 'analytics rollup failed for a workspace');
+      return;
+    }
+    if (data.kind === 'rebuild') {
+      const days = await rebuildOrg(deps, data.orgId, data.days);
+      log.info({ orgId: data.orgId, days }, 'analytics rebuilt');
+      return;
+    }
+    if (data.kind === 'schedules') {
+      for (const due of await dueReportSchedules(deps)) {
+        await analyticsQueue.add(
+          'schedule',
+          { kind: 'schedule', orgId: due.org_id, scheduleId: due.id },
+          { jobId: `report-${due.id}` },
+        );
+      }
+      return;
+    }
+    const outcome = await runReportSchedule(deps, data.orgId, data.scheduleId);
+    log.info({ scheduleId: data.scheduleId, outcome }, 'scheduled report');
+  },
+  { ...queueOpts, concurrency: 1 },
+);
+analyticsWorker.on('failed', (job, err) => {
+  log.warn({ jobId: job?.id, err: err.message }, 'analytics job failed');
+});
+// Keyed by schedule, so a slow rollup is not queued again behind itself.
+void analyticsQueue
+  .upsertJobScheduler(
+    'analytics-recent',
+    { every: env.ANALYTICS_ROLLUP_EVERY_MS },
+    { name: 'rollup', data: { kind: 'rollup', window: 'recent' } },
+  )
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule rollups'));
+void analyticsQueue
+  .upsertJobScheduler(
+    'analytics-deep',
+    { pattern: '23 * * * *' },
+    { name: 'rollup', data: { kind: 'rollup', window: 'deep' } },
+  )
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule deep rollups'));
+void analyticsQueue
+  .upsertJobScheduler(
+    'report-schedules',
+    { every: 60_000 },
+    { name: 'schedules', data: { kind: 'schedules' } },
+  )
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule reports'));
 
 // Its own queue: a customer's slow endpoint cannot hold up anything else.
 const webhookDeliveryWorker = new Worker<WebhookDeliveryJob>(
@@ -616,6 +701,8 @@ async function shutdown() {
     integrationQueue.close(),
     aiWorker.close(),
     aiQueue.close(),
+    analyticsWorker.close(),
+    analyticsQueue.close(),
     flowQueue.close(),
     automationQueue.close(),
     outboundQueue.close(),

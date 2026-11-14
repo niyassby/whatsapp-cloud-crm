@@ -345,6 +345,11 @@ describe('payment links in a flow', () => {
     // The same payment reported again changes nothing.
     await t.deliver(p.rzp, { 'x-razorpay-event-id': 'evt_2' }, paidWebhook(LINK));
     expect(await t.sent()).toHaveLength(2);
+    // One sale in the reports.
+    const sales = await withTenant(client, { orgId: t.orgId }, (tx) => tx.conversion.findMany());
+    expect(sales.map((s) => [s.source, s.amountMicros, s.currency])).toEqual([
+      ['payment', 499_000_000n, 'INR'],
+    ]);
   });
 
   it('a link left unpaid gets its reminder; a failed link takes the failure exit', async () => {

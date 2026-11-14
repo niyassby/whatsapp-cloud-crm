@@ -7,6 +7,7 @@ import {
   type DbClient,
   ensureWallet,
   reserveFunds,
+  rollupAnalytics,
   withTenant,
   whatsappChannelId,
 } from '@wacrm/db';
@@ -548,6 +549,8 @@ describe('dashboard', () => {
       await message({ direction: 'outbound', status: 'delivered', createdAt: at(200) });
       await message({ direction: 'outbound', status: 'failed', createdAt: at(300) });
       await message({ direction: 'internal', status: 'sent', createdAt: at(400) });
+      // The dashboard reads the aggregates the worker keeps (Phase 4.3).
+      await rollupAnalytics(tx, s.orgId, at(-60), new Date());
     });
     const res = await s.client.get('/analytics/dashboard?days=7');
     expect(res.status).toBe(200);

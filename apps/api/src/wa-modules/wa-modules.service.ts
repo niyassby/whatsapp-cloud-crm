@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import {
+  adsReport as adsAttributionReport,
   callBody,
   callInclude,
   callToDto,
@@ -23,6 +24,7 @@ import {
   ErrorCode,
   type GroupDto,
   type GroupJoinRequestDto,
+  lastDays,
   type MessageDto,
   type QrCodeDto,
   type SendProductsInput,
@@ -779,60 +781,17 @@ export class WaModulesService {
 
   /**
    * Click-to-WhatsApp (and Instagram) ads over the last `days`: how many messages each brought,
-   * in how many conversations, how many were new people, and how many got a reply from the team.
-   * Reviewed raw SQL under RLS; the replies check is bounded by created_at, so only partitions
-   * in range are read.
+   * in how many conversations, how many were new people, how many got a reply from the team, and
+   * what they bought. From the referrals and the Phase 4.3 records, never the messages table.
    */
-  async adsReport(days: number): Promise<AdsReportDto> {
-    const since = new Date(Date.now() - days * 86_400_000);
-    const rows = await this.db.run(
-      (tx) =>
-        tx.$queryRaw<
-          {
-            source_id: string | null;
-            headline: string | null;
-            source_url: string | null;
-            referrals: bigint;
-            conversations: bigint;
-            new_contacts: bigint;
-            replied: bigint;
-            first_at: Date;
-            last_at: Date;
-          }[]
-        >`
-        SELECT r.source_id,
-               (array_agg(r.headline ORDER BY r.created_at DESC))[1] AS headline,
-               (array_agg(r.source_url ORDER BY r.created_at DESC))[1] AS source_url,
-               count(*) AS referrals,
-               count(DISTINCT r.conversation_id) AS conversations,
-               count(*) FILTER (WHERE r.new_contact) AS new_contacts,
-               count(DISTINCT r.conversation_id) FILTER (WHERE EXISTS (
-                 SELECT 1 FROM messages m
-                 WHERE m.conversation_id = r.conversation_id
-                   AND m.direction = 'outbound' AND m.sender_user_id IS NOT NULL
-                   AND m.created_at >= r.message_created_at AND m.created_at >= ${since}
-               )) AS replied,
-               min(r.created_at) AS first_at,
-               max(r.created_at) AS last_at
-        FROM ad_referrals r
-        WHERE r.created_at >= ${since} AND COALESCE(r.source_type, '') <> 'qr'
-        GROUP BY r.source_id
-        ORDER BY count(*) DESC
-        LIMIT 200`,
-    );
-    return {
-      days,
-      rows: rows.map((r) => ({
-        sourceId: r.source_id,
-        headline: r.headline,
-        sourceUrl: r.source_url,
-        referrals: Number(r.referrals),
-        conversations: Number(r.conversations),
-        newContacts: Number(r.new_contacts),
-        replied: Number(r.replied),
-        firstAt: r.first_at.toISOString(),
-        lastAt: r.last_at.toISOString(),
-      })),
-    };
+  async adsReport(orgId: string, days: number): Promise<AdsReportDto> {
+    const report = await this.db.run(async (tx) => {
+      const org = await tx.organization.findUniqueOrThrow({
+        where: { id: orgId },
+        select: { timezone: true },
+      });
+      return adsAttributionReport(tx, orgId, lastDays(days, org.timezone));
+    });
+    return { days, currency: report.currency, rows: report.rows };
   }
 }

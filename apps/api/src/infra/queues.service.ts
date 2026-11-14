@@ -1,6 +1,7 @@
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import {
   type AiJob,
+  type AnalyticsJob,
   type AutomationJob,
   type BillingEventJob,
   type FlowJob,
@@ -35,6 +36,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   readonly integrations: Queue<IntegrationJob>;
   readonly ai: Queue<AiJob>;
   readonly automation: Queue<AutomationJob>;
+  readonly analytics: Queue<AnalyticsJob>;
 
   constructor(@Inject(API_ENV) env: ApiEnv) {
     const opts = {
@@ -56,6 +58,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
     this.integrations = new Queue(QueueName.INTEGRATIONS, opts);
     this.ai = new Queue(QueueName.AI, opts);
     this.automation = new Queue(QueueName.AUTOMATION, opts);
+    this.analytics = new Queue(QueueName.ANALYTICS, opts);
     this.contactJobs = new Queue(QueueName.CONTACT_JOBS, {
       ...opts,
       defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, attempts: 3 },
@@ -75,6 +78,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.integrations.waitUntilReady(),
       this.ai.waitUntilReady(),
       this.automation.waitUntilReady(),
+      this.analytics.waitUntilReady(),
     ]);
   }
 
@@ -97,6 +101,11 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   /** Rules and flows for a message the API saved itself (website chat). Keyed like the worker. */
   async enqueueAutomation(job: AutomationJob): Promise<void> {
     await this.automation.add('run', job, { jobId: `auto-${job.messageId}` });
+  }
+
+  /** Rebuild a workspace's report aggregates, after its time zone changes. */
+  async enqueueAnalyticsRebuild(orgId: string, days: number): Promise<void> {
+    await this.analytics.add('rebuild', { kind: 'rebuild', orgId, days });
   }
 
   /** Index a knowledge document (also after an edit or a reindex request). */
@@ -150,6 +159,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.integrations.close(),
       this.ai.close(),
       this.automation.close(),
+      this.analytics.close(),
     ]);
   }
 }

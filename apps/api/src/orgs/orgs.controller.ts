@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Body, Controller, Get, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Logger, Patch, Post, Query } from '@nestjs/common';
 import { withTenant, startTrial } from '@wacrm/db';
 import {
   type AuditLogDto,
@@ -19,6 +19,7 @@ import { CurrentAuth, RequirePermission } from '../auth/decorators';
 import { Meta, type RequestMeta } from '../common/request-meta';
 import { zod } from '../common/zod.pipe';
 import { PrismaService } from '../db/prisma.service';
+import { QueuesService } from '../infra/queues.service';
 import type { AuthContext } from '../tenancy/request-context';
 import { SkipTenant } from '../tenancy/skip-tenant.decorator';
 import { TenantPrismaService } from '../tenancy/tenant-prisma.service';
@@ -38,7 +39,10 @@ export class OrgsController {
     private readonly db: TenantPrismaService,
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly queues: QueuesService,
   ) {}
+
+  private readonly logger = new Logger(OrgsController.name);
 
   /** Create another workspace; the caller becomes its owner. Switch to it with /auth/switch-org. */
   @SkipTenant()
@@ -80,8 +84,14 @@ export class OrgsController {
     @Body(zod(updateOrgSchema)) body: UpdateOrgInput,
     @Meta() meta: RequestMeta,
   ): Promise<OrgDto> {
+    let timezoneChanged = false;
     const org = await this.db.run(async (tx) => {
+      const before = await tx.organization.findUniqueOrThrow({
+        where: { id: auth.orgId },
+        select: { timezone: true },
+      });
       const updated = await tx.organization.update({ where: { id: auth.orgId }, data: body });
+      timezoneChanged = before.timezone !== updated.timezone;
       await this.audit.record(tx, updated.id, {
         action: AuditAction.ORG_UPDATED,
         actorUserId: auth.userId,
@@ -90,6 +100,13 @@ export class OrgsController {
       });
       return updated;
     });
+    if (timezoneChanged) {
+      // Report hours are local hours, so a new time zone means rebuilding them. Reports keep
+      // working meanwhile, a day at a time from the most recent.
+      await this.queues
+        .enqueueAnalyticsRebuild(org.id, 400)
+        .catch((err: unknown) => this.logger.error(`could not queue a rebuild: ${String(err)}`));
+    }
     return toOrgDto(org);
   }
 

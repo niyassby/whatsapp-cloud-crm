@@ -19,6 +19,7 @@ export const PLAN_FEATURES = [
   'ad_attribution',
   'groups',
   'calling',
+  'reports',
 ] as const;
 export type PlanFeature = (typeof PLAN_FEATURES)[number];
 
@@ -36,6 +37,7 @@ export const PLAN_FEATURE_LABELS: Record<PlanFeature, string> = {
   ad_attribution: 'Click-to-WhatsApp ad reports',
   groups: 'WhatsApp groups',
   calling: 'WhatsApp calling',
+  reports: 'Reports, exports and scheduled emails',
 };
 
 /** Where a workspace lands when a trial or subscription ends. */

@@ -15,7 +15,10 @@ export class PlanFeatureGuard implements CanActivate {
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
-    const feature = this.reflector.get<PlanFeature | undefined>(FEATURE_KEY, ctx.getHandler());
+    const feature = this.reflector.getAllAndOverride<PlanFeature | undefined>(FEATURE_KEY, [
+      ctx.getHandler(),
+      ctx.getClass(),
+    ]);
     if (!feature) return true;
     const auth = ctx.switchToHttp().getRequest<FastifyRequest>().auth;
     const orgId = auth?.orgId;

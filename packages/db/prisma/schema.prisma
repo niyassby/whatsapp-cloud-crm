@@ -437,6 +437,8 @@ model Organization {
   catalogProducts        CatalogProduct[]
   waGroups               WaGroup[]
   calls                  Call[]
+  conversions            Conversion[]
+  reportSchedules        ReportSchedule[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -941,6 +943,8 @@ model Conversation {
   /// The ad the latest click-to-chat referral came from, shown on the conversation.
   adSourceId         String?             @map("ad_source_id")
   adHeadline         String?             @map("ad_headline")
+  /// When the conversation was last opened (created or reopened). Resolution time runs from here.
+  openedAt           DateTime            @default(now()) @map("opened_at") @db.Timestamptz(3)
   adReferrals        AdReferral[]
   calls              Call[]
 
@@ -949,6 +953,8 @@ model Conversation {
   @@index([orgId, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([orgId, assigneeId])
   @@index([slaDueAt])
+  @@index([lastMessageAt])
+  @@index([orgId, createdAt])
   @@map("conversations")
 }
 
@@ -988,6 +994,7 @@ model Message {
 
   @@id([id, createdAt])
   @@index([conversationId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([orgId, createdAt])
   @@map("messages")
 }
 
@@ -2077,6 +2084,7 @@ model AdReferral {
   @@unique([orgId, messageId])
   @@index([orgId, createdAt])
   @@index([orgId, sourceId, createdAt])
+  @@index([contactId, createdAt])
   @@map("ad_referrals")
 }
 
@@ -2179,4 +2187,179 @@ model Call {
   @@unique([orgId, metaCallId])
   @@index([orgId, startedAt])
   @@map("calls")
+}
+
+// ------------------------------------------------------------------ analytics (Phase 4.3)
+//
+// Reports read these, never `messages`. The hourly tables and responses are derived: the worker
+// recomputes a window of them from messages (see packages/db/src/analytics.ts), so they can be
+// rebuilt at any time. Hours are the organization's local wall-clock hour, so days and
+// hours of the day are exact in its time zone, including half-hour zones.
+
+/// Messages per local hour and channel.
+model AnalyticsHourly {
+  orgId             String   @map("org_id") @db.Uuid
+  /// Local wall-clock hour in the organization's time zone.
+  hour              DateTime @db.Timestamp(0)
+  channelId         String   @map("channel_id") @db.Uuid
+  inbound           Int      @default(0)
+  outboundHuman     Int      @default(0) @map("outbound_human")
+  outboundAutomated Int      @default(0) @map("outbound_automated")
+  notes             Int      @default(0)
+  /// Outbound messages that reached Meta (sent, delivered or read).
+  sent              Int      @default(0)
+  delivered         Int      @default(0)
+  read              Int      @default(0)
+  failed            Int      @default(0)
+  newConversations  Int      @default(0) @map("new_conversations")
+
+  @@id([orgId, hour, channelId])
+  @@map("analytics_hourly")
+}
+
+/// What each person sent per local hour.
+model AnalyticsAgentHourly {
+  orgId    String   @map("org_id") @db.Uuid
+  hour     DateTime @db.Timestamp(0)
+  userId   String   @map("user_id") @db.Uuid
+  messages Int      @default(0)
+  notes    Int      @default(0)
+
+  @@id([orgId, hour, userId])
+  @@map("analytics_agent_hourly")
+}
+
+/// Template sends per local hour, by the hour they were sent.
+model AnalyticsTemplateHourly {
+  orgId      String   @map("org_id") @db.Uuid
+  hour       DateTime @db.Timestamp(0)
+  templateId String   @map("template_id") @db.Uuid
+  /// Every send attempt, including failures.
+  attempted  Int      @default(0)
+  delivered  Int      @default(0)
+  read       Int      @default(0)
+  failed     Int      @default(0)
+  /// The customer wrote back within 24 hours.
+  replied    Int      @default(0)
+
+  @@id([orgId, hour, templateId])
+  @@index([orgId, templateId])
+  @@map("analytics_template_hourly")
+}
+
+/// A person's first reply after a customer started waiting. One row per such reply.
+model AnalyticsResponse {
+  orgId          String   @map("org_id") @db.Uuid
+  /// The reply's message id.
+  messageId      String   @map("message_id") @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  channelId      String   @map("channel_id") @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  /// The customer's first unanswered message.
+  customerAt     DateTime @map("customer_at") @db.Timestamptz(3)
+  respondedAt    DateTime @map("responded_at") @db.Timestamptz(3)
+  seconds        Int
+
+  @@id([orgId, messageId])
+  @@index([orgId, respondedAt])
+  @@index([conversationId, respondedAt])
+  @@map("analytics_responses")
+}
+
+/// Written by a trigger whenever a conversation is closed. Append-only.
+model ConversationResolution {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  orgId          String   @map("org_id") @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  channelId      String   @map("channel_id") @db.Uuid
+  assigneeId     String?  @map("assignee_id") @db.Uuid
+  openedAt       DateTime @map("opened_at") @db.Timestamptz(3)
+  closedAt       DateTime @map("closed_at") @db.Timestamptz(3)
+  seconds        Int
+
+  @@index([orgId, closedAt])
+  @@map("conversation_resolutions")
+}
+
+/// Money a customer spent: a paid store order, a paid payment link, or a WhatsApp catalog order.
+/// Attributed when recorded to the contact's latest broadcast (72 hours) and ad (7 days).
+model Conversion {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  orgId        String   @map("org_id") @db.Uuid
+  contactId    String   @map("contact_id") @db.Uuid
+  /// store_order, payment, whatsapp_order
+  source       String
+  /// The outside id, unique per source.
+  reference    String
+  amountMicros BigInt   @map("amount_micros")
+  currency     String
+  occurredAt   DateTime @map("occurred_at") @db.Timestamptz(3)
+  campaignId   String?  @map("campaign_id") @db.Uuid
+  adSourceId   String?  @map("ad_source_id")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, source, reference])
+  @@index([orgId, occurredAt])
+  @@index([orgId, campaignId])
+  @@index([orgId, adSourceId])
+  @@map("conversions")
+}
+
+/// A report emailed on a schedule to members of the workspace.
+model ReportSchedule {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  orgId        String    @map("org_id") @db.Uuid
+  name         String
+  /// conversations, agents, campaigns, templates, ads
+  report       String
+  /// daily, weekly, monthly
+  frequency    String
+  format       String
+  /// Members only: a report never goes to an address outside the workspace.
+  recipientIds String[]  @map("recipient_ids") @db.Uuid
+  /// Local hour of the day it is sent (organization time zone).
+  hour         Int       @default(8)
+  active       Boolean   @default(true)
+  nextRunAt    DateTime  @map("next_run_at") @db.Timestamptz(3)
+  lastRunAt    DateTime? @map("last_run_at") @db.Timestamptz(3)
+  lastError    String?   @map("last_error")
+  createdById  String?   @map("created_by_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([active, nextRunAt])
+  @@map("report_schedules")
+}
+
+/// Response times as a histogram per local hour, channel and person: `bucket` is a log bucket
+/// 10% wide (`responseBucket` in @wacrm/shared). Large ranges read percentiles from here.
+model AnalyticsResponseHist {
+  orgId     String   @map("org_id") @db.Uuid
+  hour      DateTime @db.Timestamp(0)
+  channelId String   @map("channel_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  bucket    Int      @db.SmallInt
+  n         Int
+
+  @@id([orgId, hour, channelId, userId, bucket])
+  @@map("analytics_response_hist")
+}
+
+/// Resolution times as a histogram per local hour of closing, channel and assignee. Unassigned
+/// conversations use the nil uuid.
+model AnalyticsResolutionHist {
+  orgId      String   @map("org_id") @db.Uuid
+  hour       DateTime @db.Timestamp(0)
+  channelId  String   @map("channel_id") @db.Uuid
+  assigneeId String   @map("assignee_id") @db.Uuid
+  bucket     Int      @db.SmallInt
+  n          Int
+
+  @@id([orgId, hour, channelId, assigneeId, bucket])
+  @@map("analytics_resolution_hist")
 }

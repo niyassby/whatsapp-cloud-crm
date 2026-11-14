@@ -25,7 +25,18 @@ export const QueueName = {
   INTEGRATIONS: 'integrations',
   /** Knowledge base indexing (embedding). Its own queue: a big document cannot delay messages. */
   AI: 'ai',
+  /** Report aggregates (rollups and rebuilds) and scheduled report emails. */
+  ANALYTICS: 'analytics',
 } as const;
+
+export type AnalyticsJob =
+  /** Recompute recent hours (every 5 minutes) or the last 3 days (hourly) for every workspace. */
+  | { kind: 'rollup'; window: 'recent' | 'deep' }
+  /** Redo one workspace's history, after its time zone changes. */
+  | { kind: 'rebuild'; orgId: string; days: number }
+  /** Find report schedules that are due. */
+  | { kind: 'schedules' }
+  | { kind: 'schedule'; orgId: string; scheduleId: string };
 
 export type AiJob = { kind: 'index'; orgId: string; documentId: string };
 

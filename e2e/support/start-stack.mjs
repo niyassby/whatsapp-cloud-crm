@@ -53,6 +53,8 @@ const env = {
   STRIPE_WEBHOOK_SECRET,
   STRIPE_API_BASE: `http://127.0.0.1:${PORTS.payments}`,
   SMTP_URL: 'smtp://127.0.0.1:1025',
+  // Reports read aggregates; recompute them every few seconds so a test sees its own messages.
+  ANALYTICS_ROLLUP_EVERY_MS: '3000',
   S3_ENDPOINT: 'http://127.0.0.1:9000',
   S3_PUBLIC_ENDPOINT: 'http://localhost:9000',
   S3_ACCESS_KEY_ID: 'localdev',
