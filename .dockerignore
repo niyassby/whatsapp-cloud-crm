@@ -1,0 +1,15 @@
+.git
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/coverage
+**/*.tsbuildinfo
+packages/db/src/generated
+.env
+.env.*
+!.env.example
+.tools
+test-results
+playwright-report
+**/*.log

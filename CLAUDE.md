@@ -72,7 +72,10 @@ pnpm admin:grant <email> [--revoke]                # make an existing account a 
 pnpm --filter @wacrm/db run migrate:create -- --name <name>   # empty migration to hand-edit (RLS!)
 pnpm --filter @wacrm/api dev   # run a single app
 pnpm secrets:reencrypt  # key rotation: rewrite secrets still under an old ENCRYPTION_KEY
+docker compose -f docker-compose.prod.yml --env-file .env.production --profile tools build   # production images
 ```
+
+Deployment (systemd or Docker) and every env variable: `README.md`. Production images: `apps/api/Dockerfile` (also `--target tools` for migrations and operator scripts), `apps/worker/Dockerfile`, `apps/web/Dockerfile` (`NEXT_PUBLIC_API_URL` is a build arg). All build from the repo root, and the `Docker` workflow builds them and boots `docker-compose.prod.yml` on every push.
 
 Health checks: `GET :4000/health` (api liveness), `GET :4000/health/ready` (api + DB), `GET :4001/health` (worker), `GET :3000/health` (web).
 
@@ -659,6 +662,8 @@ Add one line per decision: date, decision, reason.
 - 2026-11-14: Percentiles over long ranges come from log histograms (10% buckets, within about 5%), exact up to 20,000 values. Reason: sorting a million response rows took 3.4 s, over the 1 second target.
 - 2026-11-14: A scheduled send is claimed before mailing and not retried. Reason: one missing email shows in `last_error`, while a retry loop could mail the same report many times.
 - 2026-11-14: Sales come from paid store orders, paid payment links and WhatsApp catalog orders, credited at the time to the latest broadcast (72 hours) and ad (7 days). Catalog orders count when placed, since WhatsApp does not report payment.
+
+- 2026-11-14: Production images build the whole workspace, then reinstall production dependencies for one app (`pnpm install --prod --filter=<app>...`) instead of `pnpm deploy` or Next's standalone output. Reason: `pnpm deploy` packs workspace packages by their ignore files, and the root `.gitignore` excludes `dist`; the reinstall keeps the same layout as development. The images could not be built on the dev PC (no Docker), so the `Docker` workflow is what checks them.
 
 ## Known gaps / TODO
 

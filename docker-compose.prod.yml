@@ -1,0 +1,70 @@
+# Production stack on one Docker host: PostgreSQL (pgvector), Redis, API, worker and web.
+# Object storage (R2 / S3) and SMTP are external services set in the env file.
+# Every command passes the env file so it is also used for ${...} below:
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+# Full steps: README.md, "Deploying with Docker".
+
+name: wacrm
+
+x-app: &app
+  env_file: .env.production
+  restart: unless-stopped
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_started }
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wacrm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the env file}
+      POSTGRES_DB: wacrm
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U wacrm']
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # BullMQ needs keys never evicted; AOF keeps queued jobs across restarts.
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    volumes: [redisdata:/data]
+
+  # One-off tasks: migrations and operator scripts. Not started by `up`.
+  #   docker compose -f docker-compose.prod.yml --env-file .env.production run --rm tools
+  #   docker compose ... run --rm tools pnpm admin:grant you@example.com
+  tools:
+    <<: *app
+    build: { context: ., dockerfile: apps/api/Dockerfile, target: tools }
+    image: wacrm-tools
+    restart: 'no'
+    profiles: [tools]
+
+  api:
+    <<: *app
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    image: wacrm-api
+    ports: ['127.0.0.1:4000:4000']
+
+  worker:
+    <<: *app
+    build: { context: ., dockerfile: apps/worker/Dockerfile }
+    image: wacrm-worker
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?set NEXT_PUBLIC_API_URL in the env file}
+    image: wacrm-web
+    restart: unless-stopped
+    ports: ['127.0.0.1:3000:3000']
+
+volumes:
+  pgdata:
+  redisdata:
