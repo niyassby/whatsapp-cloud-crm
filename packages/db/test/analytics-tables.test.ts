@@ -3,7 +3,7 @@
  * every resolution, conversions are recorded once and credited, and reports read only those.
  */
 import { randomUUID } from 'node:crypto';
-import { histogramBucket } from '@wacrm/shared';
+import { histogramBucket, localDate } from '@wacrm/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   agentsReport,
@@ -305,8 +305,12 @@ describe('reports', () => {
       responses: 2,
       medianResponseSeconds: 360,
       newConversations: 1,
-      resolved: 2,
     });
+    // Resolutions are stamped with the real time they were closed (the tests above), so they
+    // are counted on today's local day.
+    const today = localDate(new Date(), TZ);
+    const closed = await asA((tx) => conversationsReport(tx, a.orgId, { from: today, to: today }));
+    expect(closed.totals.resolved).toBe(2);
     expect(report.byHour[10]).toMatchObject({ inbound: 2 });
     expect(report.byChannel[0]).toMatchObject({ kind: 'whatsapp', name: 'Spice Shop' });
   });

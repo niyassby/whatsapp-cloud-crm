@@ -433,8 +433,10 @@ Meta and the payment providers, and queued jobs wait in Redis.
 - **Redis**: keep AOF persistence on; queued jobs live there.
 - **S3 bucket**: media, imports, knowledge base files. Turn on versioning or replication.
 - **`/etc/wacrm/wacrm.env`**: store a copy (especially `ENCRYPTION_KEY`) in a password manager or secrets vault.
-- **Rotating the encryption key**: put the new key in `ENCRYPTION_KEY`, the old one in
-  `ENCRYPTION_KEY_PREVIOUS`, restart, run `pnpm secrets:reencrypt`, then remove the old key.
+- **Rotating keys**: every secret, step by step, in `infra/key-rotation.md`.
+- **Backups and restores**: `infra/backup-restore.md`, with a drill script
+  (`node infra/scripts/backup-restore-check.mjs`) to run monthly.
+- **Security**: `infra/security-checklist.md` lists every control and its evidence.
 - **Manual wallet credit**: `pnpm wallet:credit <org slug or id> <amount> "<reason>"`, or from `/admin`.
 - Health checks for your monitoring: `GET /health/ready` on the API (checks the database),
   `GET :4001/health` on the worker, `GET /health` on the web.
@@ -559,15 +561,16 @@ required value refuses to start with a clear message.
 
 ### Security
 
-| Variable                   | Apps        | Required | Description                                                                                                                  |
-| -------------------------- | ----------- | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `JWT_ACCESS_SECRET`        | api         | yes      | At least 32 characters (`openssl rand -hex 32`). Signs 15-minute access tokens.                                              |
-| `JWT_REFRESH_SECRET`       | api         | yes      | At least 32 characters, different from the above. Pepper for stored refresh and other tokens. Changing it logs everyone out. |
-| `ACCESS_TOKEN_TTL_SECONDS` | api         |          | Access token lifetime (900).                                                                                                 |
-| `REFRESH_TOKEN_TTL_DAYS`   | api         |          | Session lifetime (30).                                                                                                       |
-| `COOKIE_SECURE`            | api         |          | Defaults to `true` in production. Needs HTTPS.                                                                               |
-| `ENCRYPTION_KEY`           | api, worker | yes      | Base64 of 32 random bytes (`openssl rand -base64 32`). Encrypts all stored credentials. Back it up.                          |
-| `ENCRYPTION_KEY_PREVIOUS`  | api, worker |          | Comma-separated old keys, only while rotating (see Backups and operations).                                                  |
+| Variable                                                    | Apps        | Required | Description                                                                                                                                                                                            |
+| ----------------------------------------------------------- | ----------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `JWT_ACCESS_SECRET`                                         | api         | yes      | At least 32 characters (`openssl rand -hex 32`). Signs 15-minute access tokens.                                                                                                                        |
+| `JWT_REFRESH_SECRET`                                        | api         | yes      | At least 32 characters, different from the above. Pepper for stored refresh and other tokens. Rotate it with the next variable (`infra/key-rotation.md`), or everyone is logged out and API keys stop. |
+| `JWT_ACCESS_SECRET_PREVIOUS`, `JWT_REFRESH_SECRET_PREVIOUS` | api         |          | Comma-separated earlier secrets, only while rotating (`infra/key-rotation.md`).                                                                                                                        |
+| `ACCESS_TOKEN_TTL_SECONDS`                                  | api         |          | Access token lifetime (900).                                                                                                                                                                           |
+| `REFRESH_TOKEN_TTL_DAYS`                                    | api         |          | Session lifetime (30).                                                                                                                                                                                 |
+| `COOKIE_SECURE`                                             | api         |          | Defaults to `true` in production. Needs HTTPS.                                                                                                                                                         |
+| `ENCRYPTION_KEY`                                            | api, worker | yes      | Base64 of 32 random bytes (`openssl rand -base64 32`). Encrypts all stored credentials. Back it up.                                                                                                    |
+| `ENCRYPTION_KEY_PREVIOUS`                                   | api, worker |          | Comma-separated old keys, only while rotating (see Backups and operations).                                                                                                                            |
 
 ### WhatsApp (Meta)
 
@@ -611,10 +614,13 @@ required value refuses to start with a clear message.
 
 ### Public API
 
-| Variable                     | Apps        | Description                                                                    |
-| ---------------------------- | ----------- | ------------------------------------------------------------------------------ |
-| `API_RATE_LIMIT_PER_MINUTE`  | api         | Requests per minute per API key (600).                                         |
-| `WEBHOOK_ALLOW_PRIVATE_URLS` | api, worker | Lets webhooks reach private addresses, for local tests. Refused in production. |
+| Variable                     | Apps        | Description                                                                                                                    |
+| ---------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `API_RATE_LIMIT_PER_MINUTE`  | api         | Requests per minute per API key (600).                                                                                         |
+| `RATE_LIMIT_IP_PER_MINUTE`   | api         | Requests per minute per client address, before sign-in (1200). Webhooks, health checks, `/v1` and website chat have their own. |
+| `RATE_LIMIT_USER_PER_MINUTE` | api         | Dashboard requests per minute per signed-in person (600).                                                                      |
+| `RATE_LIMIT_LOGIN_PER_IP`    | api         | Login attempts per client address per 15 minutes (30).                                                                         |
+| `WEBHOOK_ALLOW_PRIVATE_URLS` | api, worker | Lets webhooks reach private addresses, for local tests. Refused in production.                                                 |
 
 ### Integrations and channels (all optional)
 
@@ -645,9 +651,11 @@ cards with `pnpm rates:import` before turning it on.
 
 ### Reports
 
-| Variable                    | Apps   | Description                                                  |
-| --------------------------- | ------ | ------------------------------------------------------------ |
-| `ANALYTICS_ROLLUP_EVERY_MS` | worker | How often recent report data is recomputed (300000 = 5 min). |
+| Variable                    | Apps   | Description                                                                                                                                                  |
+| --------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ANALYTICS_ROLLUP_EVERY_MS` | worker | How often recent report data is recomputed (300000 = 5 min).                                                                                                 |
+| `RETENTION_LOG_DAYS`        | worker | AI log text and flow step details are blanked after this many days (180, at least 7).                                                                        |
+| `MEDIA_PUBLIC_ORIGINS`      | web    | Where signed media links point (your `S3_PUBLIC_ENDPOINT`), for the Content Security Policy. Comma-separated. Without it, media does not load in production. |
 
 ### Minimal production example
 

@@ -12,7 +12,7 @@
  * Optional `aad` binds a ciphertext to its row (e.g. "phone_numbers:<id>:token") so it
  * cannot be copied to another row.
  */
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 
 const VERSION = 'v1';
 const ALG = 'aes-256-gcm';
@@ -130,4 +130,14 @@ export class SecretBox {
   needsReencrypt(ciphertext: string): boolean {
     return ciphertext.split('.')[1] !== this.current.kid;
   }
+}
+
+/**
+ * A keyed hash of an erased contact's number or email (Phase 4.4), so an import can recognise the
+ * person without the app keeping the value. Keyed with a secret derived from ENCRYPTION_KEY, so a
+ * leaked table cannot be reversed by hashing every phone number. Values are normalised first.
+ */
+export function identityHash(secret: string, orgId: string, value: string): string {
+  const key = createHash('sha256').update(`erased-identities:${secret}`).digest();
+  return createHmac('sha256', key).update(`${orgId}:${value.trim().toLowerCase()}`).digest('hex');
 }

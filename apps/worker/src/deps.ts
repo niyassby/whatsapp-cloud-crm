@@ -62,6 +62,10 @@ export interface WorkerDeps {
   sendMail?: (mail: ReportMail) => Promise<void>;
   /** The web app, for links in emails. */
   webUrl?: string;
+  /** Keys the hashes of erased numbers (ENCRYPTION_KEY). */
+  identitySecret?: string;
+  /** Earlier keys (ENCRYPTION_KEY_PREVIOUS), so numbers erased before a rotation still match. */
+  identitySecretsPrevious?: string[];
 }
 
 /** Thrown inside a job so BullMQ retries it with backoff. */

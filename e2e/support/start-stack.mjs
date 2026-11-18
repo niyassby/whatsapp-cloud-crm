@@ -55,6 +55,13 @@ const env = {
   SMTP_URL: 'smtp://127.0.0.1:1025',
   // Reports read aggregates; recompute them every few seconds so a test sees its own messages.
   ANALYTICS_ROLLUP_EVERY_MS: '3000',
+  // One address and fast browsers: the production limits would trip on the suite itself.
+  RATE_LIMIT_IP_PER_MINUTE: '100000',
+  RATE_LIMIT_USER_PER_MINUTE: '100000',
+  // Every browser in the suite logs in from 127.0.0.1; the suite does more than 30 in 15 minutes.
+  RATE_LIMIT_LOGIN_PER_IP: '100000',
+  // Signed media links point at the local S3; the web CSP must allow it.
+  MEDIA_PUBLIC_ORIGINS: 'http://localhost:9000',
   S3_ENDPOINT: 'http://127.0.0.1:9000',
   S3_PUBLIC_ENDPOINT: 'http://localhost:9000',
   S3_ACCESS_KEY_ID: 'localdev',
@@ -65,6 +72,9 @@ execSync(`pnpm --filter @wacrm/db exec tsx scripts/prepare-test-db.ts ${DB_NAME}
   env,
   stdio: 'inherit',
 });
+
+// A fresh database deserves fresh counters: earlier runs from 127.0.0.1 would otherwise count.
+execSync('node e2e/support/clear-rate-limits.mjs', { env, stdio: 'inherit' });
 
 execSync('pnpm --filter @wacrm/db exec tsx scripts/rates-import.ts prisma/sample-rate-cards.csv', {
   env,

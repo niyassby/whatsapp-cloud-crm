@@ -15,3 +15,4 @@ export * from './ai';
 export * from './partners';
 export * from './channels';
 export * from './analytics';
+export * from './privacy';

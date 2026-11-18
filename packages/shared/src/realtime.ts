@@ -37,6 +37,7 @@ export interface ServerToClientEvents {
   'knowledge:updated': (e: { documentId: string }) => void;
   'call:updated': (e: { call: CallDto; offer?: string; answer?: string }) => void;
   'channel:updated': (e: { channelId: string }) => void;
+  'privacy:updated': (e: { id: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -62,6 +63,8 @@ export interface TenantEventMap {
   /** offer: an inbound call's SDP. answer: Meta's answer to a call an agent started. */
   'call:updated': { call: CallDto; offer?: string; answer?: string };
   'channel:updated': { channelId: string };
+  /** A data export or erasure request moved on. */
+  'privacy:updated': { id: string };
 }
 
 /** Publish to everyone in an org. API: Socket.IO server. Worker: Redis emitter. */

@@ -362,17 +362,23 @@ model PlatformAuditLog {
 
 /// Tenant root. organizations.id is the value of app.org_id.
 model Organization {
-  id             String    @id @default(uuid(7)) @db.Uuid
-  name           String
-  slug           String    @unique
-  partnerId      String?   @map("partner_id") @db.Uuid
-  status         OrgStatus @default(active)
-  timezone       String    @default("UTC")
+  id                   String    @id @default(uuid(7)) @db.Uuid
+  name                 String
+  slug                 String    @unique
+  partnerId            String?   @map("partner_id") @db.Uuid
+  status               OrgStatus @default(active)
+  timezone             String    @default("UTC")
   /// Whole-message opt-out keywords. Empty uses DEFAULT_OPT_OUT_KEYWORDS from @wacrm/shared.
-  optOutKeywords String[]  @default([]) @map("opt_out_keywords")
-  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(3)
+  optOutKeywords       String[]  @default([]) @map("opt_out_keywords")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt            DateTime? @map("deleted_at") @db.Timestamptz(3)
+  /// An owner asked to delete the workspace (Phase 4.4). It is soft-deleted at `purgeAfter`,
+  /// unless cancelled first, and an operator's purge removes the data after that.
+  deletionRequestedAt  DateTime? @map("deletion_requested_at") @db.Timestamptz(3)
+  purgeAfter           DateTime? @map("purge_after") @db.Timestamptz(3)
+  /// Message text and files older than this many days are erased. Null keeps them.
+  messageRetentionDays Int?      @map("message_retention_days")
 
   partner        Partner?            @relation(fields: [partnerId], references: [id], onDelete: SetNull)
   memberships    Membership[]
@@ -407,38 +413,48 @@ model Organization {
   billingCountry String?             @map("billing_country")
   taxId          String?             @map("tax_id")
 
-  subscription           Subscription?
-  walletTopups           WalletTopup[]
-  invoices               Invoice[]
-  billingEvents          BillingEvent[]
-  webhookEndpoints       WebhookEndpoint[]
-  webhookDeliveries      WebhookDelivery[]
-  automationSettings     AutomationSettings?
-  autoReplyRules         AutoReplyRule[]
-  assignmentRules        AssignmentRule[]
-  notifications          Notification[]
-  flows                  Flow[]
-  flowVersions           FlowVersion[]
-  flowRuns               FlowRun[]
-  flowRunSteps           FlowRunStep[]
-  integrationConnections IntegrationConnection[]
-  integrationEvents      IntegrationEvent[]
-  integrationEventClaims IntegrationEventClaim[]
-  aiSettings             AiSettings?
-  knowledgeDocuments     KnowledgeDocument[]
-  knowledgeChunks        KnowledgeChunk[]
-  aiLogs                 AiLog[]
-  partnerClient          PartnerClient?
-  impersonations         ImpersonationSession[]
-  channels               Channel[]
-  contactIdentities      ContactIdentity[]
-  adReferrals            AdReferral[]
-  qrCodes                QrCode[]
-  catalogProducts        CatalogProduct[]
-  waGroups               WaGroup[]
-  calls                  Call[]
-  conversions            Conversion[]
-  reportSchedules        ReportSchedule[]
+  subscription            Subscription?
+  walletTopups            WalletTopup[]
+  invoices                Invoice[]
+  billingEvents           BillingEvent[]
+  webhookEndpoints        WebhookEndpoint[]
+  webhookDeliveries       WebhookDelivery[]
+  automationSettings      AutomationSettings?
+  autoReplyRules          AutoReplyRule[]
+  assignmentRules         AssignmentRule[]
+  notifications           Notification[]
+  flows                   Flow[]
+  flowVersions            FlowVersion[]
+  flowRuns                FlowRun[]
+  flowRunSteps            FlowRunStep[]
+  integrationConnections  IntegrationConnection[]
+  integrationEvents       IntegrationEvent[]
+  integrationEventClaims  IntegrationEventClaim[]
+  aiSettings              AiSettings?
+  knowledgeDocuments      KnowledgeDocument[]
+  knowledgeChunks         KnowledgeChunk[]
+  aiLogs                  AiLog[]
+  partnerClient           PartnerClient?
+  impersonations          ImpersonationSession[]
+  channels                Channel[]
+  contactIdentities       ContactIdentity[]
+  adReferrals             AdReferral[]
+  qrCodes                 QrCode[]
+  catalogProducts         CatalogProduct[]
+  waGroups                WaGroup[]
+  calls                   Call[]
+  conversions             Conversion[]
+  reportSchedules         ReportSchedule[]
+  analyticsHourly         AnalyticsHourly[]
+  analyticsAgentHourly    AnalyticsAgentHourly[]
+  analyticsTemplateHourly AnalyticsTemplateHourly[]
+  analyticsResponses      AnalyticsResponse[]
+  analyticsResponseHist   AnalyticsResponseHist[]
+  analyticsResolutionHist AnalyticsResolutionHist[]
+  conversationResolutions ConversationResolution[]
+  erasedIdentities        ErasedIdentity[]
+  privacyRequests         PrivacyRequest[]
+  messageRefs             MessageRef[]
 
   @@index([partnerId])
   @@map("organizations")
@@ -756,6 +772,8 @@ model Contact {
   /// Set on the duplicate. Messages from its number go to the primary contact.
   mergedIntoId   String?            @map("merged_into_id") @db.Uuid
   deletedAt      DateTime?          @map("deleted_at") @db.Timestamptz(3)
+  /// Personal data erased on request (Phase 4.4). The row stays, opted out, with nothing personal.
+  erasedAt       DateTime?          @map("erased_at") @db.Timestamptz(3)
   createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -1008,6 +1026,9 @@ model MessageRef {
   messageId        String   @map("message_id") @db.Uuid
   messageCreatedAt DateTime @map("message_created_at") @db.Timestamptz(3)
 
+  /// Deleting the workspace (an operator purge, Phase 4.4) removes these rows with it.
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
   @@id([orgId, kind, ref])
   @@map("message_refs")
 }
@@ -1241,7 +1262,7 @@ model Campaign {
 
   organization Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
   phone        PhoneNumber         @relation(fields: [phoneId], references: [id], onDelete: Cascade)
-  template     MessageTemplate     @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  template     MessageTemplate     @relation(fields: [templateId], references: [id], onDelete: NoAction)
   createdBy    User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
   recipients   CampaignRecipient[]
 
@@ -1331,7 +1352,7 @@ model DripStep {
   variableMapping Json   @default("{}") @map("variable_mapping")
 
   sequence DripSequence    @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
-  template MessageTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  template MessageTemplate @relation(fields: [templateId], references: [id], onDelete: NoAction)
 
   @@unique([sequenceId, position])
   @@index([orgId])
@@ -2213,6 +2234,9 @@ model AnalyticsHourly {
   failed            Int      @default(0)
   newConversations  Int      @default(0) @map("new_conversations")
 
+  /// Deleting the workspace (an operator purge, Phase 4.4) removes these rows with it.
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
   @@id([orgId, hour, channelId])
   @@map("analytics_hourly")
 }
@@ -2224,6 +2248,9 @@ model AnalyticsAgentHourly {
   userId   String   @map("user_id") @db.Uuid
   messages Int      @default(0)
   notes    Int      @default(0)
+
+  /// Deleting the workspace (an operator purge, Phase 4.4) removes these rows with it.
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@id([orgId, hour, userId])
   @@map("analytics_agent_hourly")
@@ -2241,6 +2268,9 @@ model AnalyticsTemplateHourly {
   failed     Int      @default(0)
   /// The customer wrote back within 24 hours.
   replied    Int      @default(0)
+
+  /// Deleting the workspace (an operator purge, Phase 4.4) removes these rows with it.
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@id([orgId, hour, templateId])
   @@index([orgId, templateId])
@@ -2260,6 +2290,9 @@ model AnalyticsResponse {
   respondedAt    DateTime @map("responded_at") @db.Timestamptz(3)
   seconds        Int
 
+  /// Deleting the workspace (an operator purge, Phase 4.4) removes these rows with it.
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
   @@id([orgId, messageId])
   @@index([orgId, respondedAt])
   @@index([conversationId, respondedAt])
@@ -2276,6 +2309,9 @@ model ConversationResolution {
   openedAt       DateTime @map("opened_at") @db.Timestamptz(3)
   closedAt       DateTime @map("closed_at") @db.Timestamptz(3)
   seconds        Int
+
+  /// Deleting the workspace (an operator purge, Phase 4.4) removes these rows with it.
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@index([orgId, closedAt])
   @@map("conversation_resolutions")
@@ -2346,6 +2382,9 @@ model AnalyticsResponseHist {
   bucket    Int      @db.SmallInt
   n         Int
 
+  /// Deleting the workspace (an operator purge, Phase 4.4) removes these rows with it.
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
   @@id([orgId, hour, channelId, userId, bucket])
   @@map("analytics_response_hist")
 }
@@ -2360,6 +2399,50 @@ model AnalyticsResolutionHist {
   bucket     Int      @db.SmallInt
   n          Int
 
+  /// Deleting the workspace (an operator purge, Phase 4.4) removes these rows with it.
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
   @@id([orgId, hour, channelId, assigneeId, bucket])
   @@map("analytics_resolution_hist")
+}
+
+// ------------------------------------------------------------------ privacy (Phase 4.4)
+
+/// A data export or erasure, run by the worker. Exports are files in object storage, kept 7 days.
+model PrivacyRequest {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  orgId       String    @map("org_id") @db.Uuid
+  /// contact_export, contact_erase, org_export
+  kind        String
+  contactId   String?   @map("contact_id") @db.Uuid
+  /// pending, running, done, failed, expired
+  status      String    @default("pending")
+  fileKey     String?   @map("file_key")
+  fileSize    Int?      @map("file_size")
+  error       String?
+  requestedBy String?   @map("requested_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  expiresAt   DateTime? @map("expires_at") @db.Timestamptz(3)
+
+  /// Deleting the workspace (an operator purge, Phase 4.4) removes these rows with it.
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, createdAt(sort: Desc)])
+  @@index([status, expiresAt])
+  @@map("privacy_requests")
+}
+
+/// Numbers erased on request, as a keyed hash, so an import or a manual add cannot bring the
+/// person back without anyone noticing. Holds no number.
+model ErasedIdentity {
+  orgId     String   @map("org_id") @db.Uuid
+  hash      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// Deleting the workspace (an operator purge, Phase 4.4) removes these rows with it.
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@id([orgId, hash])
+  @@map("erased_identities")
 }

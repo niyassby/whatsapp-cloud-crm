@@ -59,3 +59,28 @@ jobs:
       # themselves here, since CI has no S3 service.
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
+
+  # Phase 4.4: secrets, raw SQL and dependencies. A separate job, so it reports even when tests fail.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks reads the whole history: a secret removed later is still exposed.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: node infra/scripts/secret-scan.mjs
+      - run: node infra/scripts/raw-sql-inventory.mjs
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+      # Shipped dependencies must have no high or critical advisory.
+      - run: pnpm audit --prod --audit-level high
+      # Development tools are reported, not blocking: see infra/security-checklist.md.
+      - run: pnpm audit --audit-level high
+        continue-on-error: true

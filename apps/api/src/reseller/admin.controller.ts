@@ -12,6 +12,8 @@ import {
   Query,
 } from '@nestjs/common';
 import {
+  type AuditQuery,
+  auditQuerySchema,
   type AdminOrgDto,
   type AdminOrgListQuery,
   adminOrgListSchema,
@@ -24,8 +26,6 @@ import {
   type CreateRateCardInput,
   createRateCardSchema,
   type CursorPage,
-  type CursorQuery,
-  cursorQuerySchema,
   type ImpersonateInput,
   impersonateSchema,
   type ImpersonationStartDto,
@@ -255,7 +255,7 @@ export class AdminController {
   }
 
   @Get('audit')
-  audit(@Query(zod(cursorQuerySchema)) query: CursorQuery) {
+  audit(@Query(zod(auditQuerySchema)) query: AuditQuery) {
     return this.admin.auditLog(query);
   }
 

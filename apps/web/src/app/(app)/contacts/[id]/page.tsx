@@ -52,6 +52,7 @@ import {
 import { handleApiError } from '@/lib/forms';
 import { displayWaId } from '@/lib/inbox';
 import { useCan, useMe } from '@/lib/queries';
+import { PrivacyCard } from '@/components/contacts/privacy-card';
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : 'Never');
 const EMPTY = '__empty__';
@@ -634,6 +635,7 @@ export default function ContactDetailPage() {
         <div className="grid gap-4">
           <ConsentCard contact={c} canWrite={canWrite} />
           <NotesCard contact={c} canWrite={canWrite} />
+          {canManage ? <PrivacyCard contact={c} /> : null}
         </div>
       </div>
       <ConversationsCard contactId={c.id} />

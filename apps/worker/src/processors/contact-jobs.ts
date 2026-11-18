@@ -3,6 +3,7 @@ import {
   contactInclude,
   contactJobToDto,
   contactListWhere,
+  erasedAmong,
   type ContactListFilter,
   liveContactWhere,
   type Prisma,
@@ -18,7 +19,7 @@ import {
   csvCell,
   type FieldValue,
 } from '@wacrm/shared';
-import { contactJobKey, normalizePhone } from '@wacrm/shared/server';
+import { contactJobKey, identityHash, normalizePhone } from '@wacrm/shared/server';
 import { parse } from 'csv-parse';
 import { z } from 'zod';
 import type { WorkerDeps } from '../deps';
@@ -136,7 +137,28 @@ async function runImport(
       deps.db,
       { orgId },
       async (tx) => {
-        await applyBatch(tx, orgId, rows, options, tagIds, totals, addError);
+        // Someone erased at their own request is not brought back by a file (Phase 4.4).
+        // Under the current key and any earlier one still listed (a key rotation).
+        const keys = [deps.identitySecret, ...(deps.identitySecretsPrevious ?? [])].filter(
+          (k): k is string => Boolean(k),
+        );
+        const hashesOf = (waId: string) => keys.map((k) => identityHash(k, orgId, waId));
+        const erased = await erasedAmong(
+          tx,
+          orgId,
+          rows.flatMap((r) => hashesOf(r.waId)),
+        );
+        const keep = rows.filter((r) => {
+          if (!hashesOf(r.waId).some((h) => erased.has(h))) return true;
+          totals.processed++;
+          addError({
+            rowNumber: r.rowNumber,
+            phone: r.phone,
+            error: 'This number was erased at the person’s request, so it was not added again',
+          });
+          return false;
+        });
+        await applyBatch(tx, orgId, keep, options, tagIds, totals, addError);
         await tx.contactJob.update({
           where: { id: jobId },
           data: {

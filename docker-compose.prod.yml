@@ -63,6 +63,10 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?set NEXT_PUBLIC_API_URL in the env file}
     image: wacrm-web
     restart: unless-stopped
+    environment:
+      # Read at request time by the Content Security Policy (apps/web/src/proxy.ts): where signed
+      # media links point. Without it, images and files do not load.
+      MEDIA_PUBLIC_ORIGINS: ${MEDIA_PUBLIC_ORIGINS:-}
     ports: ['127.0.0.1:3000:3000']
 
 volumes:

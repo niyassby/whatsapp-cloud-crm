@@ -7,6 +7,7 @@ import { closeDuePartnerMonths, createPrismaClient, withTenant } from '@wacrm/db
 import {
   buildHealth,
   type AnalyticsJob,
+  type PrivacyJob,
   type AutomationJob,
   type FlowJob,
   type AiJob,
@@ -61,6 +62,7 @@ import {
   runRollup,
 } from './processors/analytics';
 import nodemailer from 'nodemailer';
+import { runPrivacyRequest, runPrivacyTick } from './processors/privacy';
 import { buildRegistry } from '@wacrm/connectors';
 import { createSafeHttp } from './safe-http';
 import { processBillingEvent } from './processors/billing';
@@ -233,6 +235,8 @@ const deps: WorkerDeps = {
   ai: createAiProviders(process.env),
   defaultCurrency: env.WALLET_DEFAULT_CURRENCY,
   webUrl: env.WEB_URL,
+  identitySecret: env.ENCRYPTION_KEY,
+  identitySecretsPrevious: env.ENCRYPTION_KEY_PREVIOUS,
   sendMail: async (mail) => {
     await mailer.sendMail({
       from: env.MAIL_FROM,
@@ -486,6 +490,35 @@ void analyticsQueue
   )
   .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule reports'));
 
+// Phase 4.4: exports, erasure, the end of deletion grace periods and retention. One at a time.
+const privacyQueue = new Queue<PrivacyJob>(QueueName.PRIVACY, {
+  ...queueOpts,
+  defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, removeOnComplete: true, removeOnFail: 100 },
+});
+const privacyWorker = new Worker<PrivacyJob>(
+  QueueName.PRIVACY,
+  async (job) => {
+    if (job.data.kind === 'tick') {
+      const result = await runPrivacyTick(deps, { logRetentionDays: env.RETENTION_LOG_DAYS });
+      log.info(result, 'privacy and retention pass');
+      return;
+    }
+    const outcome = await runPrivacyRequest(deps, job.data.orgId, job.data.requestId);
+    log.info({ requestId: job.data.requestId, outcome }, 'privacy request');
+  },
+  { ...queueOpts, concurrency: 1 },
+);
+privacyWorker.on('failed', (job, err) => {
+  log.warn({ jobId: job?.id, err: err.message }, 'privacy job failed');
+});
+void privacyQueue
+  .upsertJobScheduler(
+    'privacy-tick',
+    { pattern: '30 3 * * *' },
+    { name: 'tick', data: { kind: 'tick' } },
+  )
+  .catch((err: unknown) => log.error({ err: String(err) }, 'could not schedule privacy'));
+
 // Its own queue: a customer's slow endpoint cannot hold up anything else.
 const webhookDeliveryWorker = new Worker<WebhookDeliveryJob>(
   QueueName.WEBHOOK_DELIVERIES,
@@ -702,6 +735,8 @@ async function shutdown() {
     aiWorker.close(),
     aiQueue.close(),
     analyticsWorker.close(),
+    privacyWorker.close(),
+    privacyQueue.close(),
     analyticsQueue.close(),
     flowQueue.close(),
     automationQueue.close(),

@@ -358,9 +358,13 @@ export class TeamService {
   }
 
   private async lookupValidInvitation(rawToken: string): Promise<InvitationLookupRow> {
-    const rows = await this.prisma.client.$queryRaw<InvitationLookupRow[]>`
-      SELECT * FROM auth_lookup_invitation(${this.tokens.hashToken(rawToken)})`;
-    const inv = rows[0];
+    let inv: InvitationLookupRow | undefined;
+    for (const hash of this.tokens.tokenHashes(rawToken)) {
+      const rows = await this.prisma.client.$queryRaw<InvitationLookupRow[]>`
+        SELECT * FROM auth_lookup_invitation(${hash})`;
+      inv = rows[0];
+      if (inv) break;
+    }
     if (!inv || inv.accepted_at || inv.revoked_at || inv.expires_at.getTime() <= Date.now()) {
       throw new AppError(ErrorCode.INVITATION_INVALID, 'This invitation is invalid or has expired');
     }

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   contactInclude,
   contactListWhere,
@@ -11,6 +11,7 @@ import {
   type TenantTx,
   assertWithinLimit,
   emitWebhookEvent,
+  erasedAmong,
 } from '@wacrm/db';
 import {
   AppError,
@@ -39,9 +40,10 @@ import {
   type UpdateContactInput,
   toPublicContact,
 } from '@wacrm/shared';
-import { normalizePhone } from '@wacrm/shared/server';
+import { identityHash, normalizePhone } from '@wacrm/shared/server';
 import type { z } from 'zod';
 import { AuditAction, AuditService } from '../audit/audit.service';
+import { API_ENV, type ApiEnv } from '../env';
 import type { RequestMeta } from '../common/request-meta';
 import { QueuesService } from '../infra/queues.service';
 import { decodeCursor, encodeCursor } from '../orgs/cursor';
@@ -83,6 +85,7 @@ export class ContactsService {
     private readonly audit: AuditService,
     private readonly realtime: RealtimeGateway,
     private readonly queues: QueuesService,
+    @Inject(API_ENV) private readonly env: ApiEnv,
   ) {}
 
   /**
@@ -264,6 +267,19 @@ export class ContactsService {
         throw new AppError(ErrorCode.CONTACT_EXISTS, 'A contact with this number already exists', {
           contactId: existing.mergedIntoId ?? existing.id,
         });
+      }
+      // Someone who asked to be erased is not added back by hand. If they write in themselves, the
+      // conversation creates them again.
+      // Hashed under the current key and any earlier one still listed, so a key rotation does
+      // not forget who was erased before it.
+      const erasedHashes = [this.env.ENCRYPTION_KEY, ...this.env.ENCRYPTION_KEY_PREVIOUS].map(
+        (key) => identityHash(key, actor.orgId, waId),
+      );
+      if ((await erasedAmong(tx, actor.orgId, erasedHashes)).size > 0) {
+        throw new AppError(
+          ErrorCode.CONTACT_ERASED,
+          'This number was erased at the person’s request. They can write to you to start again.',
+        );
       }
       await assertWithinLimit(tx, actor.orgId, 'contacts');
       // Re-adding a deleted contact restores the row, which keeps its consent history.

@@ -2,6 +2,8 @@ import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { closePartnerMonth, Prisma, statementToDto } from '@wacrm/db';
 import {
   type AdminOrgDto,
+  auditDateBounds,
+  type AuditQuery,
   type AdminOrgListQuery,
   type AdminPlanDto,
   type AdminRateCardDto,
@@ -505,18 +507,31 @@ export class AdminService implements OnModuleDestroy {
 
   // ------------------------------------------------------------------ audit and system
 
-  async auditLog(q: { cursor?: string; limit: number }) {
+  async auditLog(q: AuditQuery) {
     const cursor = q.cursor ? decodeCursor(q.cursor) : null;
     const rows = await this.db.runAsOperator((tx) =>
       tx.platformAuditLog.findMany({
-        where: cursor
-          ? {
-              OR: [
-                { createdAt: { lt: cursor.createdAt } },
-                { createdAt: cursor.createdAt, id: { lt: cursor.id } },
-              ],
-            }
-          : undefined,
+        where: {
+          AND: [
+            {
+              ...(q.action
+                ? q.action.includes('.')
+                  ? { action: q.action }
+                  : { action: { startsWith: `${q.action}.` } }
+                : {}),
+              ...(q.actorUserId ? { actorUserId: q.actorUserId } : {}),
+              ...(q.from || q.to ? { createdAt: auditDateBounds(q) } : {}),
+            },
+            cursor
+              ? {
+                  OR: [
+                    { createdAt: { lt: cursor.createdAt } },
+                    { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+                  ],
+                }
+              : {},
+          ],
+        },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: q.limit + 1,
       }),

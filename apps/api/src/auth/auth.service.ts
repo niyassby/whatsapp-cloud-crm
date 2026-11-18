@@ -32,7 +32,6 @@ const EMAIL_VERIFICATION_TTL_MS = 24 * 3600_000;
 const PASSWORD_RESET_TTL_MS = 3600_000;
 const LOGIN_WINDOW_S = 15 * 60;
 const LOGIN_MAX_FAILS_PER_EMAIL = 5;
-const LOGIN_MAX_PER_IP = 30;
 
 export interface UserLookupRow {
   id: string;
@@ -140,7 +139,11 @@ export class AuthService {
     meta: RequestMeta,
   ): Promise<LoginResponse & Partial<SessionTokens>> {
     const emailKey = `rl:login:email:${input.email}`;
-    await this.rateLimiter.consume(`rl:login:ip:${meta.ip}`, LOGIN_MAX_PER_IP, LOGIN_WINDOW_S);
+    await this.rateLimiter.consume(
+      `rl:login:ip:${meta.ip}`,
+      this.env.RATE_LIMIT_LOGIN_PER_IP,
+      LOGIN_WINDOW_S,
+    );
     await this.rateLimiter.assertNotBlocked(emailKey, LOGIN_MAX_FAILS_PER_EMAIL);
 
     const user = await this.lookupUserByEmail(input.email);
@@ -470,10 +473,14 @@ export class AuthService {
     type: 'email_verification' | 'password_reset',
     fn: (tx: TenantTx, userId: string) => Promise<void>,
   ): Promise<{ userId: string }> {
-    const rows = await this.prisma.client.$queryRaw<
-      { id: string; user_id: string; expires_at: Date; used_at: Date | null }[]
-    >`SELECT * FROM auth_lookup_auth_token(${this.tokens.hashToken(raw)}, ${type}::"AuthTokenType")`;
-    const row = rows[0];
+    let row: { id: string; user_id: string; expires_at: Date; used_at: Date | null } | undefined;
+    for (const hash of this.tokens.tokenHashes(raw)) {
+      const rows = await this.prisma.client.$queryRaw<
+        { id: string; user_id: string; expires_at: Date; used_at: Date | null }[]
+      >`SELECT * FROM auth_lookup_auth_token(${hash}, ${type}::"AuthTokenType")`;
+      row = rows[0];
+      if (row) break;
+    }
     const invalid = new AppError(ErrorCode.TOKEN_INVALID, 'This link is invalid or has expired');
     if (!row || row.used_at || row.expires_at.getTime() <= Date.now()) throw invalid;
 

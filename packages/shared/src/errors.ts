@@ -52,6 +52,8 @@ export const ErrorCode = {
   CONTACT_NOT_OPTED_IN: 'CONTACT_NOT_OPTED_IN',
   INVALID_PHONE: 'INVALID_PHONE',
   CONTACT_EXISTS: 'CONTACT_EXISTS',
+  /** The number was erased at the person's request (Phase 4.4). */
+  CONTACT_ERASED: 'CONTACT_ERASED',
 
   // templates
   TEMPLATE_NOT_EDITABLE: 'TEMPLATE_NOT_EDITABLE',
@@ -127,6 +129,7 @@ export const errorHttpStatus: Record<ErrorCode, number> = {
   CONTACT_NOT_OPTED_IN: 409,
   INVALID_PHONE: 400,
   CONTACT_EXISTS: 409,
+  CONTACT_ERASED: 409,
   TEMPLATE_NOT_EDITABLE: 409,
   TEMPLATE_INVALID: 400,
   INSUFFICIENT_BALANCE: 402,

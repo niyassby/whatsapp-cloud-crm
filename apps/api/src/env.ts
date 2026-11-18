@@ -29,6 +29,32 @@ export const apiEnvSchema = z.object({
   JWT_ACCESS_SECRET: z.string().min(32),
   /** Also the HMAC pepper for every stored opaque token (refresh, email links, invites). */
   JWT_REFRESH_SECRET: z.string().min(32),
+  /**
+   * Key rotation (Phase 4.4, infra/key-rotation.md): earlier secrets, comma-separated, still
+   * accepted while tokens made with them are around. New ones always use the current secret.
+   */
+  JWT_ACCESS_SECRET_PREVIOUS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      v
+        ? v
+            .split(',')
+            .map((k) => k.trim())
+            .filter(Boolean)
+        : [],
+    ),
+  JWT_REFRESH_SECRET_PREVIOUS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      v
+        ? v
+            .split(',')
+            .map((k) => k.trim())
+            .filter(Boolean)
+        : [],
+    ),
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
   /** Defaults to true in production. */
@@ -69,6 +95,13 @@ export const apiEnvSchema = z.object({
 
   /** Requests per minute for each API key. */
   API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(600),
+  /** Every request per client address per minute, before authentication (Phase 4.4). Webhooks,
+   * health checks, the public API (its own per-key limit) and website chat (its own) are left out. */
+  RATE_LIMIT_IP_PER_MINUTE: z.coerce.number().int().positive().default(1200),
+  /** Dashboard requests per signed-in person per minute, across their tabs and devices. */
+  RATE_LIMIT_USER_PER_MINUTE: z.coerce.number().int().positive().default(600),
+  /** Login attempts per client address per 15 minutes (30). Raised only for the e2e suite. */
+  RATE_LIMIT_LOGIN_PER_IP: z.coerce.number().int().positive().default(30),
   /** Local testing only: lets webhooks reach private addresses. Refused in production. */
   WEBHOOK_ALLOW_PRIVATE_URLS: booleanString.default(false),
   /** Registers the Demo Store connector, for trying integrations locally. Same value as the worker. */

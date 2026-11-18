@@ -482,6 +482,26 @@ describe('impersonation', () => {
     expect((await as(token).get('/admin/partners')).status).toBe(403);
   });
 
+  it('cannot be moved to another client or to the impersonator’s own workspaces', async () => {
+    // Phase 4.4: the token names one workspace and cannot be switched or refreshed elsewhere.
+    const toB = await as(token).post('/auth/switch-org', { orgId: clientB.id });
+    expect(toB.status).toBeGreaterThanOrEqual(400);
+    const own = (await partner.get('/auth/me')).body.orgs as { id: string }[];
+    if (own[0]) {
+      const toOwn = await as(token).post('/auth/switch-org', { orgId: own[0].id });
+      expect(toOwn.status).toBeGreaterThanOrEqual(400);
+    }
+    // Nor touch the impersonator's own account, or make workspaces in their name.
+    expect((await as(token).post('/auth/2fa/setup')).status).toBe(403);
+    expect((await as(token).post('/orgs', { name: 'Side door' })).status).toBe(403);
+    // Everything it reads is client A's.
+    expect((await as(token).get('/orgs/current')).body.id).toBe(clientA.id);
+    const contacts = await as(token).get('/contacts?limit=50');
+    expect(contacts.status).toBe(200);
+    // Refreshing would mint a session of the impersonator's own: there is no refresh cookie.
+    expect((await as(token).post('/auth/refresh')).status).toBe(401);
+  });
+
   it('leaves a trail the client’s owner can read', async () => {
     expect((await as(token).post('/impersonation/end')).status).toBe(204);
     // Ended means ended: the token is dead well before it expires.

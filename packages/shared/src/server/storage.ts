@@ -1,7 +1,11 @@
+import { createReadStream, statSync } from 'node:fs';
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -46,6 +50,12 @@ export interface ObjectStorage {
     key: string,
     opts: { expiresIn: number; filename?: string | null; inline: boolean },
   ): Promise<string>;
+  /** Upload a file from disk without holding it in memory (large exports). */
+  putFile(key: string, path: string, contentType: string): Promise<void>;
+  /** Missing objects are not an error. */
+  delete(key: string): Promise<void>;
+  /** Every object under a prefix, such as a deleted workspace's `orgs/<id>/`. Returns the count. */
+  deletePrefix(prefix: string): Promise<number>;
 }
 
 export interface S3StorageConfig {
@@ -122,6 +132,51 @@ export class S3Storage implements ObjectStorage {
       { expiresIn: opts.expiresIn },
     );
   }
+
+  async putFile(key: string, path: string, contentType: string): Promise<void> {
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.config.bucket,
+        Key: key,
+        Body: createReadStream(path),
+        ContentLength: statSync(path).size,
+        ContentType: contentType,
+      }),
+    );
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }));
+  }
+
+  async deletePrefix(prefix: string): Promise<number> {
+    // Refuse anything that is not one workspace's folder or below.
+    if (!/^orgs\/[0-9a-f-]{36}\//.test(prefix)) throw new Error(`Refusing to delete ${prefix}`);
+    let deleted = 0;
+    let token: string | undefined;
+    do {
+      const page = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.config.bucket,
+          Prefix: prefix,
+          ContinuationToken: token,
+          MaxKeys: 1000,
+        }),
+      );
+      const keys = (page.Contents ?? []).flatMap((o) => (o.Key ? [{ Key: o.Key }] : []));
+      if (keys.length) {
+        await this.client.send(
+          new DeleteObjectsCommand({
+            Bucket: this.config.bucket,
+            Delete: { Objects: keys, Quiet: true },
+          }),
+        );
+        deleted += keys.length;
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return deleted;
+  }
 }
 
 /** Test double. */
@@ -140,6 +195,26 @@ export class MemoryStorage implements ObjectStorage {
 
   async signedUrl(key: string, opts: { expiresIn: number }): Promise<string> {
     return `https://storage.test/${key}?expires=${opts.expiresIn}`;
+  }
+
+  async putFile(key: string, path: string, contentType: string): Promise<void> {
+    const { readFileSync } = await import('node:fs');
+    this.objects.set(key, { bytes: readFileSync(path), contentType });
+  }
+
+  async delete(key: string): Promise<void> {
+    this.objects.delete(key);
+  }
+
+  async deletePrefix(prefix: string): Promise<number> {
+    let n = 0;
+    for (const key of [...this.objects.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.objects.delete(key);
+        n++;
+      }
+    }
+    return n;
   }
 }
 

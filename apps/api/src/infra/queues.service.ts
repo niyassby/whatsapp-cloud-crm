@@ -2,6 +2,7 @@ import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@ne
 import {
   type AiJob,
   type AnalyticsJob,
+  type PrivacyJob,
   type AutomationJob,
   type BillingEventJob,
   type FlowJob,
@@ -37,6 +38,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
   readonly ai: Queue<AiJob>;
   readonly automation: Queue<AutomationJob>;
   readonly analytics: Queue<AnalyticsJob>;
+  readonly privacy: Queue<PrivacyJob>;
 
   constructor(@Inject(API_ENV) env: ApiEnv) {
     const opts = {
@@ -59,6 +61,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
     this.ai = new Queue(QueueName.AI, opts);
     this.automation = new Queue(QueueName.AUTOMATION, opts);
     this.analytics = new Queue(QueueName.ANALYTICS, opts);
+    this.privacy = new Queue(QueueName.PRIVACY, opts);
     this.contactJobs = new Queue(QueueName.CONTACT_JOBS, {
       ...opts,
       defaultJobOptions: { ...DEFAULT_JOB_OPTIONS, attempts: 3 },
@@ -79,6 +82,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.ai.waitUntilReady(),
       this.automation.waitUntilReady(),
       this.analytics.waitUntilReady(),
+      this.privacy.waitUntilReady(),
     ]);
   }
 
@@ -160,6 +164,7 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       this.ai.close(),
       this.automation.close(),
       this.analytics.close(),
+      this.privacy.close(),
     ]);
   }
 }

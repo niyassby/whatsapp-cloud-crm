@@ -248,6 +248,8 @@ export interface ContactDto {
   optInAt: string | null;
   optOutAt: string | null;
   lastActivityAt: string | null;
+  /** Their personal data was erased on request (Phase 4.4). */
+  erasedAt: string | null;
   createdAt: string;
 }
 

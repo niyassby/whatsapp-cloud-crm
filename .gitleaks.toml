@@ -1,0 +1,16 @@
+# gitleaks (CI, the security job). Default rules, plus files that hold dev-only or test values.
+title = "wacrm"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Dev-only values and test fixtures"
+paths = [
+  '''\.env\.example$''',
+  '''(^|/)test/''',
+  '''\.test\.ts$''',
+  '''^e2e/''',
+  '''pnpm-lock\.yaml$''',
+  '''infra/seaweedfs/s3\.json$''',
+]

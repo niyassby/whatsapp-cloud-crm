@@ -55,9 +55,14 @@ export class ApiKeyAuthService {
       SELECT id, org_id, key_hash, scopes, created_by_id, expires_at, revoked_at, last_used_at
       FROM api_key_lookup(${prefix})`;
     if (!row) throw invalid();
-    const given = Buffer.from(this.tokens.hashToken(raw));
+    // The current pepper first, then earlier ones during a rotation. A key matched by an earlier
+    // one is rehashed below, so it keeps working once that pepper is dropped.
     const stored = Buffer.from(row.key_hash);
-    if (given.length !== stored.length || !timingSafeEqual(given, stored)) throw invalid();
+    const match = this.tokens.tokenHashes(raw).findIndex((h) => {
+      const given = Buffer.from(h);
+      return given.length === stored.length && timingSafeEqual(given, stored);
+    });
+    if (match < 0) throw invalid();
     if (row.revoked_at) throw invalid();
     if (row.expires_at && row.expires_at <= new Date()) throw invalid();
     // A key acts for whoever made it, for attribution. Without them it has no owner, so it stops.
@@ -92,8 +97,15 @@ export class ApiKeyAuthService {
       const ok = await hasFeature(tx, orgId, 'public_api');
       // Not on every request: it would mean a write for each read.
       const stale = new Date(Date.now() - LAST_USED_RESOLUTION_MS);
-      if (ok && (!row.last_used_at || row.last_used_at < stale)) {
-        await tx.apiKey.update({ where: { id: row.id }, data: { lastUsedAt: new Date() } });
+      if (ok && (match > 0 || !row.last_used_at || row.last_used_at < stale)) {
+        await tx.apiKey.update({
+          where: { id: row.id },
+          data: {
+            lastUsedAt: new Date(),
+            // Matched by an earlier pepper: store it under the current one.
+            ...(match > 0 ? { keyHash: this.tokens.hashToken(raw) } : {}),
+          },
+        });
       }
       return ok;
     });

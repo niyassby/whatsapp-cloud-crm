@@ -26,6 +26,7 @@ const ITEMS: { href: string; label: string; permission?: Permission }[] = [
   { href: '/settings/webhooks', label: 'Webhooks', permission: Permission.API_KEYS_MANAGE },
   { href: '/settings/security', label: 'Security' },
   { href: '/settings/audit', label: 'Audit log', permission: Permission.AUDIT_READ },
+  { href: '/settings/privacy', label: 'Privacy', permission: Permission.ORG_DELETE },
 ];
 
 export default function SettingsLayout({ children }: { children: ReactNode }) {

@@ -5,7 +5,7 @@ import { ThemeProvider } from 'next-themes';
 import { type ReactNode, useState } from 'react';
 import { ApiError } from '@/lib/api';
 
-export function Providers({ children }: { children: ReactNode }) {
+export function Providers({ children, nonce }: { children: ReactNode; nonce?: string }) {
   const [client] = useState(
     () =>
       new QueryClient({
@@ -19,7 +19,13 @@ export function Providers({ children }: { children: ReactNode }) {
       }),
   );
   return (
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+    <ThemeProvider
+      attribute="class"
+      defaultTheme="system"
+      enableSystem
+      disableTransitionOnChange
+      nonce={nonce}
+    >
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     </ThemeProvider>
   );

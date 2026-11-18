@@ -84,6 +84,8 @@ export const workerEnvSchema = z.object({
   SMTP_URL: z.url({ protocol: /^smtps?$/ }).default('smtp://127.0.0.1:1025'),
   MAIL_FROM: z.string().default('WhatsApp CRM <no-reply@localhost>'),
   WEB_URL: z.url().default('http://localhost:3000'),
+  /** AI log text and flow step details are blanked after this many days (Phase 4.4). */
+  RETENTION_LOG_DAYS: z.coerce.number().int().min(7).default(180),
   /** Raw webhook payloads are kept this long for replay. */
   WEBHOOK_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
 });

@@ -23,3 +23,6 @@ export * from './reseller';
 export * from './channels';
 export * from './wa-modules';
 export * from './reports';
+export * from './csp';
+export * from './audit';
+export * from './privacy';

@@ -114,6 +114,7 @@ export function contactToDto(c: ContactWithRelations): ContactDto {
     optInAt: c.optInAt?.toISOString() ?? null,
     optOutAt: c.optOutAt?.toISOString() ?? null,
     lastActivityAt: c.lastActivityAt?.toISOString() ?? null,
+    erasedAt: c.erasedAt?.toISOString() ?? null,
     createdAt: c.createdAt.toISOString(),
   };
 }

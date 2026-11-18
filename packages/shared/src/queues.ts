@@ -27,7 +27,11 @@ export const QueueName = {
   AI: 'ai',
   /** Report aggregates (rollups and rebuilds) and scheduled report emails. */
   ANALYTICS: 'analytics',
+  /** Data exports, erasure, deletion and retention (Phase 4.4). Its own queue, one at a time. */
+  PRIVACY: 'privacy',
 } as const;
+
+export type PrivacyJob = { kind: 'request'; orgId: string; requestId: string } | { kind: 'tick' };
 
 export type AnalyticsJob =
   /** Recompute recent hours (every 5 minutes) or the last 3 days (hourly) for every workspace. */

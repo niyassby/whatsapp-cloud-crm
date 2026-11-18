@@ -52,20 +52,23 @@ export class WebchatService {
   // ------------------------------------------------------------------ visitor tokens
 
   /** `<visitorId>.<HMAC of channel and visitor>`: a token for one widget cannot open another. */
-  private sign(channelId: string, visitorId: string): string {
-    const mac = createHmac('sha256', this.env.JWT_REFRESH_SECRET)
+  private sign(channelId: string, visitorId: string, secret = this.env.JWT_REFRESH_SECRET): string {
+    const mac = createHmac('sha256', secret)
       .update(`webchat:${channelId}:${visitorId}`)
       .digest('base64url');
     return `${visitorId}.${mac}`;
   }
 
-  /** The visitor id in a valid token, or null. */
+  /** The visitor id in a valid token, or null. Earlier secrets still count during a rotation. */
   verify(channelId: string, token: string | undefined): string | null {
     const [visitorId] = (token ?? '').split('.');
     if (!visitorId || !/^[A-Za-z0-9_-]{16,40}$/.test(visitorId)) return null;
     const given = Buffer.from(token ?? '');
-    const expected = Buffer.from(this.sign(channelId, visitorId));
-    return given.length === expected.length && timingSafeEqual(given, expected) ? visitorId : null;
+    for (const secret of [this.env.JWT_REFRESH_SECRET, ...this.env.JWT_REFRESH_SECRET_PREVIOUS]) {
+      const expected = Buffer.from(this.sign(channelId, visitorId, secret));
+      if (given.length === expected.length && timingSafeEqual(given, expected)) return visitorId;
+    }
+    return null;
   }
 
   // ------------------------------------------------------------------ the widget

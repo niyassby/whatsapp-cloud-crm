@@ -29,7 +29,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { Meta, type RequestMeta } from '../common/request-meta';
 import { zod } from '../common/zod.pipe';
 import type { AuthContext } from '../tenancy/request-context';
-import { SkipTenant } from '../tenancy/skip-tenant.decorator';
+import { AllowWhileImpersonating, SkipTenant } from '../tenancy/skip-tenant.decorator';
 import { AuthService, type SessionTokens } from './auth.service';
 import { CurrentAuth, Public } from './decorators';
 import { MfaService } from './mfa.service';
@@ -144,6 +144,7 @@ export class AuthController {
     await this.auth.resetPassword(body, meta);
   }
 
+  @AllowWhileImpersonating()
   @Get('me')
   me(@CurrentAuth() auth: AuthContext): Promise<MeResponse> {
     return this.auth.me(auth);

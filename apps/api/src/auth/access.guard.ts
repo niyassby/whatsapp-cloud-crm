@@ -1,4 +1,10 @@
-import { type CanActivate, type ExecutionContext, Injectable } from '@nestjs/common';
+import {
+  type CanActivate,
+  type ExecutionContext,
+  Inject,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import {
   type ApiScope,
@@ -9,7 +15,9 @@ import {
   type Permission,
 } from '@wacrm/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { SKIP_TENANT_KEY } from '../tenancy/skip-tenant.decorator';
+import { API_ENV, type ApiEnv } from '../env';
+import { RateLimiter } from '../infra/rate-limiter.service';
+import { ALLOW_IMPERSONATION_KEY, SKIP_TENANT_KEY } from '../tenancy/skip-tenant.decorator';
 import { ApiKeyAuthService } from './api-key-auth.service';
 import {
   API_KEY_SCOPE_KEY,
@@ -38,7 +46,32 @@ export class AccessGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly authenticator: AuthenticatorService,
     private readonly apiKeys: ApiKeyAuthService,
+    private readonly limiter: RateLimiter,
+    @Inject(API_ENV) private readonly env: ApiEnv,
   ) {}
+
+  private readonly log = new Logger(AccessGuard.name);
+
+  /**
+   * Requests per signed-in person per minute (Phase 4.4), across tabs and devices, so one account
+   * cannot flood the API from many addresses. Fails open if Redis is down.
+   */
+  private async limitPerson(userId: string, reply: FastifyReply): Promise<void> {
+    let count: number;
+    try {
+      count = await this.limiter.hit(`rl:user:${userId}:${Math.floor(Date.now() / 60_000)}`, 60);
+    } catch (err) {
+      this.log.warn(`rate limit unavailable: ${String(err)}`);
+      return;
+    }
+    if (count > this.env.RATE_LIMIT_USER_PER_MINUTE) {
+      const retryAfter = 60 - Math.floor((Date.now() / 1000) % 60);
+      void reply.header('retry-after', String(retryAfter));
+      throw new AppError(ErrorCode.RATE_LIMITED, 'Too many requests. Try again in a minute.', {
+        retryAfterSeconds: retryAfter,
+      });
+    }
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     if (context.getType() !== 'http') return true;
@@ -71,13 +104,17 @@ export class AccessGuard implements CanActivate {
     );
     const bearer = extractBearer(req);
     if (publicOptions) {
-      if (publicOptions.optionalAuth && bearer)
-        req.auth = await this.authenticator.authenticate(bearer);
+      if (publicOptions.optionalAuth && bearer) {
+        const optional = await this.authenticator.authenticate(bearer);
+        // Someone viewing a client workspace is anonymous here, not themselves.
+        if (!optional.impersonationId) req.auth = optional;
+      }
       return true;
     }
     if (!bearer) throw new AppError(ErrorCode.UNAUTHENTICATED, 'Authentication required');
     const auth = await this.authenticator.authenticate(bearer);
     req.auth = auth;
+    await this.limitPerson(auth.userId, context.switchToHttp().getResponse<FastifyReply>());
 
     const partnerRoute = this.reflector.getAllAndOverride<boolean>(PARTNER_KEY, targets);
     const adminRoute = this.reflector.getAllAndOverride<boolean>(PLATFORM_ADMIN_KEY, targets);
@@ -106,6 +143,13 @@ export class AccessGuard implements CanActivate {
     }
 
     const skipTenant = this.reflector.getAllAndOverride<boolean>(SKIP_TENANT_KEY, targets);
+    if (
+      skipTenant &&
+      auth.impersonationId &&
+      !this.reflector.getAllAndOverride<boolean>(ALLOW_IMPERSONATION_KEY, targets)
+    ) {
+      throw new AppError(ErrorCode.FORBIDDEN, 'Not available while viewing a client workspace');
+    }
     if (!skipTenant && !auth.orgId) {
       throw new AppError(ErrorCode.TENANT_CONTEXT_MISSING, 'An organization context is required');
     }

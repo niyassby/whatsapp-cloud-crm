@@ -47,6 +47,36 @@ export default tseslint.config(
     },
   },
   {
+    // Raw SQL only as tagged templates, which bind every value as a parameter. The string forms
+    // would let a value be concatenated into SQL. Prisma.raw splices text in, so it stays in
+    // packages/db, where it is used for fixed table and column names only. Tests may use both.
+    files: ['apps/**/*.{ts,tsx}', 'packages/**/*.ts'],
+    ignores: ['**/test/**', '**/*.test.ts', 'e2e/**'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'MemberExpression[property.name=/^\\$(queryRaw|executeRaw)Unsafe$/]',
+          message: 'Use the $queryRaw / $executeRaw tagged templates, which bind values.',
+        },
+      ],
+    },
+  },
+  {
+    files: ['apps/**/*.{ts,tsx}', 'packages/!(db)/**/*.ts'],
+    ignores: ['**/test/**', '**/*.test.ts'],
+    rules: {
+      'no-restricted-properties': [
+        'error',
+        {
+          object: 'Prisma',
+          property: 'raw',
+          message: 'Prisma.raw splices text into SQL; keep it in packages/db for fixed names.',
+        },
+      ],
+    },
+  },
+  {
     files: ['**/*.{js,mjs,cjs}'],
     languageOptions: {
       globals: {

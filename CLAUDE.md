@@ -404,6 +404,47 @@ Setup for each: `infra/channels.md`.
 - Benchmark (the acceptance): `pnpm --filter @wacrm/db bench:analytics [messages]` (`-- --reuse` keeps the last run's data) recreates `wacrm_bench_test`, seeds 5,000,000 messages over 180 days (one workspace with 80%), runs the rollup and times every report over 30, 90 and 180 days as the app role, failing at 1 second. Result on the dev PC (2026-11-14): seeding 10 minutes, rollup of 180 days for all five workspaces 4 minutes, one 5-minute pass 0.5 s; slowest report 621 ms (conversations, 180 days), then campaigns 421 ms and team 364 ms; templates under 10 ms. Before the histograms, conversations over 180 days took 3.4 s.
 - Tests: `packages/db/test/analytics-tables.test.ts` (rollup in a +5:30 zone, responses and their histogram, the resolution trigger, conversions, reports, isolation, definer functions), `packages/shared/src/reports.test.ts` (time zones, schedule times and periods, CSV, histogram accuracy), `apps/api/test/reports.test.ts`, `apps/worker/test/analytics.test.ts` (tick, catalog order sales, scheduled mail), sales checks in `commerce.test.ts` and `payments.test.ts`, `e2e/reports.spec.ts` (report after a real reply, CSV download, a scheduled email arriving in Mailpit).
 
+## Security and compliance (Phase 4.4)
+
+The checklist with evidence for every control: `infra/security-checklist.md`. Runbooks: `infra/backup-restore.md`, `infra/key-rotation.md`.
+
+- Isolation sweep (`packages/db/test/isolation-sweep.test.ts`): every app policy on a table with `org_id` (including `TO public` ones) must be the plain org match or a reviewed exception listed word for word; every tenant table must have a policy; no context, an empty workspace and an unrelated partner see nothing; each workspace sees only its own rows. A new table or policy is covered without editing the test. Adding a non-plain policy means adding it to `REVIEWED` with a reason.
+- Raw SQL: tagged templates only. ESLint bans `$queryRawUnsafe` / `$executeRawUnsafe` outside tests and `Prisma.raw` outside `packages/db` (where it is used for fixed names only). `node infra/scripts/raw-sql-inventory.mjs` lists every call and runs in CI.
+- Impersonation: `AccessGuard` refuses an impersonation token on every `@SkipTenant` route unless it is marked `@AllowWhileImpersonating()` (only `/auth/me`), and optional-auth routes treat it as anonymous. Before this, `/auth/switch-org` turned it into an ordinary session token of the impersonator.
+- Headers:
+  - API (`addSecurityHooks` in `bootstrap.ts`): `nosniff`, `Referrer-Policy`, `Permissions-Policy`, `X-Frame-Options: DENY`, COOP, HSTS in production, `default-src 'none'` and `Cache-Control: no-store` on every response; a looser CSP for `/v1/docs`.
+  - Web (`apps/web/src/proxy.ts`, policy built by `buildWebCsp` in `packages/shared/src/csp.ts`): a fresh nonce per request, `'strict-dynamic'`, no inline scripts, `frame-ancestors 'none'` except `/widget/*`. The root layout reads the nonce from `x-nonce` (which renders every page per request) and passes it to next-themes. `MEDIA_PUBLIC_ORIGINS` (web) names where signed media links point. `upgrade-insecure-requests` only when the API is https.
+- Rate limits: an `onRequest` hook per client address (`RATE_LIMIT_IP_PER_MINUTE`, skipping `/health`, webhooks, `/v1`, `/webchat`, `/meta`, socket.io) and a per-person limit in `AccessGuard` after authentication (`RATE_LIMIT_USER_PER_MINUTE`). Both fail open when Redis is down. The e2e stack raises both.
+- Audit viewer: `auditQuerySchema` (`packages/shared/src/audit.ts`): `action` is a whole name or a group, plus `actorUserId`, `from`, `to` (UTC days). `GET /orgs/current/audit-logs/export` writes CSV and records `audit.exported`. `AUDIT_LABELS` and `auditDetail` are shared by the web, export and admin console. `/admin` has an Audit log tab over `GET /admin/audit` with the same filters.
+- Privacy (GDPR and DPDP):
+  - Tables: `privacy_requests` (no DELETE) and `erased_identities` (keyed hashes, no UPDATE or DELETE). Columns: `contacts.erased_at`, and on organizations `deletion_requested_at`, `purge_after`, `message_retention_days`.
+  - Queue `privacy` (concurrency 1), `apps/worker/src/processors/privacy.ts`; helpers in `packages/db/src/privacy.ts`.
+  - Contact export: `contactExport`, one JSON file at `orgs/<org>/privacy/<id>.json`, kept `PRIVACY_FILE_DAYS` (7). Downloads go through a 5-minute signed link and are audited.
+  - Contact erasure (`eraseContact`), including contacts merged into it:
+    - Blanked: message body, content (a template keeps only its id) and files, which are deleted after commit; notes, tags and identities; flow and broadcast values.
+    - `privacy_erase_contact_history` (definer) blanks the append-only consent proof, AI logs and flow step details. It works only for a contact already marked erased in the caller's workspace.
+    - The number and email go into `erased_identities` as `identityHash` (HMAC under a key derived from `ENCRYPTION_KEY`).
+    - The contact stays opted out and soft-deleted.
+  - Manual adds (`CONTACT_ERASED`, 409) and imports (a row error) check erased hashes under the current and previous encryption keys.
+  - Workspace export: `exportOrgTables` streams every tenant table the workspace can read as gzipped NDJSON, leaving out columns that look like secrets (`_enc`, `_hash`, token, secret, password) and the derived `analytics_*` tables. Uploaded with `ObjectStorage.putFile`.
+  - Workspace deletion, by owners (`ORG_DELETE`) typing the name; partner clients ask their partner:
+    - Grace: `ORG_DELETION_GRACE_DAYS` (14), and it can be cancelled.
+    - Then the daily `privacy` tick soft-deletes it (`softDeleteWorkspaceTx`, shared with 4.1's rules) through `privacy_due_org_deletions`.
+    - 7 days later it purges through `privacy_due_org_purges`: `deletePrefix('orgs/<id>/')`, then `DELETE FROM organizations` in the workspace's own context.
+    - The `organizations_purge` policy allows only that delete. Every tenant table reaches the organization through cascading keys, which Postgres runs without RLS. `partner_ledger` deliberately does not cascade.
+    - The template keys from campaigns and drip steps are deferred, so the cascade is not blocked.
+  - Retention (the same nightly tick):
+    - `expireOldMessages` per workspace with `message_retention_days`: blanks text and files, keeps counts.
+    - `retention_blank_old` (definer, cutoff at least 7 days old) blanks AI log text and flow step details after `RETENTION_LOG_DAYS`.
+    - Expired export files are deleted.
+  - Storage gained `delete`, `deletePrefix` (refuses anything but `orgs/<uuid>/`) and `putFile`.
+  - API: `/privacy/contacts/:id/export | erase | requests`, `/privacy/contacts/requests/:id/download` (`CONTACTS_MANAGE`), `/privacy/workspace`, `/privacy/workspace/retention`, `/privacy/workspace/exports` (+ download), `/privacy/workspace/deletion` (POST, DELETE) (`ORG_DELETE`, owners). Every action is audited (`privacy.*`). Realtime `privacy:updated`.
+  - Web: the contact page's Privacy card, and Settings > Privacy (owners).
+- Key rotation: `JWT_ACCESS_SECRET_PREVIOUS` (verification accepts earlier secrets) and `JWT_REFRESH_SECRET_PREVIOUS` (`TokenService.tokenHashes`: refresh, email-link, invitation and API key lookups try the earlier pepper; an API key matched that way is rehashed on use; website chat tokens verify against both).
+- CI job `security`: `secret-scan.mjs`, `raw-sql-inventory.mjs`, gitleaks (`.gitleaks.toml`), `pnpm audit --prod --audit-level high` (blocking), full audit (reported). `.github/dependabot.yml` for npm, Actions and Docker.
+- Backups: `node infra/scripts/backup-restore-check.mjs` (set `PG_BIN` if `pg_dump` is not on the path) dumps `DIRECT_URL`, restores into `wacrm_restore_check`, and compares every table, the migrations, RLS, policies and definer functions. It passed on the 5-million-message database: 8.15 million rows, a 396 MB dump in 76 s, restore in 184 s.
+- Tests: `packages/db/test/isolation-sweep.test.ts`, `privacy-tables.test.ts` (erasure, exports, purge, retention), `packages/shared/src/csp.test.ts`, `apps/api/test/security.test.ts` (headers, limits), `audit.test.ts`, `privacy.test.ts`, `key-rotation.test.ts`, `reseller.test.ts` (impersonation scope), `apps/worker/test/privacy.test.ts` (requests, grace period, purge, retention).
+
 ## Troubleshooting
 
 - Local services run without Docker on the development PC (`infra/native-setup.md`): PostgreSQL 18 as a Windows service on 5433, Memurai (Redis) on 6379, and SeaweedFS and Mailpit from `.tools/` via `pnpm services:up`. If a test or the app cannot reach one, run `pnpm services:status`; logs are in `.tools/logs`.
@@ -439,6 +480,10 @@ Validate with Zod at startup. Never commit real secrets. Keep `.env.example` cur
 - `AI_PROVIDER` (`anthropic` | `fake`, unset = AI off), `ANTHROPIC_API_KEY`, `AI_MODEL` (default `claude-opus-5-5`), `AI_EMBEDDINGS_PROVIDER` (`voyage` | `openai` | `fake`), `AI_EMBEDDINGS_MODEL`, `VOYAGE_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL` (API and worker). Changing the embedding provider or model means reindexing documents
 - `API_PUBLIC_URL` (default http://localhost:4000): this API as providers reach it, for integration webhooks and OAuth callbacks. `INTEGRATIONS_DEMO` (API and worker) adds the Demo Store connector. OAuth connectors read their own client id and secret variables (see `infra/connectors.md`)
 - `ANALYTICS_ROLLUP_EVERY_MS` (worker, 300000): how often recent hours of report data are recomputed. The worker also reads `SMTP_URL`, `MAIL_FROM` and `WEB_URL` for scheduled reports
+- `RATE_LIMIT_IP_PER_MINUTE` (1200), `RATE_LIMIT_USER_PER_MINUTE` (600): API request limits per address and per signed-in person. `RATE_LIMIT_LOGIN_PER_IP` (30 per 15 minutes) is the login limit; the e2e stack raises all three, since its browsers share one address
+- `JWT_ACCESS_SECRET_PREVIOUS`, `JWT_REFRESH_SECRET_PREVIOUS`: earlier secrets accepted while rotating (`infra/key-rotation.md`)
+- `RETENTION_LOG_DAYS` (worker, 180): AI log text and flow step details are blanked after this
+- `MEDIA_PUBLIC_ORIGINS` (web): where signed media links point, for the CSP; defaults to `http://localhost:9000` in development
 - `SENTRY_DSN`
 
 ## Architecture rules (must follow)
@@ -495,7 +540,7 @@ Mark as phases complete.
 - [ ] Section 1: Foundation, WhatsApp connection, live inbox (1.1 tooling DONE, 1.2 DB/tenancy DONE, 1.3 auth DONE, 1.4 gateway/onboarding/webhooks code DONE, 1.5 pipeline/inbox code DONE. CI green; real number connected by token; real inbound, outbound and ticks verified. Gate NOT passed: Embedded Signup and replay of a real event not verified)
 - [ ] Section 2: Contacts, templates, campaigns, billing, public API (2.1 contacts and consent DONE; 2.2 template manager code DONE, real Meta approval not verified; 2.3 wallet DONE, real rate cards not loaded; 2.4 campaigns and dashboard DONE; 2.5 billing code DONE, real sandbox payments not verified; 2.6 public API and webhooks DONE. Gate NOT passed until real sandbox payments are run: wallet concurrency, webhook idempotency, campaign load and OpenAPI all pass). Started with the Section 1 gate still open, by the project owner's decision (2026-11-05).
 - [ ] Section 3: Automation, integrations, AI (3.1 rules and routing DONE; 3.2 flow engine DONE; 3.3 flow builder DONE; 3.4 connector framework DONE; 3.5 commerce connectors code DONE, not checked against a real Shopify dev store; 3.6 payments, Zapier/Make, Sheets, HubSpot code DONE, payment links not run in a real sandbox; 3.7 AI assistant and knowledge base DONE with fake providers, not yet run against Claude and a real embedding provider). Started with the Section 2 gate still open (no sandbox payments run), by the project owner's decision (2026-11-09).
-- [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 reseller module and platform console DONE; 4.2 channels and extended WhatsApp modules DONE with fakes, not yet run against Instagram, calling, groups or catalogs at Meta; 4.3 analytics and reports DONE; 4.4 and 4.5 to do). Started with the Section 3 gate still open (payment links and real AI providers not run), by the project owner's decision (2026-11-13).
+- [ ] Section 4: Reseller, extended modules, analytics, security, launch (4.1 reseller module and platform console DONE; 4.2 channels and extended WhatsApp modules DONE with fakes, not yet run against Instagram, calling, groups or catalogs at Meta; 4.3 analytics and reports DONE; 4.4 security and compliance DONE (checklist in `infra/security-checklist.md`; open items there need a deployment, a legal review or a penetration test); 4.5 to do). Started with the Section 3 gate still open (payment links and real AI providers not run), by the project owner's decision (2026-11-13).
 
 ## Decisions log
 
@@ -665,7 +710,18 @@ Add one line per decision: date, decision, reason.
 
 - 2026-11-14: Production images build the whole workspace, then reinstall production dependencies for one app (`pnpm install --prod --filter=<app>...`) instead of `pnpm deploy` or Next's standalone output. Reason: `pnpm deploy` packs workspace packages by their ignore files, and the root `.gitignore` excludes `dist`; the reinstall keeps the same layout as development. The images could not be built on the dev PC (no Docker), so the `Docker` workflow is what checks them.
 
+- 2026-11-18: The web CSP uses a per-request nonce with 'strict-dynamic' rather than allowing inline scripts. Reason: it is what stops injected script; the cost is that every page renders per request, which this dashboard (client components behind a login) already did in practice.
+- 2026-11-18: Request limits fail open when Redis is unreachable. Reason: a cache outage must not take the API down; login and other sensitive limits are separate and unchanged.
+- 2026-11-18: Erasure keeps the contact row (opted out, nothing personal) and every message row (no content). Reason: bills, counts and reports must still add up, and an opt-out must never be lost. Numbers are remembered only as keyed hashes so a file cannot bring the person back.
+- 2026-11-18: Append-only history (consent proof, AI logs, flow steps) is blanked on erasure by a definer function that only acts on a contact already erased in the caller's workspace. Reason: erasure has to reach it, and the app role keeps no UPDATE on it otherwise. Worth a legal check on whether consent proof must be kept instead.
+- 2026-11-18: Workspace deletion waits 14 days (cancellable), soft-deletes, then purges 7 days later through cascading keys from the organization row, run by the worker under a narrow delete policy. Reason: no operator connection or BYPASSRLS is needed, Postgres cascades are complete by construction, and a test checks every tenant table. The partner ledger stays, as the partner's financial record.
+- 2026-11-18: Campaign and drip-step keys to templates are deferred (checked at commit). Reason: one cascading delete can check them before it has removed the rows that use the template.
+- 2026-11-18: Rotating JWT_REFRESH_SECRET keeps the old pepper for lookups (`*_PREVIOUS`) and rehashes API keys on use. Reason: the pepper keys every stored token hash, and changing it alone would log everyone out and break every API key.
+- 2026-11-18: Development-tool advisories (minimatch via ESLint, picomatch via lint-staged) are reported, not blocking. Reason: they run only on our own files; shipped dependencies must be clean.
+
 ## Known gaps / TODO
+
+- Security (Phase 4.4, see `infra/security-checklist.md`): no 2FA recovery codes; no edge DDoS protection or WAF (deployment); production backups and PITR are the operator's to set up; no penetration test yet; legal review of erasure versus consent proof, DPDP notices and a customer DPA. Integration event payloads, notifications, campaign error texts and contact import files have no retention schedule yet. Restoring a backup brings erased data back until erasures are run again (manual step in the runbook). A workspace due for deletion shows its date only in Settings > Privacy, not to every member. Bull Board is still not mounted.
 
 - Reports: figures are up to 5 minutes behind (the rollup interval), and up to an hour for late read receipts and replies older than 3 hours. Resolution history starts with Phase 4.3 (no closes before it were recorded). Revenue in a currency other than the wallet's is left out of ROI. Campaigns are attributed by last touch only. Report PDFs use the built-in font (no Hindi). Scheduled emails have no unsubscribe link and are not retried. No per-label, per-tag or per-flow reports yet, no custom report builder, and AI and wallet spend are not in reports (the wallet page has its own). Response rows and hourly tables are kept forever; add retention with 4.4.
 

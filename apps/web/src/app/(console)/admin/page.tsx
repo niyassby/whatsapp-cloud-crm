@@ -1,9 +1,10 @@
 'use client';
 
-import { useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import {
   type AdminOrgDto,
   type AdminPlanDto,
+  auditDetail,
   formatMoney,
   microsToDecimal,
   type PartnerDto,
@@ -894,6 +895,139 @@ function System() {
   );
 }
 
+// ------------------------------------------------------------------ platform audit log
+
+interface PlatformAuditItem {
+  id: string;
+  action: string;
+  actorUserId: string | null;
+  partnerId: string | null;
+  targetType: string | null;
+  targetId: string | null;
+  metadata: unknown;
+  createdAt: string;
+}
+
+const PLATFORM_GROUPS: Record<string, string> = {
+  partner: 'Partners',
+  plan: 'Plans and prices',
+  rate_card: 'Rate cards',
+  statement: 'Statements',
+  org: 'Workspaces',
+};
+
+/** What platform admins did: partners, plans, prices, statements and workspaces. */
+function Audit() {
+  const [action, setAction] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const params = new URLSearchParams(
+    Object.entries({ action, from, to }).filter((e): e is [string, string] => Boolean(e[1])),
+  ).toString();
+  const log = useInfiniteQuery({
+    queryKey: [...adminKeys.all, 'audit', params],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      api<{ items: PlatformAuditItem[]; nextCursor: string | null }>(
+        `/admin/audit?limit=50${params ? `&${params}` : ''}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`,
+      ),
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+  });
+  const items = log.data?.pages.flatMap((p) => p.items) ?? [];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Platform audit log</CardTitle>
+        <CardDescription>
+          Every change made from this console, newest first. Dates are in UTC. Work done inside a
+          workspace is in that workspace&apos;s own log.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-sm">
+            Kind
+            <select
+              className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
+              value={action}
+              onChange={(e) => setAction(e.target.value)}
+            >
+              <option value="">Everything</option>
+              {Object.entries(PLATFORM_GROUPS).map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            From
+            <Input
+              type="date"
+              className="h-9 w-40"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            To
+            <Input
+              type="date"
+              className="h-9 w-40"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+            />
+          </label>
+        </div>
+        {log.isPending ? (
+          <Skeleton className="h-40 w-full" />
+        ) : items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nothing matches these filters.</p>
+        ) : (
+          <Table data-testid="platform-audit">
+            <TableHeader>
+              <TableRow>
+                <TableHead>When</TableHead>
+                <TableHead>Action</TableHead>
+                <TableHead>Target</TableHead>
+                <TableHead>Details</TableHead>
+                <TableHead>By</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                    {new Date(r.createdAt).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="font-medium">{r.action}</TableCell>
+                  <TableCell className="text-sm">
+                    {r.targetType ? `${r.targetType} ${r.targetId?.slice(0, 8) ?? ''}` : ''}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {auditDetail(r.metadata)}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{r.actorUserId?.slice(0, 8)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+        {log.hasNextPage ? (
+          <Button
+            variant="outline"
+            className="self-center"
+            disabled={log.isFetchingNextPage}
+            onClick={() => void log.fetchNextPage()}
+          >
+            Load more
+          </Button>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function AdminPage() {
   return (
     <div className="flex flex-col gap-4">
@@ -911,6 +1045,7 @@ export default function AdminPage() {
           <TabsTrigger value="rates">Rate cards</TabsTrigger>
           <TabsTrigger value="statements">Statements</TabsTrigger>
           <TabsTrigger value="system">System</TabsTrigger>
+          <TabsTrigger value="audit">Audit log</TabsTrigger>
         </TabsList>
         <TabsContent value="partners">
           <Partners />
@@ -929,6 +1064,9 @@ export default function AdminPage() {
         </TabsContent>
         <TabsContent value="system">
           <System />
+        </TabsContent>
+        <TabsContent value="audit">
+          <Audit />
         </TabsContent>
       </Tabs>
     </div>

@@ -109,23 +109,37 @@ export class TokenService {
     code:
       typeof ErrorCode.UNAUTHENTICATED | typeof ErrorCode.MFA_INVALID = ErrorCode.UNAUTHENTICATED,
   ): jwt.JwtPayload {
-    try {
-      const payload = jwt.verify(token, this.env.JWT_ACCESS_SECRET, {
-        algorithms: ['HS256'],
-        issuer: ISSUER,
-        audience,
-      });
-      if (typeof payload === 'string') throw new Error('unexpected string payload');
-      return payload;
-    } catch {
-      throw new AppError(code, 'Invalid or expired token');
+    // The current secret, then any earlier ones still accepted during a rotation.
+    for (const secret of [this.env.JWT_ACCESS_SECRET, ...this.env.JWT_ACCESS_SECRET_PREVIOUS]) {
+      try {
+        const payload = jwt.verify(token, secret, {
+          algorithms: ['HS256'],
+          issuer: ISSUER,
+          audience,
+        });
+        if (typeof payload === 'string') throw new Error('unexpected string payload');
+        return payload;
+      } catch {
+        // Try the next secret.
+      }
     }
+    throw new AppError(code, 'Invalid or expired token');
   }
 
   // ------------------------------------------------------------- opaque tokens
 
   hashToken(raw: string): string {
     return hashOpaqueToken(raw, this.env.JWT_REFRESH_SECRET);
+  }
+
+  /**
+   * The hashes to look a token up by: with the current pepper first, then earlier ones during a
+   * rotation, so stored refresh tokens, email links, invitations and API keys keep working.
+   */
+  tokenHashes(raw: string): string[] {
+    return [this.env.JWT_REFRESH_SECRET, ...this.env.JWT_REFRESH_SECRET_PREVIOUS].map((p) =>
+      hashOpaqueToken(raw, p),
+    );
   }
 
   /** New random token plus the hash to store. */
@@ -160,9 +174,12 @@ export class TokenService {
 
   /** Pre-auth lookup through the SECURITY DEFINER function. */
   async lookupRefresh(raw: string): Promise<RefreshLookupRow | null> {
-    const rows = await this.prisma.client.$queryRaw<RefreshLookupRow[]>`
-      SELECT * FROM auth_lookup_refresh_token(${this.hashToken(raw)})`;
-    return rows[0] ?? null;
+    for (const hash of this.tokenHashes(raw)) {
+      const rows = await this.prisma.client.$queryRaw<RefreshLookupRow[]>`
+        SELECT * FROM auth_lookup_refresh_token(${hash})`;
+      if (rows[0]) return rows[0];
+    }
+    return null;
   }
 
   /**

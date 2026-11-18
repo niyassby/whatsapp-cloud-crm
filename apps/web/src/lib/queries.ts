@@ -67,13 +67,17 @@ export function useInvitations(enabled: boolean) {
   });
 }
 
-export function useAuditLogs() {
+/** The audit log, with optional filters: action or group, person, UTC days. */
+export function useAuditLogs(filters: Record<string, string | undefined> = {}) {
+  const params = new URLSearchParams(
+    Object.entries(filters).filter((e): e is [string, string] => Boolean(e[1])),
+  ).toString();
   return useInfiniteQuery({
-    queryKey: queryKeys.audit,
+    queryKey: [...queryKeys.audit, params],
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
       api<CursorPage<AuditLogDto>>(
-        `/orgs/current/audit-logs?limit=25${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`,
+        `/orgs/current/audit-logs?limit=25${params ? `&${params}` : ''}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`,
       ),
     getNextPageParam: (last) => last.nextCursor ?? undefined,
   });

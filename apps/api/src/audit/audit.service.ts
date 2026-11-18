@@ -72,6 +72,14 @@ export const AuditAction = {
   GROUP_CHANGED: 'group.changed',
   CALLING_CHANGED: 'calling.changed',
   CATALOG_SYNCED: 'catalog.synced',
+  AUDIT_EXPORTED: 'audit.exported',
+  PRIVACY_CONTACT_EXPORTED: 'privacy.contact_exported',
+  PRIVACY_CONTACT_ERASED: 'privacy.contact_erased',
+  PRIVACY_ORG_EXPORTED: 'privacy.org_exported',
+  PRIVACY_ORG_DELETION_REQUESTED: 'privacy.org_deletion_requested',
+  PRIVACY_ORG_DELETION_CANCELLED: 'privacy.org_deletion_cancelled',
+  PRIVACY_RETENTION_CHANGED: 'privacy.retention_changed',
+  PRIVACY_REQUEST_DOWNLOADED: 'privacy.request_downloaded',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
