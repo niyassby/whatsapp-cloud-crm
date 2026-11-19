@@ -13,7 +13,7 @@ jobs:
     env:
       COMPOSE: docker compose -f docker-compose.prod.yml --env-file .env.production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Write a throwaway production env file
         run: |
