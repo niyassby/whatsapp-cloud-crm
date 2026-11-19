@@ -5,7 +5,7 @@
 # scripts (pnpm db:migrate:deploy, plans:import, rates:import, admin:grant, wallet:credit):
 #   docker build -f apps/api/Dockerfile --target tools -t wacrm-tools .
 
-FROM node:20-bookworm-slim AS base
+FROM node:26-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     npm_config_store_dir=/pnpm/store \
