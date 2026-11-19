@@ -78,7 +78,7 @@ jobs:
           cache: pnpm
       - run: node infra/scripts/secret-scan.mjs
       - run: node infra/scripts/raw-sql-inventory.mjs
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
