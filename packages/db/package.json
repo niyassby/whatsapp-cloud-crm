@@ -13,6 +13,7 @@
     "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage --maxWorkers=2",
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
     "migrate:create": "prisma migrate dev --create-only",
@@ -24,7 +25,8 @@
     "plans:import": "tsx scripts/plans-import.ts",
     "bench:analytics": "tsx scripts/analytics-benchmark.ts",
     "studio": "prisma studio",
-    "clean": "rimraf dist .turbo src/generated"
+    "clean": "rimraf dist .turbo src/generated",
+    "demo": "tsx scripts/demo-data.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.1",

@@ -7,6 +7,7 @@ import {
   isOptOutMessage,
   messagePreview,
   toPublicMessage,
+  uuidv7,
   type WebchatMessageDto,
 } from '@wacrm/shared';
 import { applyContactReply, exitDripsOnOptOut } from './campaigns';
@@ -110,15 +111,22 @@ async function findContact(
 ): Promise<{ id: string; created: boolean }> {
   const { orgId, sender, sentAt, channel } = input;
   if (sender.waId) {
-    const known = await tx.contact.count({ where: { orgId, waId: sender.waId } });
-    const row = await tx.contact.upsert({
+    // Atomic, unlike Prisma's upsert here (a read, then an insert): a new customer's first two
+    // messages are often handled at once, and the second insert used to fail the job on the
+    // unique key. ON CONFLICT waits for the other transaction and then does nothing, and only
+    // the one that inserted reports the contact as new.
+    const inserted = await tx.$queryRaw<{ id: string }[]>`
+      INSERT INTO contacts (id, org_id, wa_id, name, last_activity_at, updated_at)
+      VALUES (${uuidv7()}::uuid, ${orgId}::uuid, ${sender.waId}, ${sender.name ?? null},
+              ${sentAt}, now())
+      ON CONFLICT (org_id, wa_id) DO NOTHING
+      RETURNING id::text AS id`;
+    const row = await tx.contact.findUniqueOrThrow({
       where: { orgId_waId: { orgId, waId: sender.waId } },
-      create: { orgId, waId: sender.waId, name: sender.name ?? null, lastActivityAt: sentAt },
-      update: {},
       select: { id: true, mergedIntoId: true },
     });
     // A duplicate that was merged: its number now belongs to the primary contact.
-    return { id: row.mergedIntoId ?? row.id, created: known === 0 };
+    return { id: row.mergedIntoId ?? row.id, created: inserted.length > 0 };
   }
   if (!sender.externalId) throw new Error('An inbound message needs a wa_id or an external id');
   const identity = await tx.contactIdentity.findUnique({

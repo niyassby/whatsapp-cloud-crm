@@ -29,7 +29,11 @@ import {
   webchatRoom,
 } from '@wacrm/shared';
 import {
+  createMetricsRegistry,
+  jobMetrics,
+  metricsAllowed,
   phoneTokenAad,
+  queueDepthGauge,
   redisConnectionFromUrl,
   S3Storage,
   s3ConfigFromEnv,
@@ -80,10 +84,18 @@ const rootEnv = path.resolve(__dirname, '../../../.env');
 if (process.env.NODE_ENV !== 'production' && existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 
 const env = loadWorkerEnv();
-if (env.NODE_ENV === 'production' && env.WEBHOOK_ALLOW_PRIVATE_URLS) {
-  throw new Error('WEBHOOK_ALLOW_PRIVATE_URLS must not be set in production');
+if (env.NODE_ENV === 'production' && !env.STAGING_TEST_DOUBLES) {
+  if (env.WEBHOOK_ALLOW_PRIVATE_URLS) {
+    throw new Error('WEBHOOK_ALLOW_PRIVATE_URLS must not be set in production');
+  }
+  if (env.META_GRAPH_BASE_URL || env.INSTAGRAM_BASE_URL) {
+    throw new Error('META_GRAPH_BASE_URL and INSTAGRAM_BASE_URL must not be set in production');
+  }
 }
 const log = pino({ level: env.LOG_LEVEL, name: 'worker' });
+if (env.NODE_ENV === 'production' && env.STAGING_TEST_DOUBLES) {
+  log.warn('STAGING_TEST_DOUBLES is on: test doubles are allowed. Never use this with customers.');
+}
 const db = createPrismaClient({
   connectionString: env.DATABASE_URL,
   max: env.DATABASE_POOL_MAX,
@@ -699,10 +711,66 @@ ensureMessagePartitions(db).catch((err: unknown) =>
   log.error({ err: String(err) }, 'could not ensure message partitions'),
 );
 
+// Phase 4.5: metrics. Every worker reports finished jobs; queue depth is read from Redis when
+// Prometheus scrapes, through one Queue handle per queue name.
+const metrics = createMetricsRegistry('worker');
+const jobs = jobMetrics(metrics);
+const allWorkers = [
+  webhookWorker,
+  outboundWorker,
+  mediaWorker,
+  metaWorker,
+  contactJobsWorker,
+  templateSyncWorker,
+  campaignWorker,
+  billingWorker,
+  webhookDeliveryWorker,
+  automationWorker,
+  flowWorker,
+  integrationWorker,
+  aiWorker,
+  analyticsWorker,
+  privacyWorker,
+  maintenanceWorker,
+];
+const seconds = (job: { processedOn?: number; finishedOn?: number } | undefined) =>
+  job?.processedOn && job.finishedOn ? (job.finishedOn - job.processedOn) / 1000 : undefined;
+for (const w of allWorkers) {
+  w.on('completed', (job) => jobs.finished(w.name, 'completed', seconds(job)));
+  w.on('failed', (job) => jobs.finished(w.name, 'failed', seconds(job)));
+}
+const depthQueues = Object.values(QueueName).map((name) => new Queue(name, queueOpts));
+queueDepthGauge(metrics, async () => {
+  const counts = await Promise.all(
+    depthQueues.map((q) =>
+      q.getJobCounts('waiting', 'active', 'delayed', 'failed', 'prioritized', 'waiting-children'),
+    ),
+  );
+  return Object.fromEntries(depthQueues.map((q, i) => [q.name, counts[i] ?? {}]));
+});
+
 const server = createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(buildHealth('worker')));
+    return;
+  }
+  if (req.url === '/metrics') {
+    const production = env.NODE_ENV === 'production';
+    if (!metricsAllowed(req.headers.authorization, env.METRICS_TOKEN, production)) {
+      res.writeHead(404).end();
+      return;
+    }
+    metrics.metrics().then(
+      (body) => {
+        res.writeHead(200, { 'content-type': metrics.contentType });
+        res.end(body);
+      },
+      (err: unknown) => {
+        log.error({ err: String(err) }, 'could not render metrics');
+        res.writeHead(500).end();
+      },
+    );
     return;
   }
   res.writeHead(404).end();
@@ -717,6 +785,7 @@ async function shutdown() {
   if (stopping) return;
   stopping = true;
   server.close();
+  await Promise.allSettled(depthQueues.map((q) => q.close()));
   // close() waits for jobs in progress, so a deploy does not abandon work.
   await Promise.allSettled([
     webhookWorker.close(),

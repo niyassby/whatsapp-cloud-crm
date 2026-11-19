@@ -29,6 +29,11 @@ async function bootstrap() {
     });
   }
   await app.listen(env.API_PORT, '0.0.0.0');
+  if (env.NODE_ENV === 'production' && env.STAGING_TEST_DOUBLES) {
+    new Logger('Bootstrap').warn(
+      'STAGING_TEST_DOUBLES is on: test doubles are allowed. Never use this with customers.',
+    );
+  }
 }
 
 bootstrap().catch((err) => {

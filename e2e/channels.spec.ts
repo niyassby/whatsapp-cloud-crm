@@ -8,9 +8,10 @@ import { expect, type Page, test } from '@playwright/test';
 import {
   API_URL,
   APP_SECRET,
-  DB_NAME,
+  FAKES_HOST,
   IG_ACCOUNT_ID,
   IG_APP_SECRET,
+  OPERATOR_DIRECT_URL,
   PORTS,
 } from './support/config.mjs';
 import {
@@ -74,7 +75,7 @@ test.beforeAll(async ({ browser }) => {
   });
   adminToken = signup.data.accessToken;
   execSync(`pnpm --filter @wacrm/db exec tsx scripts/admin-grant.ts ${adminEmail}`, {
-    env: { ...process.env, DIRECT_URL: `postgresql://wacrm:wacrm@127.0.0.1:5433/${DB_NAME}` },
+    env: { ...process.env, DIRECT_URL: OPERATOR_DIRECT_URL },
     stdio: 'pipe',
   });
 });
@@ -151,7 +152,7 @@ test('Instagram: connect an account, receive a DM and reply to it', async () => 
   await expect
     .poll(
       async () =>
-        (await (await fetch(`http://127.0.0.1:${PORTS.graph}/__ig-sent`)).json()) as unknown[],
+        (await (await fetch(`http://${FAKES_HOST}:${PORTS.graph}/__ig-sent`)).json()) as unknown[],
     )
     .toContainEqual({ recipient: { id: 'igsid-e2e-1' }, message: { text: 'Yes, from 9 to 1.' } });
 });

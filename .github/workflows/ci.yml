@@ -52,8 +52,11 @@ jobs:
       - run: pnpm --filter @wacrm/db run migrate:deploy
       - run: pnpm db:roles
       - run: pnpm db:seed
-      # Unit + integration tests (each suite recreates its own *_test database).
-      - run: pnpm test
+      # Unit + integration tests (each suite recreates its own *_test database), with coverage:
+      # a package that drops below its floor (vitest.config.mts) fails the build.
+      - run: pnpm test:coverage
+      # The demo data must keep loading as the schema changes.
+      - run: pnpm db:demo
       - run: pnpm build
       # Two separate browser sessions against the real stack, with a fake Meta. Media tests skip
       # themselves here, since CI has no S3 service.

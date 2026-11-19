@@ -5,6 +5,10 @@ Businesses connect their own WhatsApp Business number through Meta Embedded Sign
 a shared team inbox, send template broadcasts, build chatbot flows, manage contacts and connect
 their store or payment provider. Resellers (partners) can create and manage client workspaces.
 
+**Documentation:** [docs/README.md](docs/README.md) indexes everything: the [user guide](docs/user-guide.md),
+the API reference, and for operators the [deployment guide](infra/deployment.md), runbooks, monitoring
+and load tests.
+
 ## Features
 
 | Area                 | What it does                                                                                    |
@@ -143,6 +147,10 @@ pnpm build
 ---
 
 ## Deploying to a server
+
+Hosting choices (Neon, RDS or self-hosted Postgres; managed Redis; R2 or S3; container platforms),
+zero-downtime releases and migrations, monitoring, and how to accept a fresh environment with the
+e2e suite are in [infra/deployment.md](infra/deployment.md). The steps below are the single-server install.
 
 This guide deploys everything on one Linux server (Ubuntu 22.04/24.04) with Nginx and systemd. The
 same steps work across several servers: run the API and worker anywhere that can reach PostgreSQL
@@ -440,6 +448,10 @@ Meta and the payment providers, and queued jobs wait in Redis.
 - **Manual wallet credit**: `pnpm wallet:credit <org slug or id> <amount> "<reason>"`, or from `/admin`.
 - Health checks for your monitoring: `GET /health/ready` on the API (checks the database),
   `GET :4001/health` on the worker, `GET /health` on the web.
+- **Metrics and alerts**: Prometheus metrics at `/metrics` on the API and on the worker's health
+  port (set `METRICS_TOKEN`); scrape config, alert rules and a Grafana dashboard in
+  [infra/observability/](infra/observability/), and a runbook per alert in [infra/runbooks/](infra/runbooks/README.md).
+- **After losing Redis data**: `pnpm events:requeue 48` queues stored webhook and billing events again.
 
 ---
 
@@ -621,6 +633,8 @@ required value refuses to start with a clear message.
 | `RATE_LIMIT_USER_PER_MINUTE` | api         | Dashboard requests per minute per signed-in person (600).                                                                      |
 | `RATE_LIMIT_LOGIN_PER_IP`    | api         | Login attempts per client address per 15 minutes (30).                                                                         |
 | `WEBHOOK_ALLOW_PRIVATE_URLS` | api, worker | Lets webhooks reach private addresses, for local tests. Refused in production.                                                 |
+| `METRICS_TOKEN`              | api, worker | Bearer token Prometheus sends to read `/metrics` (16+ characters). Unset: open in development, closed in production.           |
+| `STAGING_TEST_DOUBLES`       | api, worker | Staging only: lets a production build use the e2e fakes, to accept a deployment (infra/deployment.md). Never with customers.   |
 
 ### Integrations and channels (all optional)
 
@@ -703,7 +717,8 @@ WALLET_DEFAULT_CURRENCY=INR
 The project is built in phases; [CLAUDE.md](CLAUDE.md) has the detailed design notes, decisions and
 module status for each one, and the list of known gaps. Before going live with real customers, check
 the items under "Known gaps / TODO" there, in particular: real Meta rate cards, sandbox payment
-runs, Meta Business Verification and App Review, personal data erasure and 2FA recovery codes.
+runs, Meta Business Verification and App Review, and 2FA recovery codes. The launch checklist is in
+[infra/deployment.md](infra/deployment.md#10-launch-checklist).
 
 ## License
 

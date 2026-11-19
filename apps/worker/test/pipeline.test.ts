@@ -136,6 +136,22 @@ describe('inbound messages', () => {
     expect(rows.find((c) => c.contact.waId === '919800000001')?.unreadCount).toBe(2);
   });
 
+  // Found by the Phase 4.5 load test: a new customer's first messages handled at the same moment
+  // used to fail all but one job on the contact's unique key (they then succeeded on retry).
+  it('first messages from a new number handled at once all land, with one contact', async () => {
+    const { deps, orgId, phone } = await setup();
+    await Promise.all(
+      Array.from({ length: 5 }, () =>
+        processMessagesChange(deps, orgId, inboundPayload(phone.phoneNumberId, {})),
+      ),
+    );
+    const rows = await conversations(orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.messages).toHaveLength(5);
+    const contacts = await withTenant(db, { orgId }, (tx) => tx.contact.count());
+    expect(contacts).toBe(1);
+  });
+
   it('a customer writing back reopens a closed conversation', async () => {
     const { deps, orgId, phone } = await setup();
     await processMessagesChange(deps, orgId, inboundPayload(phone.phoneNumberId, {}));

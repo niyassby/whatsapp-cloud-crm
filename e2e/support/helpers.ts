@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { type Browser, expect, type Page } from '@playwright/test';
-import { API_URL, APP_SECRET, DB_NAME } from './config.mjs';
+import { API_URL, APP_SECRET, MAILPIT_API, OPERATOR_DIRECT_URL } from './config.mjs';
 
 export const WABA_ID = '100000000000777';
 export const PHONE_ID = '200000000000888';
@@ -35,7 +35,7 @@ export function creditWallet(orgId: string, amount: string) {
     {
       env: {
         ...process.env,
-        DIRECT_URL: `postgresql://wacrm:wacrm@127.0.0.1:5433/${DB_NAME}`,
+        DIRECT_URL: OPERATOR_DIRECT_URL,
       },
       stdio: 'pipe',
     },
@@ -79,16 +79,31 @@ export async function createWorkspace(opts: { funded?: boolean } = {}) {
     token,
   );
   expect(connect.status, JSON.stringify(connect.data)).toBe(201);
+  const disconnect = async () => {
+    await fetch(`${API_URL}/whatsapp/phone-numbers/${connect.data.id}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${token}` },
+    });
+  };
 
-  const invite = await post('/team/invitations', { email: agentEmail, role: 'agent' }, token);
-  expect(invite.status).toBe(201);
-  const inviteToken = await inviteTokenFromMailpit(agentEmail);
-  const accept = await post('/invitations/accept', {
-    token: inviteToken,
-    name: 'Arjun Agent',
-    password: PASSWORD,
-  });
-  expect(accept.status, JSON.stringify(accept.data)).toBe(200);
+  try {
+    const invite = await post('/team/invitations', { email: agentEmail, role: 'agent' }, token);
+    expect(invite.status).toBe(201);
+    const inviteToken = await inviteTokenFromMailpit(agentEmail);
+    // Accepting is limited per address; a fresh address per workspace, as for signup.
+    const accept = await post(
+      '/invitations/accept',
+      { token: inviteToken, name: 'Arjun Agent', password: PASSWORD },
+      undefined,
+      { 'x-forwarded-for': `10.${randomBytes(3).join('.')}` },
+    );
+    expect(accept.status, JSON.stringify(accept.data)).toBe(200);
+  } catch (err) {
+    // The spec's own cleanup never sees a workspace that failed here: free the number now, or
+    // every later spec fails to connect it.
+    await disconnect();
+    throw err;
+  }
 
   return {
     ownerEmail,
@@ -97,17 +112,12 @@ export async function createWorkspace(opts: { funded?: boolean } = {}) {
     orgId: me.currentOrg.id as string,
     wabaId: connect.data.wabaId as string,
     phoneId: connect.data.id as string,
-    disconnect: async () => {
-      await fetch(`${API_URL}/whatsapp/phone-numbers/${connect.data.id}`, {
-        method: 'DELETE',
-        headers: { authorization: `Bearer ${token}` },
-      });
-    },
+    disconnect,
   };
 }
 
 export async function inviteTokenFromMailpit(email: string): Promise<string> {
-  const mailpit = 'http://127.0.0.1:8025/api/v1';
+  const mailpit = MAILPIT_API;
   for (let i = 0; i < 30; i++) {
     const search = await fetch(`${mailpit}/search?query=${encodeURIComponent(`to:${email}`)}`);
     const { messages } = (await search.json()) as { messages: { ID: string }[] };

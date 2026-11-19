@@ -1,0 +1,163 @@
+# Alert rules (Phase 4.5). Each alert names its runbook in infra/runbooks/.
+# Thresholds are starting points for a first launch; tune them against real traffic.
+groups:
+  - name: wacrm-availability
+    rules:
+      - alert: ApiDown
+        expr: up{job="wacrm-api"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: 'API instance {{ $labels.instance }} is not answering /metrics'
+          runbook: infra/runbooks/api-down.md
+
+      - alert: WorkerDown
+        expr: up{job="wacrm-worker"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: 'Worker {{ $labels.instance }} is down: no messages are being sent or received'
+          runbook: infra/runbooks/worker-down.md
+
+      - alert: WebDown
+        expr: probe_success{job="wacrm-web"} == 0
+        for: 3m
+        labels: { severity: page }
+        annotations:
+          summary: 'The web app health check is failing'
+          runbook: infra/runbooks/api-down.md
+
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: 'Postgres is unreachable from its exporter'
+          runbook: infra/runbooks/database.md
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: 'Redis is unreachable: queues and realtime are stopped'
+          runbook: infra/runbooks/redis.md
+
+  - name: wacrm-api
+    rules:
+      - alert: ApiErrorRateHigh
+        expr: |
+          sum(rate(wacrm_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(wacrm_http_requests_total[5m])), 1) > 0.02
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: 'More than 2% of API requests are failing with 5xx'
+          runbook: infra/runbooks/api-errors.md
+
+      - alert: ApiLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(wacrm_http_request_duration_seconds_bucket{route!~"/webhooks/.*|/v1/.*"}[5m]))
+          ) > 1
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: 'Dashboard API p95 latency above 1 s'
+          runbook: infra/runbooks/api-errors.md
+
+      - alert: MetaWebhooksFailing
+        expr: |
+          sum(rate(wacrm_http_requests_total{route="/webhooks/meta",status=~"5.."}[5m])) > 0
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: 'Meta webhook deliveries are being refused; Meta will retry, then give up'
+          runbook: infra/runbooks/webhooks.md
+
+      - alert: ApiRateLimiting
+        expr: sum(rate(wacrm_http_requests_total{status="429"}[5m])) > 5
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: 'Sustained 429 responses: abuse, or a limit set too low'
+          runbook: infra/runbooks/api-errors.md
+
+  - name: wacrm-queues
+    rules:
+      - alert: OutboundBacklog
+        expr: sum(wacrm_queue_jobs{queue="outbound-messages",state=~"waiting|prioritized"}) > 500
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: 'Outbound messages are piling up (more than 500 waiting for 10 minutes)'
+          runbook: infra/runbooks/queue-backlog.md
+
+      - alert: WebhookEventBacklog
+        expr: sum(wacrm_queue_jobs{queue="webhook-events",state=~"waiting|prioritized"}) > 1000
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: 'Inbound webhook events are not being processed fast enough'
+          runbook: infra/runbooks/queue-backlog.md
+
+      - alert: QueueBacklog
+        expr: sum by (queue) (wacrm_queue_jobs{state=~"waiting|prioritized"}) > 5000
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: 'Queue {{ $labels.queue }} has more than 5000 jobs waiting'
+          runbook: infra/runbooks/queue-backlog.md
+
+      - alert: JobFailureRateHigh
+        expr: |
+          sum by (queue) (rate(wacrm_jobs_total{result="failed"}[10m]))
+            / clamp_min(sum by (queue) (rate(wacrm_jobs_total[10m])), 0.01) > 0.1
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: 'More than 10% of {{ $labels.queue }} jobs are failing'
+          runbook: infra/runbooks/queue-backlog.md
+
+      - alert: FailedJobsAccumulating
+        expr: sum by (queue) (wacrm_queue_jobs{state="failed"}) > 1000
+        for: 30m
+        labels: { severity: ticket }
+        annotations:
+          summary: 'Queue {{ $labels.queue }} holds more than 1000 failed jobs'
+          runbook: infra/runbooks/queue-backlog.md
+
+  - name: wacrm-resources
+    rules:
+      - alert: EventLoopLagHigh
+        expr: wacrm_nodejs_eventloop_lag_p99_seconds > 0.5
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: '{{ $labels.service }} event loop p99 lag above 500 ms on {{ $labels.instance }}'
+          runbook: infra/runbooks/api-errors.md
+
+      - alert: ProcessMemoryHigh
+        expr: wacrm_process_resident_memory_bytes > 1.5e9
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: '{{ $labels.service }} on {{ $labels.instance }} uses more than 1.5 GB'
+          runbook: infra/runbooks/api-errors.md
+
+      - alert: PostgresConnectionsHigh
+        expr: |
+          sum(pg_stat_activity_count) / max(pg_settings_max_connections) > 0.8
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: 'Postgres is above 80% of max_connections'
+          runbook: infra/runbooks/database.md
+
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / clamp_min(redis_memory_max_bytes, 1) > 0.8
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: 'Redis is above 80% of maxmemory; BullMQ jobs could be refused'
+          runbook: infra/runbooks/redis.md

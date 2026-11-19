@@ -26,3 +26,4 @@ export * from './reports';
 export * from './csp';
 export * from './audit';
 export * from './privacy';
+export * from './ids';

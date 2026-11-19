@@ -24,10 +24,11 @@ const set = (v: string | undefined) => (v && v.trim() ? v.trim() : undefined);
 /**
  * Providers from configuration. `AI_PROVIDER` is `anthropic` or `fake`; `AI_EMBEDDINGS_PROVIDER`
  * is `voyage`, `openai` (any OpenAI-compatible endpoint) or `fake`. A provider without its key is
- * left out rather than failing later. The fake providers are refused in production.
+ * left out rather than failing later. The fake providers are refused in production, unless the
+ * deployment is a staging copy that sets `STAGING_TEST_DOUBLES=true` (infra/deployment.md).
  */
 export function createAiProviders(env: Env): AiProviders {
-  const production = env.NODE_ENV === 'production';
+  const production = env.NODE_ENV === 'production' && set(env.STAGING_TEST_DOUBLES) !== 'true';
   const chatKind = set(env.AI_PROVIDER);
   const embedKind = set(env.AI_EMBEDDINGS_PROVIDER);
   if (production && (chatKind === 'fake' || embedKind === 'fake')) {

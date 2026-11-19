@@ -4,6 +4,7 @@
  * in the inbox with the report attached.
  */
 import { expect, type Page, test } from '@playwright/test';
+import { MAILPIT_API } from './support/config.mjs';
 import {
   createWorkspace,
   customerSays,
@@ -78,7 +79,7 @@ test('a scheduled report is emailed to the owner with the file attached', async 
   await expect(row).toContainText('Conversations');
 
   await row.getByRole('button', { name: 'Send now' }).click();
-  const mailpit = 'http://127.0.0.1:8025/api/v1';
+  const mailpit = MAILPIT_API;
   await expect
     .poll(
       async () => {

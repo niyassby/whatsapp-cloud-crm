@@ -46,6 +46,11 @@ export const workerEnvSchema = z.object({
     .enum(['true', 'false', '1', '0'])
     .transform((v) => v === 'true' || v === '1')
     .default(false),
+  /** Staging only: allows the test doubles in a production build (see the API's env). */
+  STAGING_TEST_DOUBLES: z
+    .enum(['true', 'false', '1', '0'])
+    .transform((v) => v === 'true' || v === '1')
+    .default(false),
 
   /** AI (both API and worker). Unset: AI features are unavailable. `fake` is for local runs and tests. */
   AI_PROVIDER: z.enum(['anthropic', 'fake']).optional(),
@@ -86,6 +91,8 @@ export const workerEnvSchema = z.object({
   WEB_URL: z.url().default('http://localhost:3000'),
   /** AI log text and flow step details are blanked after this many days (Phase 4.4). */
   RETENTION_LOG_DAYS: z.coerce.number().int().min(7).default(180),
+  /** Bearer token Prometheus sends to read /metrics. Unset: open in development, closed in production. */
+  METRICS_TOKEN: z.string().min(16).optional(),
   /** Raw webhook payloads are kept this long for replay. */
   WEBHOOK_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
 });

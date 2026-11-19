@@ -25,6 +25,11 @@ export default tseslint.config(
     },
   },
   {
+    // k6 load tests (Phase 4.5): k6 provides __ENV to every script.
+    files: ['load/**/*.js'],
+    languageOptions: { globals: { __ENV: 'readonly' } },
+  },
+  {
     // NestJS DI reads constructor param types at runtime (emitDecoratorMetadata). Telling the
     // parser keeps consistent-type-imports from turning injected classes into `import type`.
     files: ['apps/api/**/*.ts'],

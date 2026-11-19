@@ -100,10 +100,18 @@ export const apiEnvSchema = z.object({
   RATE_LIMIT_IP_PER_MINUTE: z.coerce.number().int().positive().default(1200),
   /** Dashboard requests per signed-in person per minute, across their tabs and devices. */
   RATE_LIMIT_USER_PER_MINUTE: z.coerce.number().int().positive().default(600),
+  /** Bearer token Prometheus sends to read /metrics. Unset: open in development, closed in production. */
+  METRICS_TOKEN: z.string().min(16).optional(),
   /** Login attempts per client address per 15 minutes (30). Raised only for the e2e suite. */
   RATE_LIMIT_LOGIN_PER_IP: z.coerce.number().int().positive().default(30),
   /** Local testing only: lets webhooks reach private addresses. Refused in production. */
   WEBHOOK_ALLOW_PRIVATE_URLS: booleanString.default(false),
+  /**
+   * Staging only: a production build may use the test doubles (fake Meta, fake payment providers,
+   * fake AI, private webhook URLs), so the e2e suite can run against a deployed copy
+   * (infra/deployment.md). Never set it where real customers are.
+   */
+  STAGING_TEST_DOUBLES: booleanString.default(false),
   /** Registers the Demo Store connector, for trying integrations locally. Same value as the worker. */
   INTEGRATIONS_DEMO: booleanString.default(false),
 
@@ -161,17 +169,19 @@ export const loadApiEnv = (source?: Record<string, string | undefined>): ApiEnv 
       env.JWT_REFRESH_SECRET.includes('dev-only') && 'JWT_REFRESH_SECRET',
       env.ENCRYPTION_KEY === DEV_ENCRYPTION_KEY && 'ENCRYPTION_KEY',
     ].filter(Boolean);
-    if (env.META_GRAPH_BASE_URL) {
-      throw new Error('META_GRAPH_BASE_URL must not be set in production');
-    }
-    if (env.INSTAGRAM_BASE_URL) {
-      throw new Error('INSTAGRAM_BASE_URL must not be set in production');
-    }
-    if (env.WEBHOOK_ALLOW_PRIVATE_URLS) {
-      throw new Error('WEBHOOK_ALLOW_PRIVATE_URLS must not be set in production');
-    }
-    if (env.STRIPE_API_BASE || env.RAZORPAY_API_BASE) {
-      throw new Error('STRIPE_API_BASE and RAZORPAY_API_BASE must not be set in production');
+    if (!env.STAGING_TEST_DOUBLES) {
+      if (env.META_GRAPH_BASE_URL) {
+        throw new Error('META_GRAPH_BASE_URL must not be set in production');
+      }
+      if (env.INSTAGRAM_BASE_URL) {
+        throw new Error('INSTAGRAM_BASE_URL must not be set in production');
+      }
+      if (env.WEBHOOK_ALLOW_PRIVATE_URLS) {
+        throw new Error('WEBHOOK_ALLOW_PRIVATE_URLS must not be set in production');
+      }
+      if (env.STRIPE_API_BASE || env.RAZORPAY_API_BASE) {
+        throw new Error('STRIPE_API_BASE and RAZORPAY_API_BASE must not be set in production');
+      }
     }
     const missing = ['META_APP_ID', 'META_APP_SECRET', 'META_WEBHOOK_VERIFY_TOKEN'].filter(
       (k) => !env[k as keyof ApiEnv],

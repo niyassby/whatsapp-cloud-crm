@@ -10,6 +10,7 @@ import {
   FAILING_RECIPIENT,
   FAILURE_TEXT,
   IG_ACCOUNT_ID,
+  FAKES_HOST,
   PORTS,
 } from './config.mjs';
 
@@ -71,6 +72,10 @@ async function postSigned(payload) {
 function afterTemplateCreate(wabaId, template) {
   const rejected = template.name.endsWith('_rejected');
   setTimeout(() => {
+    // Meta's list shows the decision too: when the webhook beats the app saving the template, the
+    // app's fallback sync reads it from there.
+    template.status = rejected ? 'REJECTED' : 'APPROVED';
+    if (rejected) template.rejected_reason = 'PROMOTIONAL';
     void postSigned({
       object: 'whatsapp_business_account',
       entry: [
@@ -185,6 +190,7 @@ http
     // ---- Instagram (INSTAGRAM_BASE_URL points at /ig on this server)
     if (url.pathname.startsWith('/ig/')) return instagram(req, url, raw, send);
     if (url.pathname === '/__ig-sent') return send(igSent);
+    if (url.pathname === '/__health') return send({ ok: true });
 
     // ---- Phase 4.2 WhatsApp modules
     if (isPhone(id) && sub === 'message_qrdls') {
@@ -327,7 +333,7 @@ http
     if (id?.startsWith('inbound-media')) {
       return send({
         id,
-        url: `http://127.0.0.1:${PORTS.graph}/v25.0/file-${id}`,
+        url: `http://${FAKES_HOST}:${PORTS.graph}/v25.0/file-${id}`,
         mime_type: 'image/png',
         sha256: 'x',
         file_size: 68,
@@ -345,4 +351,6 @@ http
     }
     send({ error: { message: 'Unknown object', code: 100 } }, 400);
   })
-  .listen(PORTS.graph, '127.0.0.1', () => console.log(`fake graph on ${PORTS.graph}`));
+  .listen(PORTS.graph, FAKES_HOST === '127.0.0.1' ? '127.0.0.1' : '0.0.0.0', () =>
+    console.log(`fake graph on ${PORTS.graph}`),
+  );

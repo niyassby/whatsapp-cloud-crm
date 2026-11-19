@@ -14,6 +14,7 @@
     "format:check": "prettier --check .",
     "typecheck": "turbo run typecheck && tsc -p e2e/tsconfig.json",
     "test": "turbo run test",
+    "test:coverage": "turbo run test:coverage",
     "test:e2e": "playwright test",
     "services:up": "node scripts/services.mjs up",
     "services:down": "node scripts/services.mjs down",
@@ -24,6 +25,7 @@
     "db:migrate:deploy": "pnpm --filter @wacrm/db run migrate:deploy",
     "db:roles": "pnpm --filter @wacrm/db run roles",
     "db:seed": "pnpm --filter @wacrm/db run seed",
+    "db:demo": "pnpm --filter @wacrm/db run demo",
     "rates:import": "pnpm --filter @wacrm/db run rates:import",
     "wallet:credit": "pnpm --filter @wacrm/db run wallet:credit",
     "admin:grant": "pnpm --filter @wacrm/db run admin:grant",
@@ -31,7 +33,8 @@
     "db:studio": "pnpm --filter @wacrm/db run studio",
     "prepare": "husky",
     "db:setup": "pnpm db:migrate:deploy && pnpm db:roles && pnpm db:seed",
-    "secrets:reencrypt": "pnpm --filter @wacrm/worker exec tsx src/scripts/reencrypt.ts"
+    "secrets:reencrypt": "pnpm --filter @wacrm/worker exec tsx src/scripts/reencrypt.ts",
+    "events:requeue": "pnpm --filter @wacrm/worker exec tsx src/scripts/requeue-events.ts"
   },
   "lint-staged": {
     "*.{ts,tsx,js,mjs,cjs}": [
@@ -48,6 +51,7 @@
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.64.1",
     "@types/node": "20",
+    "@vitest/coverage-v8": "5.1.0",
     "eslint": "^10.14.0",
     "eslint-config-prettier": "^10.1.8",
     "husky": "^9.1.7",

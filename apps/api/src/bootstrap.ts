@@ -3,6 +3,7 @@ import fastifyMultipart from '@fastify/multipart';
 import { Logger } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { baseSecurityHeaders, ErrorCode, MAX_UPLOAD_BYTES } from '@wacrm/shared';
+import { createMetricsRegistry, httpMetrics, metricsAllowed } from '@wacrm/shared/server';
 import type { ApiEnv } from './env';
 import { RateLimiter } from './infra/rate-limiter.service';
 import { setupOpenApi } from './public-api/openapi';
@@ -41,12 +42,14 @@ export async function configureApp(app: NestFastifyApplication, env: ApiEnv): Pr
   });
   app.enableShutdownHooks();
   setupOpenApi(app);
+  addMetrics(app, env);
   addSecurityHooks(app, env);
 }
 
 /** Paths with their own limits, or that providers must always reach. */
 const UNLIMITED_PREFIXES = [
   '/health',
+  '/metrics',
   '/webhooks/',
   '/integrations/hooks/',
   '/integrations/apps/',
@@ -55,6 +58,37 @@ const UNLIMITED_PREFIXES = [
   '/webchat/',
   '/socket.io',
 ];
+
+/**
+ * Phase 4.5: Prometheus metrics at `GET /metrics`, outside Nest's guards. Every answered request is
+ * counted by its route template, so a URL full of ids cannot create new series.
+ */
+function addMetrics(app: NestFastifyApplication, env: ApiEnv): void {
+  const fastify = app.getHttpAdapter().getInstance();
+  const registry = createMetricsRegistry('api');
+  const http = httpMetrics(registry);
+  const production = env.NODE_ENV === 'production';
+
+  fastify.addHook('onResponse', async (request, reply) => {
+    if (request.url === '/metrics') return;
+    http.observe(
+      request.method,
+      request.routeOptions.url,
+      reply.statusCode,
+      reply.elapsedTime / 1000,
+    );
+  });
+
+  fastify.get('/metrics', async (request, reply) => {
+    if (!metricsAllowed(request.headers.authorization, env.METRICS_TOKEN, production)) {
+      return reply.code(404).send({ code: ErrorCode.NOT_FOUND, message: 'Not found' });
+    }
+    return reply
+      .header('content-type', registry.contentType)
+      .header('cache-control', 'no-store')
+      .send(await registry.metrics());
+  });
+}
 
 /**
  * Phase 4.4: security headers on every response, and a per-address request limit ahead of

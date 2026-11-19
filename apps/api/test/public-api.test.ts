@@ -1,5 +1,7 @@
 /** API keys, /v1, OpenAPI and managing webhooks, over real HTTP. Meta is faked. */
 import { randomBytes, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   createPrismaClient,
   type DbClient,
@@ -606,6 +608,25 @@ describe('OpenAPI', () => {
       send.responses['201'].content['application/json'].schema.properties.status,
     ).toBeDefined();
     expect(send.responses['429']).toBeDefined();
+  });
+
+  // The reference published with the docs (docs/api/openapi.json) is the generated one. After an
+  // intended API change, refresh it: UPDATE_OPENAPI=1 pnpm --filter @wacrm/api exec vitest run test/public-api.test.ts
+  it('matches the copy published in docs/api/openapi.json', async () => {
+    const res = await t.app.inject({ method: 'GET', url: '/v1/openapi.json' });
+    const doc = JSON.parse(res.body) as Record<string, unknown>;
+    delete doc.servers;
+    const file = path.resolve(__dirname, '../../../docs/api/openapi.json');
+    const generated = `${JSON.stringify(doc, null, 2)}
+`;
+    if (process.env.UPDATE_OPENAPI === '1') {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, generated);
+    }
+    expect(existsSync(file), 'docs/api/openapi.json is missing: run with UPDATE_OPENAPI=1').toBe(
+      true,
+    );
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(JSON.parse(generated));
   });
 
   it('the docs page opens with no key', async () => {

@@ -6,9 +6,9 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { URLSearchParams } from 'node:url';
-import { API_URL, PORTS, STRIPE_WEBHOOK_SECRET } from './config.mjs';
+import { API_URL, FAKES_HOST, PORTS, STRIPE_WEBHOOK_SECRET } from './config.mjs';
 
-const BASE = `http://127.0.0.1:${PORTS.payments}`;
+const BASE = `http://${FAKES_HOST}:${PORTS.payments}`;
 const sessions = new Map();
 const subscriptions = new Map();
 
@@ -163,4 +163,4 @@ createServer(async (req, res) => {
     return res.end('<!doctype html><title>Fake portal</title><h1>Fake portal</h1>');
   }
   return json(res, 404, { error: { message: `No fake for ${url.pathname}` } });
-}).listen(PORTS.payments, '127.0.0.1');
+}).listen(PORTS.payments, FAKES_HOST === '127.0.0.1' ? '127.0.0.1' : '0.0.0.0');

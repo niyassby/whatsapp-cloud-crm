@@ -6,7 +6,7 @@
 import { execSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { expect, type Page, test } from '@playwright/test';
-import { API_URL, DB_NAME } from './support/config.mjs';
+import { API_URL, OPERATOR_DIRECT_URL } from './support/config.mjs';
 import { inviteTokenFromMailpit, logIn, PASSWORD } from './support/helpers';
 
 const tag = randomUUID().slice(0, 8);
@@ -49,7 +49,7 @@ test.beforeAll(async ({ browser }) => {
   await signUp(partnerEmail, 'Pat Partner');
   // The only way to become a platform admin: the operator tool on the owner connection.
   execSync(`pnpm --filter @wacrm/db exec tsx scripts/admin-grant.ts ${adminEmail}`, {
-    env: { ...process.env, DIRECT_URL: `postgresql://wacrm:wacrm@127.0.0.1:5433/${DB_NAME}` },
+    env: { ...process.env, DIRECT_URL: OPERATOR_DIRECT_URL },
     stdio: 'pipe',
   });
   const price = await call(

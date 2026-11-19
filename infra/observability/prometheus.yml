@@ -1,0 +1,56 @@
+# Prometheus scrape configuration for WhatsApp Cloud CRM (Phase 4.5).
+#
+# Copy beside your Prometheus, replace the targets and the token, and load `alerts.yml`.
+# The API and worker serve /metrics; in production they answer only with METRICS_TOKEN as a bearer
+# token (set the same value in both processes' environment). postgres_exporter and redis_exporter
+# are the standard community exporters; run them next to the database and Redis.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+rule_files:
+  - alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+scrape_configs:
+  - job_name: wacrm-api
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/wacrm-metrics-token
+    static_configs:
+      # One target per API instance. Scrape each instance directly, not through the load balancer,
+      # or every scrape lands on a different instance.
+      - targets: ['api-1:4000']
+
+  - job_name: wacrm-worker
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/wacrm-metrics-token
+    static_configs:
+      - targets: ['worker-1:4001']
+
+  - job_name: wacrm-web
+    # The web app has no metrics endpoint; this probe only records whether /health answers.
+    metrics_path: /probe
+    params: { module: [http_2xx] }
+    static_configs:
+      - targets: ['https://app.example.com/health']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: postgres
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  - job_name: redis
+    static_configs:
+      - targets: ['redis-exporter:9121']

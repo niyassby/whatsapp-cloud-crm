@@ -7,3 +7,4 @@ export * from './redis';
 export * from './storage';
 export * from './phone';
 export * from './report-pdf';
+export * from './metrics';

@@ -20,6 +20,11 @@
     "test": {
       "dependsOn": ["^build", "generate"],
       "cache": false
+    },
+    "test:coverage": {
+      "dependsOn": ["^build", "generate"],
+      "cache": false,
+      "outputs": ["coverage/**"]
     }
   },
   "globalPassThroughEnv": [
