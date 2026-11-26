@@ -16,10 +16,10 @@
     "clean": "rimraf dist .turbo"
   },
   "devDependencies": {
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.8.0",
+    "@anthropic-ai/sdk": "^1.12.0",
     "@wacrm/db": "workspace:^",
     "@wacrm/shared": "workspace:^",
     "zod": "^4.6.7"
